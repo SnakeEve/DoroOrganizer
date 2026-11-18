@@ -2,6 +2,7 @@ package com.doro.organizer.data
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.doro.organizer.testing.stringsOf
 import java.io.File
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import org.junit.After
@@ -35,8 +36,8 @@ class SqlcipherEngineTest {
         SqlcipherEngine.init()
 
         withKeyedDatabase { db ->
-            val version = db.single("PRAGMA cipher_version")
-            assertTrue("cipher_version=$version", version.startsWith("4."))
+            val version = db.stringsOf("PRAGMA cipher_version").single()
+            assertTrue("cipher_version=$version", version?.startsWith("4.") == true)
         }
     }
 
@@ -47,10 +48,13 @@ class SqlcipherEngineTest {
         SqlcipherEngine.init()
 
         withKeyedDatabase { db ->
-            assertEquals("cipher_page_size", "4096", db.single("PRAGMA cipher_page_size"))
-            assertEquals("cipher_hmac_algorithm", "HMAC_SHA512", db.single("PRAGMA cipher_hmac_algorithm"))
-            assertEquals("cipher_kdf_algorithm", "PBKDF2_HMAC_SHA512", db.single("PRAGMA cipher_kdf_algorithm"))
-            assertEquals("kdf_iter", "256000", db.single("PRAGMA kdf_iter"))
+            val expected = mapOf(
+                "cipher_page_size" to "4096",
+                "cipher_hmac_algorithm" to "HMAC_SHA512",
+                "cipher_kdf_algorithm" to "PBKDF2_HMAC_SHA512",
+                "kdf_iter" to "256000",
+            )
+            assertEquals(expected, expected.mapValues { (pragma, _) -> db.stringsOf("PRAGMA $pragma").single() })
         }
     }
 
@@ -65,10 +69,4 @@ class SqlcipherEngineTest {
             passphrase.fill(0)
         }
     }
-
-    private fun SQLiteDatabase.single(statement: String): String =
-        query(statement).use { cursor ->
-            check(cursor.moveToFirst())
-            cursor.getString(0)
-        }
 }

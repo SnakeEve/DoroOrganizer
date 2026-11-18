@@ -3,6 +3,8 @@ import com.android.build.api.dsl.ManagedVirtualDevice
 plugins {
     alias(libs.plugins.android.application) // Kotlin is built into AGP 9: no org.jetbrains.kotlin.android (DEC-02)
     alias(libs.plugins.kotlin.compose)
+    id("com.google.devtools.ksp") // on the root buildscript classpath: applied by id, without a version
+    alias(libs.plugins.room)
     id("doro.verification-gates") // build-logic: local verification gates (testing.md § 9)
 }
 
@@ -119,6 +121,11 @@ android {
     }
 }
 
+// The exported schema JSON of every version is committed (DEC-07, DEC-14).
+room {
+    schemaDirectory("$projectDir/schemas")
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -127,6 +134,8 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
     implementation(libs.sqlcipher.android) // DEC-08: the only SQLite engine
+    implementation(libs.androidx.room.runtime) // DEC-07: on SQLCipher through SupportOpenHelperFactory
+    ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.sqlite) // SupportSQLiteDatabase, a supertype of the SQLCipher classes; SQLCipher declares it runtime-only
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.lifecycle.process) // ProcessLifecycleOwner: AppTime refresh (architecture.md § Time)

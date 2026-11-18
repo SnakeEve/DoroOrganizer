@@ -31,5 +31,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- security.md § 9.1, DEC-68: no services. Room merges this one in for enableMultiInstanceInvalidation, which no
+             builder uses (db-lifecycle.md § Room builder). -->
+        <service
+            android:name="androidx.room.MultiInstanceInvalidationService"
+            tools:node="remove" />
     </application>
 </manifest>

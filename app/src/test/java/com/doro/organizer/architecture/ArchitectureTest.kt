@@ -232,6 +232,18 @@ class ArchitectureTest {
             """,
         )
         assertEquals(listOf(4), StoredDatabaseRule.check(template).map { it.line })
+        val nested = planted(
+            "data/db/AppDatabase.kt",
+            """
+            abstract class AppDatabase : RoomDatabase() {
+                companion object {
+                    val CALLBACK: RoomDatabase.Callback = object : RoomDatabase.Callback() {}
+                    val INSTANCE: AppDatabase? = null
+                }
+            }
+            """,
+        )
+        assertEquals(listOf(6), StoredDatabaseRule.check(nested).map { it.line })
     }
 
     @Test

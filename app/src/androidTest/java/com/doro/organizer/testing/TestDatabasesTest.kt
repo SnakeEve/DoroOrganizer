@@ -2,6 +2,7 @@ package com.doro.organizer.testing
 
 import android.database.sqlite.SQLiteException
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.doro.organizer.data.db.AppDatabase
 import java.io.File
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import net.zetetic.database.sqlcipher.SQLiteNotADatabaseException
@@ -47,11 +48,7 @@ class TestDatabasesTest {
 
         databases.raw(file, TestKey.Plain).use { it.execSQL("INSERT INTO t VALUES (1)") }
 
-        val tables = databases.raw(file, TestKey.Plain).use { db ->
-            db.query("SELECT name FROM sqlite_master").use { c ->
-                buildList { while (c.moveToNext()) add(c.getString(0)) }
-            }
-        }
+        val tables = databases.raw(file, TestKey.Plain).use { it.stringsOf("SELECT name FROM sqlite_master") }
         assertEquals(listOf("t"), tables)
     }
 
@@ -100,6 +97,64 @@ class TestDatabasesTest {
         assertTrue(outerFile.exists())
     }
 
+    @Test
+    fun create_eachCallBuildsItsOwnDatabase() {
+        val first = databases.create().openHelper.writableDatabase
+        val second = databases.create().openHelper.writableDatabase
+
+        first.execSQL("INSERT INTO persons (name, created_at, updated_at) VALUES ('Ann', 1, 1)")
+
+        assertEquals(1L, first.longOf("SELECT COUNT(*) FROM persons"))
+        assertEquals(0L, second.longOf("SELECT COUNT(*) FROM persons"))
+    }
+
+    @Test
+    fun after_closesRoomInstancesAndConnectionsThenZeroesTheirKeys() {
+        val issued = mutableListOf<ByteArray>()
+        val rule = TestDatabases(keyBytes = { key -> key.bytes().also(issued::add) })
+        val key = TestKey.Raw(ByteArray(32) { 0x5A })
+        lateinit var room: AppDatabase
+        lateinit var never: AppDatabase
+        lateinit var connection: SQLiteDatabase
+        val statement = object : Statement() {
+            override fun evaluate() {
+                room = rule.room(rule.file("app.db"), key)
+                room.openHelper.writableDatabase
+                never = rule.room(rule.file("never.db"), key)
+                connection = rule.createRaw(rule.file("raw.db"), key)
+                assertTrue(room.isOpen && connection.isOpen)
+                assertTrue(issued.none(::isZeroed))
+            }
+        }
+
+        rule.apply(statement, Description.EMPTY).evaluate()
+
+        assertFalse(room.isOpen)
+        assertFalse(never.isOpen)
+        assertFalse(connection.isOpen)
+        assertEquals(3, issued.size)
+        assertTrue(issued.all(::isZeroed))
+    }
+
+    @Test
+    fun raw_rejectedKey_isZeroedAfterwards() {
+        val file = databases.file("keyed.db")
+        databases.createRaw(file, TestKey.Raw(ByteArray(32) { 1 })).use { it.execSQL("CREATE TABLE t (x INTEGER)") }
+        val issued = mutableListOf<ByteArray>()
+        val rule = TestDatabases(keyBytes = { key -> key.bytes().also(issued::add) })
+        val statement = object : Statement() {
+            override fun evaluate() {
+                assertThrows(SQLiteNotADatabaseException::class.java) {
+                    rule.raw(file, TestKey.Raw(ByteArray(32) { 2 })).longOf("SELECT count(*) FROM t")
+                }
+            }
+        }
+
+        rule.apply(statement, Description.EMPTY).evaluate()
+
+        assertTrue(isZeroed(issued.single())) // whether the open or the first query rejected the key
+    }
+
     private fun assertReopensOnlyWithSameKey(key: TestKey, otherKey: TestKey) {
         val file = databases.file("keyed.db")
         databases.createRaw(file, key).use { db ->
@@ -108,17 +163,14 @@ class TestDatabasesTest {
         }
 
         assertNotEquals("SQLite format 3", String(header(file), Charsets.US_ASCII).take(15))
-        databases.raw(file, key).use { db -> assertEquals(42L, db.firstLong("SELECT x FROM t")) }
+        databases.raw(file, key).use { db -> assertEquals(42L, db.longOf("SELECT x FROM t")) }
         // db-lifecycle.md § Failure classification: a rejected key is SQLITE_NOTADB, never another SQLite error.
         assertThrows(SQLiteNotADatabaseException::class.java) {
-            databases.raw(file, otherKey).use { db -> db.firstLong("SELECT count(*) FROM sqlite_master") }
+            databases.raw(file, otherKey).use { db -> db.longOf("SELECT count(*) FROM sqlite_master") }
         }
     }
 
     private fun header(file: File): ByteArray = file.readBytes().copyOf(16)
 
-    private fun SQLiteDatabase.firstLong(sql: String): Long = query(sql).use { cursor ->
-        check(cursor.moveToFirst())
-        cursor.getLong(0)
-    }
+    private fun isZeroed(bytes: ByteArray): Boolean = bytes.all { it == 0.toByte() }
 }

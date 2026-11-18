@@ -81,7 +81,7 @@ T1|x|Gradle skeleton: wrapper (copy from local project, Gradle 9.9.0), version c
 T2|x|verification gates as local Gradle tasks/scripts: merged-manifest permission allowlist, 16 KB check, banned dependencies, release log-stripping check, schema JSON gate w/ `config/released-schema-versions.txt` (testing.md §9)|V15,V28,V34,V35
 T3|x|test infra: `src/sharedTest`, `FakeAppTime`, `TestDatabases`, `assertDbInvariants`, `ArchitectureTest` (I-41), `MigrationCoverageTest` + `SchemaJsonTest` (I-48), `DoroAppRule` (testing.md §3 item 1, §7)|V4,V15,V33
 T4|x|`AppTime` + `EpochDays` + date math + overdue rule, JVM tests across zones & DST (architecture.md §Time)|V10,V13
-T5|.|entities + `AppDatabase` v1: schema export, `application_id` callback, explicit index names, redacted `toString()`, `SchemaTest` (data-layer.md §Entities)|V1,V3,V7,V11,V14,V15,I.pragma
+T5|x|entities + `AppDatabase` v1: schema export, `application_id` callback, explicit index names, redacted `toString()`, `SchemaTest` (data-layer.md §Entities)|V1,V3,V7,V11,V14,V15,I.pragma
 T6|.|DAOs: perspective query, canonical order, filters, search escaping, calendar marks, select-all ids, picker queries + I-01–I-04, I-10–I-16, I-24–I-27, I-43, I-47 (data-layer.md §Read model, §Search)|V2,V6,V7,V12,V14
 T7|.|`NoteRepository` writes: save insert/update + link diff, guarded check/uncheck, `updated_at` matrix, content cap, note delete + I-05–I-09, I-28–I-30, I-42 (a)–(c) (data-layer.md §Write rules, §Deletes)|V5,V8,V9,V10,V11
 T8|.|`EntityRepository` + links + batch ops + delete impact counts + I-17–I-20, I-21/I-23 repo parts, I-42 (d) (data-layer.md §Deletes, §Batch operations)|V5,V7,V31

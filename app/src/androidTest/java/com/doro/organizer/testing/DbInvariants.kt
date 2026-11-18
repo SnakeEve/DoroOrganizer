@@ -9,7 +9,7 @@ import java.util.Locale
  * naming rows by id only (DEC-70). The limits are literals copied from the docs, so a changed constant fails here.
  */
 fun assertDbInvariants(db: SupportSQLiteDatabase) {
-    val violations = SQL_CHECKS.flatMap { (label, sql) -> db.ids(sql).map { "$label: id $it" } } +
+    val violations = SQL_CHECKS.flatMap { (label, sql) -> db.longsOf(sql).map { "$label: id $it" } } +
         db.foreignKeyViolations() + db.contentViolations() +
         db.nameViolations("persons") + db.nameViolations("projects")
     if (violations.isNotEmpty()) {
@@ -36,9 +36,6 @@ private val SQL_CHECKS = listOf(
     "notes.date outside 1900-01-01..2100-12-31 (R-3)" to
         "SELECT id FROM notes WHERE date IS NOT NULL AND date NOT BETWEEN -25567 AND 47846",
 )
-
-private fun SupportSQLiteDatabase.ids(sql: String): List<Long> =
-    query(sql).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getLong(0)) } }
 
 private fun SupportSQLiteDatabase.foreignKeyViolations(): List<String> =
     query("PRAGMA foreign_key_check").use { cursor ->

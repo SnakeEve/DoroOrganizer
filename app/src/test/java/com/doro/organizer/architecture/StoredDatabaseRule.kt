@@ -8,7 +8,8 @@ package com.doro.organizer.architecture
 object StoredDatabaseRule {
     private val TYPED = Regex("""\b(?:val|var)\s+(\w+)\s*:\s*([^=\n,)]+)""")
     private val INITIALIZED = Regex("""\b(?:val|var)\s+(\w+)\s*(?::([^=\n]*?))?(?:=|\bby\b)""")
-    private val DATABASE_TYPE = Regex("""\b(\w*Dao|RoomDatabase|AppDatabase)\b""")
+    // A nested type such as `RoomDatabase.Callback` is not a database object.
+    private val DATABASE_TYPE = Regex("""\b(\w*Dao|RoomDatabase|AppDatabase)\b(?!\s*\.)""")
     private val DATABASE_CALL =
         Regex("""\b(?:\w+Dao\(\)|buildRoom\(|Room\.(?:databaseBuilder|inMemoryDatabaseBuilder)\b)""")
     private val GETTER = Regex("""\s*get\s*\(""")

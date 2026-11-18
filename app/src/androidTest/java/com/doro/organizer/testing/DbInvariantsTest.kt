@@ -10,8 +10,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Pins `assertDbInvariants` on the version 1 tables of data-layer.md § Entities, written here as DDL because the
- * Room entities do not exist yet; each case plants exactly one violation into an otherwise valid database.
+ * Pins `assertDbInvariants` on the schema that the production Room builder creates (data-layer.md § Entities); each
+ * case plants exactly one violation into an otherwise valid database through a raw connection, which enforces no
+ * constraint Room would add.
  */
 @RunWith(AndroidJUnit4::class)
 class DbInvariantsTest {
@@ -91,8 +92,12 @@ class DbInvariantsTest {
 
     /** Two notes (one unchecked and linked, one checked), one person and one project, all valid. */
     private fun validDatabase(name: String): SQLiteDatabase {
-        val db = databases.createRaw(databases.file(name), TestKey.Plain)
-        V1_TABLES.forEach(db::execSQL)
+        val file = databases.file(name)
+        databases.room(file, TestKey.Plain).run {
+            openHelper.writableDatabase // creates the schema
+            close()
+        }
+        val db = databases.raw(file, TestKey.Plain)
         db.execSQL(
             "INSERT INTO notes (id, date, checked, checked_at, created_at, updated_at, content, content_fold) " +
                 "VALUES (1, 20000, 0, NULL, 10, 20, 'Ärger Über', 'ärger über'), (2, NULL, 1, 30, 10, 10, '', '')",
@@ -102,23 +107,5 @@ class DbInvariantsTest {
         db.execSQL("INSERT INTO note_persons (note_id, person_id) VALUES (1, 1)")
         db.execSQL("INSERT INTO note_projects (note_id, project_id) VALUES (1, 1)")
         return db
-    }
-
-    private companion object {
-        val V1_TABLES = listOf(
-            "CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, date INTEGER, " +
-                "checked INTEGER NOT NULL DEFAULT 0, checked_at INTEGER, created_at INTEGER NOT NULL, " +
-                "updated_at INTEGER NOT NULL, content TEXT NOT NULL, content_fold TEXT NOT NULL)",
-            "CREATE TABLE persons (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, name TEXT NOT NULL, role TEXT, " +
-                "notes TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
-            "CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, name TEXT NOT NULL, " +
-                "description TEXT, status TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
-            "CREATE TABLE note_persons (note_id INTEGER NOT NULL, person_id INTEGER NOT NULL, " +
-                "PRIMARY KEY(note_id, person_id), FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE, " +
-                "FOREIGN KEY(person_id) REFERENCES persons(id) ON DELETE CASCADE)",
-            "CREATE TABLE note_projects (note_id INTEGER NOT NULL, project_id INTEGER NOT NULL, " +
-                "PRIMARY KEY(note_id, project_id), FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE, " +
-                "FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE)",
-        )
     }
 }
