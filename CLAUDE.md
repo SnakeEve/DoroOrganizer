@@ -2,7 +2,7 @@
 
 Fully offline Android notepad for analysts and team leads. Notes link to any number of persons and projects (or none) and are browsed through five perspectives: All, Individual, Project, Date, Orphan. Kotlin · Jetpack Compose (Material 3) · Room on SQLCipher · minSdk 28, targetSdk 35, compileSdk 37.
 
-**Status:** design only, no code yet. The first implementation task creates the Gradle project as described in [docs/architecture.md](docs/architecture.md). After that, confirm the commands below.
+**Status:** build in progress; [SPEC.md](SPEC.md) §T shows done (`x`) and open tasks.
 
 ## Source of truth
 
@@ -20,7 +20,7 @@ Precedence: [docs/decisions.md](docs/decisions.md) > [spec](stakeholder-notepad-
 | [docs/testing.md](docs/testing.md) | Test layers, invariant catalog, CI gates, release checklist |
 | [SPEC.md](SPEC.md) | Build contract: invariants §V, ordered tasks §T with status (format: [FORMAT.md](FORMAT.md)) |
 
-## Commands (planned)
+## Commands
 
 ```
 ./gradlew :app:assembleDebug
