@@ -58,7 +58,7 @@ plugins {
 android {
     namespace = "com.doro.organizer"; compileSdk = 37
     defaultConfig {
-        applicationId = "com.doro.organizer"   // placeholder (Q12)
+        applicationId = "com.doro.organizer"   // DEC-03 (Q12)
         minSdk = 28; targetSdk = 35           // DEC-01 (testing.md § 9 reads a targetSdkOverride property for the canary job only)
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
@@ -103,14 +103,15 @@ com.doro.organizer
 ├── model/            pure Kotlin, the vocabulary of the repository and UI signatures:
 │                     Perspective, EntityKind, DateFilter, NoteFilter, NoteQuery, toQuery(), SearchText,
 │                     NoteRow, EntityRef, EntityOption, NoteDetail, NoteDraft, NewEntity, SaveResult, BatchResult,
-│                     DeleteImpact, EntityDeleteResult, DraftInsert, KeyMode, WindowPolicy, UnlockBackoff
+│                     DeleteImpact, EntityDeleteResult, DraftInsert, KeyMode, WindowPolicy, UnlockBackoff, PasswordReason
 ├── settings/         SettingsStore, Settings (Preferences DataStore)
 ├── security/         KeyVault and its key-state types (security.md § 3.6), AppLockController, BiometricGateway,
-│                     LockListener, LockError, LockAvailability, BiometricAvailability, AuthPurpose
+│                     LockListener, LockError, LockAvailability, BiometricAvailability, AuthPurpose,
+│                     UnlockRoute, LockScreen, SlotCipher, SlotOffer, BiometricSlotWriter (§ SessionGate)
 ├── data/             DatabaseHolder, CorruptionListener, FlowProblemListener, SqlcipherEngine, DbFiles, NoteRepository, EntityRepository
 │   ├── db/           Room database class, entities, DAOs, NoteRowRaw, migrations (data-layer.md)
 │   └── maintenance/  DbMaintenance, MaintenanceListener, status and result types (db-lifecycle.md)
-├── session/          SessionGate, GateState, GateEvent, GateEffect, reduce()
+├── session/          SessionGate, GateState, PasswordEntry, GateEvent, GateEffect, reduce(), lockScreenOf()
 └── ui/
     ├── UiGraph, GateGraph, DoroRoot   what the UI may reach; gate switch
     ├── navigation/   keys, PickerPurpose, NavigationState, Navigator, ResultEventBus, entry provider
@@ -148,7 +149,7 @@ Each pair is two files with the same fully qualified class name in `src/debug/ja
 | `data.db` | `core`, `model` | `androidx.room` and `net.zetetic` only in `data`, `data.db`, `data.maintenance` |
 | `data` | `core`, `model`, `data.db` | |
 | `data.maintenance` | `core`, `model`, `settings`, `security`, `data`, `data.db` | |
-| `session` | `core`, `model`, `settings`, `security` (`KeyVault` with its key-state and `UnlockResult` types, `AppLockController`, `LockListener`, `LockError`), `data` (`DatabaseHolder`, `OpenResult`, `OpenFailureKind`, `CorruptionListener`, `SqlcipherEngine`), `data.maintenance` (all public types) | |
+| `session` | `core`, `model`, `settings`, `security` (`KeyVault` with its key-state, `UnlockResult` and `SlotCipher` types, `AppLockController`, `LockListener`, `LockError`, `UnlockRoute`, `LockScreen`), `data` (`DatabaseHolder`, `OpenResult`, `OpenFailureKind`, `CorruptionListener`, `SqlcipherEngine`), `data.maintenance` (all public types) | |
 | `ui` | `core`, `model`, `settings`, `session`, `data` (`NoteRepository`, `EntityRepository` only), `data.maintenance` (`DbMaintenance` and the status, result, operation and preview types in its signatures only), `security` (`AppLockController` and the types in its public signatures only) | never `data.db`, `DatabaseHolder`, `KeyVault`, the root package, or the third-party packages above |
 | `ui.gate` | as `ui`, minus `settings`, `NoteRepository` and `EntityRepository` | |
 | root package | everything | |
@@ -220,7 +221,7 @@ sealed interface AppError {
     data object StorageFull : AppError              // SQLiteFullException, ENOSPC, EDQUOT, failed free-space check
     data object FileAccess : AppError               // SAF or FileProvider I/O error, null stream, revoked grant
     data object KeyUnavailable : AppError           // Keystore failure while obtaining or changing a key (DEC-86)
-    data object AuthFailed : AppError               // no successful authentication when toggling the lock (DEC-65)
+    data object AuthFailed : AppError               // no successful authentication when toggling the lock, creating the biometric slot or authorizing with it (fingerprint reset, restore key), or the slot proved unusable there (DEC-63, DEC-65)
     data object Busy : AppError                     // DbMaintenance already runs an operation
     data object DatabaseUnavailable : AppError      // holder closed or replaced, or a transient I/O failure; the caller keeps its input
     data object OutcomeUnknown : AppError           // DbMaintenance only: the commit could not be read back; the app restarts and startup decides (db-lifecycle.md § Generation commit)
@@ -230,8 +231,8 @@ enum class InputRule { BlankName, PasswordMalformed, PasswordTooShort, PasswordM
 // BackupRejection { NotABackup, NewerVersion, Incompatible, Damaged }: declared in core.result, values and producers in db-lifecycle.md § Restore validation
 ```
 
-- Every public suspend method of `NoteRepository`, `EntityRepository`, `DbMaintenance` and the `AppLockController` toggles returns `AppResult<T>`, where `T` is the type the owning doc names for it (data-layer.md, db-lifecycle.md, security.md § 7.3). Flows are plain `Flow<T>`; their failures are handled inside `observe` ([db-lifecycle.md § Observation](db-lifecycle.md#observation)).
-- `KeyVault` is the exception: only `session` (E2) and `data.maintenance` call it, and its surface ([security.md § 3.6](security.md#36-keyvault-surface)) returns `UnlockResult` from `unlock` and `openKey` and throws `KeyVaultException(KeyFailure)` for every other failure. `DbMaintenance` maps them to `AppError` (`PasswordRejected` to `WrongPassword`, `Throttled` to `Throttled`, `KeyFailed` and every `KeyVaultException` to `KeyUnavailable`); E2 maps them to gate events ([States, events and effects](#states-events-and-effects)).
+- Every public suspend method of `NoteRepository`, `EntityRepository`, `DbMaintenance` and the `AppLockController` toggles and slot methods (`confirm`, `createSlot`, `slotPrompt`) returns `AppResult<T>`, where `T` is the type the owning doc names for it (data-layer.md, db-lifecycle.md, security.md § 7.3). Flows are plain `Flow<T>`; their failures are handled inside `observe` ([db-lifecycle.md § Observation](db-lifecycle.md#observation)).
+- `KeyVault` is the exception: only `session` (E2, E4), `security` (`AppLockController`: route, slot ciphers, `verifyBiometric`) and `data.maintenance` call it, and its surface ([security.md § 3.6](security.md#36-keyvault-surface)) returns `UnlockResult` from `unlock`, `openKey`, `verifyPassword`, `unlockWithBiometric` and `verifyBiometric` and throws `KeyVaultException(KeyFailure)` for every other failure. `DbMaintenance` maps them to `AppError` (`PasswordRejected` to `WrongPassword`, `Throttled` to `Throttled`, `KeyFailed` and every `KeyVaultException` to `KeyUnavailable`); E2 maps them to gate events ([States, events and effects](#states-events-and-effects)).
 - Rows that vanished are success values, not errors: `SaveResult.NoteGone`, `loadNote` returning null, `EntityDeleteResult(deleted = false)` ([data-layer.md](data-layer.md)). There is no `NotFound` error.
 - `InvalidInput`: the password rules are checked by `DbMaintenance` before it enters `Maintenance` ([db-lifecycle.md § Operation frame](db-lifecycle.md#operation-frame), step 4). A blank person or project name is prevented by the UI and is an `IllegalArgumentException` in a repository ([data-layer.md § Note save](data-layer.md#note-save)); `BlankName` and the acknowledgement case exist so that `AppError.messageRes()` stays total ([ui.md § 11.13](ui.md#1113-errors)).
 - Repositories, KeyVault and DbMaintenance turn expected exceptions into AppError at their boundary. SQLite and SQLCipher classification: [db-lifecycle.md § Failure classification](db-lifecycle.md#failure-classification); Keystore and crypto classification: [security.md § 5.2](security.md#52-error-classes). `CancellationException` is always rethrown.
@@ -280,12 +281,12 @@ How instrumented tests replace the container and start the gate: [testing.md § 
 | `noteRepository`, `entityRepository` | stateless; resolve DAOs per call or per subscription through the holder |
 | `appMessages: AppMessages` | application-scoped queue of `UserMessage`s shown by the shell ([ui.md § 2.4](ui.md#24-snackbars-and-notices)) |
 | `externalActivities` | takes an `ExternalCallbacks` provider ([Result launchers](#result-launchers-and-process-death)) |
-| `biometricGateway: BiometricGateway` | the platform adapter beneath `AppLockController` ([security.md § 7.3](security.md#73-applockcontroller-and-mainactivity)): availability, the prompt, the credential intent and the enrollment intent. Overridable; tests bind `FakeBiometricGateway` |
-| `appLockController` | takes `biometricGateway`, `externalActivities`, `settingsStore`, `appTime`, `processLifecycle` and a `() -> LockListener` provider |
+| `biometricGateway: BiometricGateway` | the platform adapter beneath `AppLockController` ([security.md § 7.3](security.md#73-applockcontroller-and-mainactivity)): availability, the prompt (with a `CryptoObject` for the biometric slot, [AppLockController and BiometricGateway](#applockcontroller-and-biometricgateway)), the credential intent and the enrollment intent. Overridable; tests bind `FakeBiometricGateway`, which hands back the cipher it was given |
+| `appLockController` | takes `biometricGateway`, `externalActivities`, `settingsStore`, `keyVault` (route, slot ciphers, `verifyBiometric`, reminder), `appTime`, `processLifecycle`, a `() -> LockListener` provider (SessionGate) and a `() -> BiometricSlotWriter` provider (DbMaintenance) ([Event wiring](#event-wiring)) |
 | `sessionGate` | `DefaultSessionGate`; implements `LockListener`, `CorruptionListener` and `MaintenanceListener` ([Event wiring](#event-wiring)) |
 | `windowPolicy: StateFlow<WindowPolicy>` | below |
 
-`windowPolicy` is the single source of the window flags and of the keyboard-privacy flag. It combines the settings, the committed key mode and the gate state. While the settings have not been read or the key mode is unknown (null before startup has read it, or while the key-state is invalid) it is the **closed** policy: `FLAG_SECURE` on, recents screenshot off, overlays hidden. A closed policy is still emitted, so the splash hold of [MainActivity startup order](#mainactivity-startup-order) is released (DEC-66, DEC-67; rules: [security.md § 8](security.md#8-screen-protection-dec-66-dec-67)):
+`windowPolicy` is the single source of the window flags; it carries nothing for the keyboard (below). It combines the settings, the committed key mode and the gate state. While the settings have not been read or the key mode is unknown (null before startup has read it, or while the key-state is invalid) it is the **closed** policy: `FLAG_SECURE` on, recents screenshot off, overlays hidden. A closed policy is still emitted, so the splash hold of [MainActivity startup order](#mainactivity-startup-order) is released (DEC-66, DEC-67; rules: [security.md § 8](security.md#8-screen-protection-dec-66-dec-67)):
 
 ```kotlin
 // model
@@ -304,7 +305,9 @@ val windowPolicy: StateFlow<WindowPolicy> =
     }.stateIn(applicationScope, SharingStarted.Eagerly, WindowPolicy.Closed)
 ```
 
-`MainActivity` collects it to apply the window flags and provides `LocalKeyboardPrivacy` (`ui/common`) with `policy.secure`, so composables read neither `SettingsStore` nor the policy directly ([ui.md § 3.3](ui.md#33-search-bar), [security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)). When the policy is open `secure` equals `security.screenshot_protection`, which is the DEC-71 condition; when it is closed nothing sensitive is composed yet.
+`MainActivity` collects it to apply the window flags; composables never read it.
+
+Keyboard privacy is not part of the window policy and follows no setting (DEC-71, Q11). Every note, person-name, project-name and search field (perspective search, `EntityPicker`) always asks the keyboard for no personalized learning (`IME_FLAG_NO_PERSONALIZED_LEARNING`), whatever screenshot protection, the key mode or the gate state says. The fields wear a fixed wrapper from `ui/common` that takes no input, so there is no `CompositionLocal` for it, nothing to provide in `MainActivity` and nothing to recompose when a setting changes. The wrapper and the list of covered fields are owned by [security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11), the fields themselves by [ui.md](ui.md). The autofill exclusion of DEC-71 stays in `MainActivity` ([MainActivity startup order](#mainactivity-startup-order)).
 
 `UiGraph` and `GateGraph` are interfaces in `ui` that AppContainer implements; MainActivity provides the container as `LocalUiGraph`. They limit what UI code can reach:
 
@@ -321,7 +324,7 @@ interface UiGraph : GateGraph {
 
 ### SettingsStore
 
-`SettingsStore` is the only DataStore user. It exposes `settings: StateFlow<Settings?>` (null until the first read), `suspend fun snapshot(): Settings` (reads DataStore directly, so it is current right after an edit), one setter per toggle, `setBackoff(failures, retryAtElapsedMs)`, `setRemembered(personId, projectId)`, the draft-insert record below, `resetSecurity()` and `onDataReplaced()`. Values are never user text, secrets or URIs.
+`SettingsStore` is the only DataStore user. It exposes `settings: StateFlow<Settings?>` (null until the first read), `suspend fun snapshot(): Settings` (reads DataStore directly, so it is current right after an edit), one setter per toggle, `setBackoff(failures, retryAtElapsedMs)`, `setPasswordVerifiedAt(epochMillis)` (written only by `KeyVault`, DEC-74), `setRemembered(personId, projectId)`, the draft-insert record below, `resetSecurity()` and `onDataReplaced()`. Values are never user text, secrets or URIs.
 
 | Property | DataStore key | Type | Default | Owner of the semantics |
 |---|---|---|---|---|
@@ -331,13 +334,14 @@ interface UiGraph : GateGraph {
 | `unlockFailures` | `security.unlock_failures` | Int | 0 | security.md § 2, § 5.3 |
 | `unlockRetryAtElapsedMs` | `security.unlock_retry_at` | Long, `AppTime.elapsedMillis()` base | 0 | security.md § 2, § 5.3 |
 | `lockAutoOffNotice` | `security.lock_auto_off_notice` | Boolean | false | security.md § 2, § 7.6 |
+| `passwordVerifiedAt` | `security.password_verified_at` | Long, `AppTime.nowMillis()` base | 0 (the reminder is due) | security.md § 2, § 5.6 (DEC-74) |
 | `rememberedPersonId` | `nav.remembered_person_id` | Long? | null | DEC-28 |
 | `rememberedProjectId` | `nav.remembered_project_id` | Long? | null | DEC-28 |
 | `dataEpoch` | `nav.data_epoch` | Int | 0 | [Data reset](#data-reset) |
 
-- `resetSecurity()` sets the six `security.*` keys to their defaults and clears both remembered ids (Erase and the first-run reset, [security.md § 5.4](security.md#54-forgotten-password-erase-dec-63)). `onDataReplaced()` clears both remembered ids and the draft-insert records and increments `dataEpoch` in one edit.
+- `resetSecurity()` sets the seven `security.*` keys to their defaults and clears both remembered ids (Erase and the first-run reset, [security.md § 5.4](security.md#54-forgotten-password-erase-dec-63)). `onDataReplaced()` clears both remembered ids and the draft-insert records and increments `dataEpoch` in one edit.
 - Draft-insert record, used only by `EditorViewModel` to survive a process death that falls between the database commit of a first insert and the saved state of the draft ([data-layer.md § Note save](data-layer.md#note-save), caller rules; lifecycle in [ui.md § 6.8](ui.md#68-saving-as-the-user-experiences-it)). `data class DraftInsert(val noteId: Long, val createdPersons: Map<String, Long>, val createdProjects: Map<String, Long>)` in `model` (`toString()` prints `DraftInsert(noteId=…)`; the map keys are draft-local UUIDs, never names). Members: `suspend fun putDraftInsert(draftKey: String, record: DraftInsert)`, `suspend fun draftInsert(draftKey: String): DraftInsert?`, `suspend fun dropDraftInsert(draftKey: String)`. Storage: one string preference `nav.draft_inserts` that holds at most 8 records, newest last; `putDraftInsert` appends and drops the oldest beyond 8, so records of abandoned drafts cannot accumulate. It is not a member of `Settings`, `resetSecurity()` leaves it alone, and the store returns only after the DataStore edit has completed, because the caller updates its `SavedStateHandle` after that.
-- A corrupt preferences file is replaced with defaults (`ReplaceFileCorruptionHandler { emptyPreferences() }`). That fails open for the biometric lock, screenshot protection and the backoff counters; see [Top risks](#top-risks).
+- A corrupt preferences file is replaced with defaults (`ReplaceFileCorruptionHandler { emptyPreferences() }`). That fails open for the biometric lock, screenshot protection and the backoff counters; see [Top risks](#top-risks). It fails closed for the password reminder: `passwordVerifiedAt` falls back to 0, so the next unlock in `PASSWORD` mode with the lock on asks for the password (DEC-74).
 
 ### Lifetimes
 
@@ -345,6 +349,7 @@ interface UiGraph : GateGraph {
 |---|---|---|
 | Open database | Room instance, DAOs, open-helper factory, raw key bytes; held only by DatabaseHolder | every open: Opening, and each reopen by DbMaintenance (backup, restore, key change) |
 | Activity | BiometricPrompt inside AppLockController, the result launchers inside ExternalActivities, the window-policy collector | every `MainActivity.onCreate` (`attach`/`bind`); dropped in `onDestroy` |
+| One slot authorization | the `SlotCipher` of one successful fingerprint prompt (an authorized cipher, no key bytes) | from the prompt callback until its one use: E2 (`unlockWithBiometric`), `KeyVault.verifyBiometric` in AppLockController, or the DbMaintenance call it was handed to; `dispatch` drops an unused one (T35) |
 | NavEntry | one NoteListViewModel per tab, EditorViewModel, SettingsViewModel, picker ViewModels, each with a SavedStateHandle | the entry is popped |
 | Data | navigation stacks, NavEntry ViewModels, remembered selections | Restore, Start fresh, Erase ([Data reset](#data-reset)) |
 
@@ -464,58 +469,109 @@ interface SessionGate {
 internal fun reduce(state: GateState, event: GateEvent, elapsedNow: Long): Pair<GateState, List<GateEffect>>
 ```
 
-Effects run in `applicationScope` and report back through `dispatch` on the main thread. `reduce` is pure: the only clock value it needs is the `elapsedNow` that `dispatch` passes in, on the same base as `NeedsPassword.retryAt` (guard of T7). No gate decision uses the wall clock.
+Effects run in `applicationScope` and report back through `dispatch` on the main thread. `reduce` is pure: the only clock value it needs is the `elapsedNow` that `dispatch` passes in, on the same base as `NeedsPassword.retryAt` and `PasswordEntry.retryAt` (guards of T7 and T47). No gate decision uses the wall clock. The 14-day password reminder (DEC-74), which does, is decided outside the reducer by `KeyVault` and `AppLockController` and reaches the reducer only as the `reason` of an event ([Unlock routes](#unlock-routes-q8)).
+
+### Unlock routes (Q8)
+
+With the biometric lock on and a usable `BIOMETRIC_STRONG` biometric, the fingerprint alone unlocks, at cold start and on return from background, in every key mode (DEC-65). In `PASSWORD` mode this goes through the biometric slot, a second wrap of the DEK under a Keystore key that needs a strong biometric for every use (DEC-60). [security.md § 7](security.md#7-biometric-app-lock-dec-65) owns the rules that choose a route for a given mode, slot, biometric availability and reminder; this section defines how the gate carries each route out. The route is resolved by `AppLockController` (`unlockRoute()`, [AppLockController and BiometricGateway](#applockcontroller-and-biometricgateway)), never by the reducer.
+
+| Route (`UnlockRoute`) | When (rules: security.md § 7) | What unlocks | Without a usable strong biometric |
+|---|---|---|---|
+| `Biometric` | `PLAIN` and `DEVICE` with the lock on; any mode while the gate is locked over `KeyUnavailable` (the key cannot be obtained, so no slot or password check can run) | `strongPrompt` without a `CryptoObject` | the device credential (Q7) |
+| `Slot` | `PASSWORD`, lock on, usable strong biometric, a biometric slot in the committed key-state (`KeyVault.hasBiometricSlot()`, no Keystore call), reminder not due. Whether the slot's Keystore key still works is found out only when the prompt's cipher is prepared: an invalidated or missing key turns the route into `Password(…)` at prompt time (T45, T46), see [Prompt handling](#applockcontroller-and-biometricgateway) | `strongPrompt` with a `CryptoObject` that carries an unwrap cipher on the slot key; negative button "Use password" | the startup password; never the device credential |
+| `Password(reason, fingerprintUsable)` | `PASSWORD` in every other case: lock off, no usable strong biometric, no slot in the key-state, a slot found invalidated or unavailable when the prompt is prepared, reminder due (DEC-74), or the user chose "Use password" | the startup password | — |
+
+How the gate runs each case:
+
+| Situation | Database | Gate path |
+|---|---|---|
+| Cold start, `PASSWORD`, route `Slot` | closed | `Locked(Open)` (T40) → prompt → `SlotUnlocked(cipher)` → `Opening(viaSlot)` with E2(cipher) (T42) → `Ready` (T16) |
+| Cold start, `PASSWORD`, route `Password(reason)` | closed | `NeedsPassword(reason)` (T2) → `PasswordSubmitted` → `Opening(viaPassword)` with E2(password) (T7) → `Ready` (T16) |
+| Cold start, `PLAIN` or `DEVICE`, lock on | closed | `Locked(Open)` (T3) → `Unlocked` → `Opening()` with E2() (T9) |
+| "Use password" (prompt negative button or lock-screen button), or the slot found unusable when the prompt is prepared, before the database opened | closed | `PasswordRequired` → `NeedsPassword(reason, fingerprintUsable)` (T45) |
+| The slot fails inside E2 | closed | invalidated: `PasswordNeeded(FingerprintChanged)` → `NeedsPassword` (T22); any other slot failure: `SlotUnlockFailed` → `Locked(Open)` with an error, "Unlock" prepares a new cipher (T44) |
+| "Use fingerprint" on the password screen | closed | `UseFingerprintChosen` → `Locked(Open)` (T51) |
+| Return from background, `PASSWORD`, route `Slot` | open | `Locked(Ready)` (T25) → prompt → `AppLockController` checks the cipher with `KeyVault.verifyBiometric` → `Unlocked` → `Ready` (T10) |
+| Return from background, `PASSWORD`, route `Password(reason)`: no usable fingerprint, slot invalidated or missing, reminder due, or "Use password" | open | `Locked(Ready)` (T25) → `PasswordRequired` → `Locked(Ready, password)` (T46) → `PasswordSubmitted` → E4 checks the password without reopening (T47) → `PasswordVerified` → `Ready` (T48) |
+| Return from background, `PLAIN` or `DEVICE` | open | `Locked(Ready)` (T25) → `Unlocked` → `Ready` (T10) |
+| "Use fingerprint" on the password screen with the database open | open | `UseFingerprintChosen` → `Locked(Ready)` without the password entry, the prompt is armed again (T52) |
+
+- **How the key reaches `Opening` (DEC-64).** The fingerprint prompt never yields key bytes. `AppLockController` asks `KeyVault.biometricUnlockCipher()` for a `javax.crypto.Cipher` initialized to unwrap the slot, passes it to the prompt as a `CryptoObject` and, on success, wraps the authenticated cipher that the prompt returns as a `SlotCipher` (package `security`, owned by [security.md § 3.6](security.md#36-keyvault-surface)). A `SlotCipher` authorizes exactly one decryption and holds no key material. `SlotUnlocked(cipher)` carries it to the reducer, which hands it to E2 (T42); E2 runs in `Opening` and calls `KeyVault.unlockWithBiometric(cipher)`, which performs the single authorized `doFinal`, builds the 67-byte raw key, zeroes the 32-byte DEK and returns `UnlockResult.Key(rawKey)`. From there the path is the password path: `DatabaseHolder.open(generation, rawKey)` takes ownership of the raw key. So no gate state or event ever holds a key or a DEK, the cipher lives from the prompt callback to the dispatch that starts E2 and is then owned by E2, and the Room instance is still first built in `Opening` (invariant 1).
+- **Return from background in `PASSWORD` mode** also uses the `CryptoObject` prompt, not a plain one: an enrollment change invalidates the slot key (`setInvalidatedByBiometricEnrollment(true)`, DEC-60), so the cipher cannot be initialized and a finger enrolled later by someone who knows the device PIN never unlocks the app. The database is already open, so the authenticated cipher is only proof: `AppLockController` runs `KeyVault.verifyBiometric(cipher)` (which unwraps and zeroes at once) and raises `Unlocked` on `Verified`. The device credential never unlocks `PASSWORD` mode.
+- **Password check without reopening.** In `Locked(Ready)` and `Locked(Corrupt)` the password screen is a `Locked` state with a `PasswordEntry`; the database stays as it is (open for `Ready`, closed for `Corrupt`). Effect E4 runs `KeyVault.verifyPassword(bytes)`, which applies the same throttle, counting and reminder restart as a cold-start password ([security.md § 5.5](security.md#5-unlock-errors-and-erase)) and zeroes the key it derived; DatabaseHolder is not touched. A cold-start password is one way to open the database and nothing more: it does not stand in for the lock later, and every return from background resolves the route again.
+- **The 14-day reminder (DEC-74)** turns the next unlock into a password unlock: `unlockRoute()` returns `Password(Reminder, fingerprintUsable = false)` at cold start (T2) or after a return from background (T46). The screen shows the one-line reason; "Forgot password?" there leads to the fingerprint reset. Any successful startup-password entry restarts the 14 days inside `KeyVault` (the gate, a key-change dialog, a restore). The reducer never compares dates.
+- **Re-creation offer.** After a successful password unlock in `PASSWORD` mode (T16 from `Opening(viaPassword)`, T48) and after a committed key change or restore (T28a), SessionGate runs E5, which calls `AppLockController.offerSlotSetup()`. The controller decides whether the offer applies (lock on, usable strong biometric, slot missing or invalidated; [security.md § 7](security.md#7-biometric-app-lock-dec-65)) and publishes it as `slotOffer`; the shell renders it in `Ready` ([ui.md § 8.13](ui.md#813-fingerprint-set-up-offer-dec-65)). "Set up" calls `AppLockController.createSlot()`, which runs one prompt with a wrap cipher and commits the slot through `BiometricSlotWriter` (implemented by DbMaintenance, [db-lifecycle.md § Biometric slot commits](db-lifecycle.md#biometric-slot-commits)). This is not a maintenance operation: no `MaintenanceStarted`, no gate change, Room stays open. A cancelled or declined offer is cleared and comes back after the next password unlock (DEC-65), because only those rows run E5.
+- **Fingerprint password reset (DEC-63).** "Forgot password?" on a password screen (`NeedsPassword`, or `Locked` with a `PasswordEntry` over `Ready`) opens the Forgot password screen, a local UI state of the gate screen ([ui.md § 10.3](ui.md#103-forgot-password-screen-dec-63)). It offers "Set a new password with your fingerprint" while `AppLockController.fingerprintUnlockAvailable()` is true. The screen collects the new password (twice, with the acknowledgement), obtains an authenticated unwrap cipher with `AppLockController.slotPrompt(AuthPurpose.ResetPassword)` and calls `DbMaintenance.resetPasswordWithBiometric(origin, cipher, newPassword)` with origin `NeedsPassword` (database closed) or `Ready` (database open behind the lock); mechanics in [db-lifecycle.md § Fingerprint password reset](db-lifecycle.md#fingerprint-password-reset). DbMaintenance raises `MaintenanceStarted(KeyChange)` only after the cipher unwrapped the DEK. From `NeedsPassword` that is T41 and the operation ends with `Restart` (T30) or `Aborted` (T31d); from `Locked(Ready)` it is T12, ending in `Locked(Ready)` (T14a). Either way the next unlock asks for the new password (the new DEK dropped the slot), and the re-creation offer follows it. "Erase all data and start over" stays available on the same screen: from `NeedsPassword` it is T8; from a `Locked` password screen it starts as `Locked(Maintenance(Erase, origin = that resume))` (T12) and ends with `Restart` (T15).
 
 ### States, events and effects
 
 ```kotlin
-sealed interface GateState {
+sealed interface GateState {      // every class overrides toString() with class name, booleans, counts and enums only (DEC-70; omitted here)
     data class Starting(val authenticated: Boolean) : GateState
-    data class NeedsPassword(val failures: Int, val retryAt: Long, val couldNotOpen: Boolean) : GateState   // retryAt: elapsedMillis() base
-    data class Locked(val resume: Resume, val authError: LockError? = null) : GateState
-    data class Opening(val viaPassword: Boolean, val lockPending: Boolean, val transientError: Boolean) : GateState
+    data class NeedsPassword(val failures: Int, val retryAt: Long, val couldNotOpen: Boolean,   // retryAt: elapsedMillis() base
+                             val reason: PasswordReason = PasswordReason.None,
+                             val fingerprintUsable: Boolean = false) : GateState
+    data class Locked(val resume: Resume, val authError: LockError? = null,
+                      val password: PasswordEntry? = null) : GateState                    // password != null: the password screen, database as `resume` says
+    data class Opening(val viaPassword: Boolean, val lockPending: Boolean, val transientError: Boolean,
+                       val viaSlot: Boolean = false,
+                       val reason: PasswordReason = PasswordReason.None,                  // viaPassword only: what the password screen showed (T18, T21)
+                       val fingerprintUsable: Boolean = false) : GateState
     data object Ready : GateState
     data class Maintenance(val op: MaintenanceOp, val origin: Origin, val corruptPending: Boolean = false) : GateState
     data object Corrupt : GateState
     data object KeyUnavailable : GateState
 }
+data class PasswordEntry(val reason: PasswordReason, val fingerprintUsable: Boolean,
+                         val failures: Int, val retryAt: Long, val checking: Boolean = false,   // retryAt: elapsedMillis() base
+                         val checkFailed: Boolean = false)                                       // the last check hit a Keystore failure (T50): the screen shows a generic retry line, not a wrong-password error
 sealed interface Resume { data object Open : Resume; data object Ready : Resume; data class Maintenance(val state: GateState.Maintenance) : Resume
                           data object Corrupt : Resume; data object KeyUnavailable : Resume }
 enum class Origin { Ready, Corrupt, KeyUnavailable, NeedsPassword }
+enum class PasswordReason { None, Reminder, FingerprintChanged }    // model: the reason line of the password screen (texts: ui.md § 10.2)
 class LockError(val code: Int, val message: String?) {   // security package: BiometricPrompt error code and the system's errString (security.md § 7.4), never user data; message == null is a silent error (the lock screen shows no text)
     override fun toString() = "LockError(code=$code)"
+    companion object { const val SLOT_FAILED = -1 }      // not a BiometricPrompt code: the slot cipher failed (T44, security.md § 7); the lock screen shows ui.md's generic text, never silent
 }
 ```
 
-- `Starting(authenticated)`: startup in progress. `authenticated` is true only after a recovery operation restarted the app (T30).
-- `NeedsPassword(failures, retryAt, couldNotOpen)`: Password mode, before the database opens (DEC-62). `retryAt` is on the `AppTime.elapsedMillis()` base and has passed through `UnlockBackoff.effectiveRetryAt`, so it is never further away than the current delay (0 = no delay; [security.md § 5.3](security.md#53-backoff-dec-62)).
-- `Locked(resume, authError)`: the biometric lock is shown. `resume` is what returns on unlock: `Open` (not yet opened), `Ready`, a `Maintenance` state, `Corrupt` or `KeyUnavailable`. A `Locked(Maintenance)` never has origin `NeedsPassword` (T32).
-- `Opening(viaPassword, lockPending, transientError)`: unwrap the key, open, verify. `lockPending` means the app went to the background meanwhile (T24).
+- `Starting(authenticated)`: startup in progress. `authenticated` is true only after a recovery operation restarted the app (T30). It skips the biometric lock in `PLAIN` and `DEVICE` mode only; `PASSWORD` mode always needs a key, so T2 or T40 apply whatever its value.
+- `NeedsPassword(failures, retryAt, couldNotOpen, reason, fingerprintUsable)`: `PASSWORD` mode, database closed, the password screen (DEC-62). `retryAt` is on the `AppTime.elapsedMillis()` base and has passed through `UnlockBackoff.effectiveRetryAt`, so it is never further away than the current delay (0 = no delay; [security.md § 5.3](security.md#53-backoff-dec-62)). `reason` selects the reason line; `fingerprintUsable` shows "Use fingerprint" (T51) and is true only when the user left a usable fingerprint route with "Use password".
+- `Locked(resume, authError, password)`: the app is locked. `resume` is what returns on unlock: `Open` (not yet opened), `Ready`, a `Maintenance` state, `Corrupt` or `KeyUnavailable`. With `password == null` it is the lock screen and `AppLockController` prompts on the route it resolves; with a `PasswordEntry` it is the password screen and nothing prompts. `Locked(Open)` never has a `PasswordEntry` (T45 goes to `NeedsPassword` instead), and neither does `Locked(KeyUnavailable)` (T46's guard). A `Locked(Maintenance)` never has origin `NeedsPassword` (T32).
+- `Opening(viaPassword, lockPending, transientError, viaSlot, reason, fingerprintUsable)`: unwrap the key, open, verify. `viaPassword` and `viaSlot` are never both true. `lockPending` means the app went to the background meanwhile (T24). `reason` and `fingerprintUsable` are copied from `NeedsPassword` by T7, so a wrong password (T21) or a failed open (T18) returns to the same password-screen variant.
 - `Ready`: database open, content composed.
-- `Maintenance(op, origin, corruptPending)`: `op` is one of `Backup`, `Restore`, `KeyChange`, `StartFresh`, `Erase`; `origin` is the state it started from. `corruptPending` records runtime corruption reported while Room was being reopened (T38).
+- `Maintenance(op, origin, corruptPending)`: `op` is one of `Backup`, `Restore`, `KeyChange`, `StartFresh`, `Erase` (the fingerprint reset is a `KeyChange`); `origin` is the state it started from. `corruptPending` records runtime corruption reported while Room was being reopened (T38).
 - `Corrupt` and `KeyUnavailable`: recovery screens (DEC-85, DEC-86).
 
-Events (`GateEvent`; every class overrides `toString()` and none prints a password, DEC-70):
+Events (`GateEvent`; every class overrides `toString()` and none prints a password or cipher, DEC-70):
 
 | Event | Payload | Raised by |
 |---|---|---|
-| `StartupLoaded` | `mode: KeyMode, lockEnabled: Boolean, failures: Int, retryAt: Long` (`elapsedMillis()` base) | E1 |
+| `StartupLoaded` | `mode: KeyMode, lockEnabled: Boolean, failures: Int, retryAt: Long` (`elapsedMillis()` base), `route: UnlockRoute` (`PASSWORD`: `Slot` or `Password(…)` from `AppLockController.unlockRoute()`; other modes: `Biometric`, which no row reads) | E1 |
 | `StartupKeyFailed` | `lockEnabled: Boolean` | E1 |
 | `PasswordSubmitted` | `password: CharArray`; `toString() = "PasswordSubmitted(<redacted>)"` | gate UI |
 | `Retry` | | gate UI |
+| `UseFingerprintChosen` | | gate UI: "Use fingerprint" on the password screen |
 | `Opened`, `OpenFailed(kind)` | `kind: OpenFailureKind` = `Corrupt` or `Transient` | E2, from `DatabaseHolder.open` |
-| `PasswordRejected`, `PasswordNeeded` | `failures: Int, retryAt: Long` (`elapsedMillis()` base) | E2, from `UnlockResult` |
-| `KeyFailed` | | E2, from `UnlockResult` or a `KeyVaultException` |
+| `PasswordRejected` | `failures: Int, retryAt: Long` (`elapsedMillis()` base) | E2 and E4, from `UnlockResult` |
+| `PasswordNeeded` | `failures: Int, retryAt: Long, reason: PasswordReason` | E2, from `UnlockResult` |
+| `PasswordVerified` | | E4, from `UnlockResult.Verified` |
+| `KeyFailed` | | E2 and E4, from `UnlockResult` or a `KeyVaultException` |
+| `SlotUnlockFailed` | | E2, from `UnlockResult.SlotFailed(invalidated = false)` |
 | `LockNow`, `Unlocked`, `AuthError(error)` | `error: LockError` | AppLockController, through `LockListener` |
+| `SlotUnlocked(cipher)` | `cipher: SlotCipher`; `toString() = "SlotUnlocked"` | AppLockController, through `LockListener`: a successful slot prompt while the screen is `PromptToOpen` |
+| `PasswordRequired` | `reason: PasswordReason, fingerprintUsable: Boolean, failures: Int, retryAt: Long` (counters from `SettingsStore.snapshot()` through `UnlockBackoff.effectiveRetryAt`) | AppLockController, through `LockListener`: route `Password` resolved at prompt time, "Use password", or the slot found unusable |
 | `CorruptAtRuntime` | | DatabaseHolder, through `CorruptionListener` |
 | `MaintenanceStarted(op)`, `MaintenanceFinished(outcome)` | `outcome` = `Reopened`, `ReopenFailed(kind)`, `Restart` or `Aborted` | DbMaintenance, through `MaintenanceListener` |
 
-`LockNow` is raised by AppLockController under the re-lock rules of [security.md § 7.7](security.md#77-re-lock-rules) (process ON_STOP, and ON_START after an expired exemption, only while the lock is on and no exemption is active) **whatever the gate state**; only the reducer decides what it means (T24, T25, T32, T34, T36). `Unlocked` is raised after a successful prompt, after a `CredentialConfirm` result with `RESULT_OK`, and after the lock turned itself off (security.md § 7.6).
+`LockNow` is raised by AppLockController under the re-lock rules of [security.md § 7.7](security.md#77-re-lock-rules) (process ON_STOP, and ON_START after an expired exemption, only while the lock is on and no exemption is active) **whatever the gate state**; only the reducer decides what it means (T24, T25, T32, T34, T36). `Unlocked` is raised after a successful prompt on the `Biometric` route, after a `Slot` prompt over an open or recovering database whose cipher `KeyVault.verifyBiometric` accepted, after a `CredentialConfirm` result with `RESULT_OK`, and after the lock turned itself off (security.md § 7.6).
 
 Effects:
-- **E1 RunStartup** (io), in this order: (1) `SqlcipherEngine.init()`, idempotent per process, in the order of [security.md § 3.4](security.md#34-sqlcipher-key-and-settings): `System.loadLibrary("sqlcipher")` (DEC-08), `SqlcipherLogging.configure()` (release: logger target `NoopTarget`), then `PRAGMA cipher_default_compatibility = 4` on a throwaway in-memory connection; (2) await the first `SettingsStore` value; (3) `DbMaintenance.reconcileAtStartup()`, which reads the key-state through KeyVault, deletes leftovers and returns a `StartupDecision` ([db-lifecycle.md § Startup reconciliation](db-lifecycle.md#startup-reconciliation)); (4) `SettingsStore.snapshot()` for `lockEnabled`, `failures` and `retryAt`, read after the reconciliation because the first-run reset may have changed them; `retryAt` is passed through `UnlockBackoff.effectiveRetryAt(failures, stored, appTime.elapsedMillis())`, so a reboot since the failures does not leave a stale countdown; (5) raise `StartupLoaded(mode, …)` for `Proceed(_, mode)`, `FirstRun` and `AdoptPlain` (mode `PLAIN`), or `StartupKeyFailed(lockEnabled)` for `KeyUnavailable`. E1 has no other outcome: an unreadable or invalid key-state is `KeyUnavailable` by the classification of db-lifecycle.md; any other exception is a bug and crashes the app, with nothing deleted that the decision table does not allow.
-- **E2 UnlockAndOpen(password?)**, in this order: (1) `DbMaintenance.completeStartup()`, which returns `StartupCompletion { Done, Transient, KeyUnavailable }` (it creates the first-run database or adopts plaintext files, and is a no-op otherwise; [db-lifecycle.md § Completing startup in Opening](db-lifecycle.md#completing-startup-in-opening)): `Transient` (storage full or another transient failure) raises `OpenFailed(Transient)`, `KeyUnavailable` raises `KeyFailed`; (2) `KeyVault.readState()` for the generation: no file, or a `KeyVaultException(InvalidState)`, raises `KeyFailed`; (3) `KeyVault.unlock(passwordBytes?)` ([security.md § 3.6](security.md#36-keyvault-surface); Keystore calls on io, PBKDF2 on default, the password array zeroed afterwards, DEC-64) returns an `UnlockResult`: `Key(rawKey)` continues; `PasswordRejected(failures, retryAt)` and `Throttled(failures, retryAt)` both raise the gate event `PasswordRejected(failures, retryAt)`, with the counters that KeyVault persisted before it returned ([security.md § 5.3](security.md#53-backoff-dec-62)); `PasswordNeeded` (a `PASSWORD` slot without a password; defensive, because T2 normally routes Password mode to `NeedsPassword` first) raises `PasswordNeeded(failures, retryAt)` from `SettingsStore.snapshot()` after `UnlockBackoff.effectiveRetryAt`, with no Keystore call; `KeyFailed`, or a `KeyVaultException`, raises `KeyFailed`; (4) `DatabaseHolder.open(generation, rawKey)`, which takes ownership of the key (open and verify, [db-lifecycle.md § Open sequence](db-lifecycle.md#open-sequence)): `Opened` or `OpenFailed(kind)`. After a correct password KeyVault resets `security.unlock_failures` and `security.unlock_retry_at` ([security.md § 5.1](security.md#51-cold-start-per-mode) step 3).
+- **E1 RunStartup** (io), in this order: (1) `SqlcipherEngine.init()`, idempotent per process, in the order of [security.md § 3.4](security.md#34-sqlcipher-key-and-settings): `System.loadLibrary("sqlcipher")` (DEC-08), `SqlcipherLogging.configure()` (release: logger target `NoopTarget`), then `PRAGMA cipher_default_compatibility = 4` on a throwaway in-memory connection; (2) await the first `SettingsStore` value; (3) `DbMaintenance.reconcileAtStartup()`, which reads the key-state through KeyVault, deletes leftovers and returns a `StartupDecision` ([db-lifecycle.md § Startup reconciliation](db-lifecycle.md#startup-reconciliation)); (4) `SettingsStore.snapshot()` for `lockEnabled`, `failures` and `retryAt`, read after the reconciliation because the first-run reset may have changed them; `retryAt` is passed through `UnlockBackoff.effectiveRetryAt(failures, stored, appTime.elapsedMillis())`, so a reboot since the failures does not leave a stale countdown; (5) for `Proceed(_, PASSWORD, _)` only, `appLockController.unlockRoute()`, which reads the lock setting, the biometric availability, `KeyVault.hasBiometricSlot()` (committed key-state only, no Keystore call) and `KeyVault.isPasswordReminderDue()`, and never prompts and never starts a Keystore operation: `Cipher.init` on an AndroidKeyStore key begins an operation that cannot be aborted, so an unwrap cipher that was initialized only to probe the slot and then dropped would stay open until it is pruned and could cause the operation of the real prompt to be pruned (`SlotFailed(invalidated = false)`, [security.md § 3.7.3](security.md#373-unwrapping-through-the-slot)). An invalidated slot key is detected when the prompt's cipher is prepared ([security.md § 7.4](security.md#74-unlock-route-and-error-mapping): `Invalidated` becomes `PasswordRequired(FingerprintChanged)`, T45 or T46); (6) raise `StartupLoaded(mode, …, route)` for `Proceed(_, mode, _)`, `FirstRun` and `AdoptPlain` (mode `PLAIN`, route `Biometric`), or `StartupKeyFailed(lockEnabled)` for `KeyUnavailable`. E1 has no other outcome: an unreadable or invalid key-state is `KeyUnavailable` by the classification of db-lifecycle.md; any other exception is a bug and crashes the app, with nothing deleted that the decision table does not allow.
+- **E2 UnlockAndOpen(password? or cipher?)**, at most one of the two, in this order: (1) `DbMaintenance.completeStartup()`, which returns `StartupCompletion { Done, Transient, KeyUnavailable }` (it creates the first-run database or adopts plaintext files, and is a no-op otherwise; [db-lifecycle.md § Completing startup in Opening](db-lifecycle.md#completing-startup-in-opening)): `Transient` (storage full or another transient failure) raises `OpenFailed(Transient)`, `KeyUnavailable` raises `KeyFailed`; (2) `KeyVault.readState()` for the generation: no file, or a `KeyVaultException(InvalidState)`, raises `KeyFailed`; (3a) without a cipher, `KeyVault.unlock(passwordBytes?)` ([security.md § 3.6](security.md#36-keyvault-surface); Keystore calls on io, PBKDF2 on default, the password array zeroed afterwards, DEC-64) returns an `UnlockResult`: `Key(rawKey)` continues; `PasswordRejected(failures, retryAt)` and `Throttled(failures, retryAt)` both raise the gate event `PasswordRejected(failures, retryAt)`, with the counters that KeyVault persisted before it returned ([security.md § 5.3](security.md#53-backoff-dec-62)); `PasswordNeeded` (a `PASSWORD` slot without a password: T9 or T20 in `PASSWORD` mode, after a lost cipher or a defensive path) raises `PasswordNeeded(failures, retryAt, reason = None)` from `SettingsStore.snapshot()` after `UnlockBackoff.effectiveRetryAt`, with no Keystore call; `KeyFailed`, or a `KeyVaultException`, raises `KeyFailed`; (3b) with a cipher, `KeyVault.unlockWithBiometric(cipher)` returns `Key(rawKey)`, which continues; `SlotFailed(invalidated = true)`, which raises `PasswordNeeded(failures, retryAt, reason = FingerprintChanged)` with the snapshot counters; `SlotFailed(invalidated = false)`, which raises `SlotUnlockFailed`; or `KeyFailed` (or a `KeyVaultException`), which raises `KeyFailed`. A slot failure never counts toward the backoff and is never `KeyUnavailable` while the password can still open the database ([db-lifecycle.md § Failure classification](db-lifecycle.md#failure-classification), BiometricUnusable); (4) `DatabaseHolder.open(generation, rawKey)`, which takes ownership of the key (open and verify, [db-lifecycle.md § Open sequence](db-lifecycle.md#open-sequence)): `Opened` or `OpenFailed(kind)`. After a correct password KeyVault resets `security.unlock_failures` and `security.unlock_retry_at` and restarts the reminder ([security.md § 5.1](security.md#51-cold-start-per-mode) step 3); a slot unlock restarts neither.
 - **E3 CloseDatabase**: `DatabaseHolder.close()`; the key is zeroed and no file is deleted (DEC-85).
+- **E4 VerifyPassword(password)** (io; PBKDF2 on default): `passwordBytes(password)` ([security.md § 6.3](security.md#63-normalization-and-encoding); a null result is passed as `ByteArray(0)`), then `KeyVault.verifyPassword(bytes)`: `Verified` raises `PasswordVerified`; `PasswordRejected(failures, retryAt)` and `Throttled(failures, retryAt)` raise `PasswordRejected(failures, retryAt)`; `KeyFailed` or a `KeyVaultException` raises `KeyFailed`, which in `Locked` means "the password could not be checked" (T50), **not** "the key cannot be obtained": the database is open (or, for `Corrupt`, was never reachable through this password) and healthy, so nothing is closed and the screen stays for a retry or the fingerprint. A `verifyPassword` call on a slot that is not `PASSWORD` is a caller bug; it is also reported as `KeyFailed` and so ends in the same harmless retry screen. A Keystore failure that persists is classified properly after a restart, where E1 and E2 turn it into `KeyUnavailable` (T5, T6, T23). E4 zeroes the chars and the bytes in its `finally`, never touches DatabaseHolder and never reopens anything. KeyVault resets the backoff and restarts the reminder on success, exactly as for a cold-start password.
+- **E5 OfferSlotSetup** (main, synchronous): `appLockController.offerSlotSetup()`. No event comes back; the offer is controller state ([Unlock routes](#unlock-routes-q8)).
 
 Not every failure of the database layer fits `Corrupt` or `Transient`. A live database whose `user_version` exceeds `AppDatabase.VERSION` (an app downgrade) is classified `Transient` by [db-lifecycle.md § Failure classification](db-lifecycle.md#failure-classification): the gate shows the open-error screen, nothing destructive is offered and installing the newer version cures it.
 
@@ -525,32 +581,88 @@ The import rules keep `security`, `data` and `data.maintenance` from importing `
 
 | Raiser | Interface (package) | Methods | Implemented by |
 |---|---|---|---|
-| AppLockController | `LockListener` (`security`) | `onLockNow()`, `onUnlocked()`, `onAuthError(error: LockError)` | SessionGate |
+| AppLockController | `LockListener` (`security`) | `onLockNow()`, `onUnlocked()`, `onAuthError(error: LockError)`, `onSlotUnlocked(cipher: SlotCipher)`, `onPasswordRequired(reason: PasswordReason, fingerprintUsable: Boolean, failures: Int, retryAt: Long)` | SessionGate |
 | DatabaseHolder | `CorruptionListener` (`data`) | `onRuntimeCorruption()` | SessionGate |
 | DbMaintenance | `MaintenanceListener` (`data.maintenance`) | `onMaintenanceStarted(op)`, `onMaintenanceFinished(outcome)` | SessionGate |
 | DatabaseHolder | `FlowProblemListener` (`data`) | `onFlowProblem(error: AppError)`, may be called from any thread ([db-lifecycle.md § Observation](db-lifecycle.md#observation)) | AppContainer: posts a `UserMessage` to `AppMessages` (thread-safe); the gate is not involved |
+| AppLockController | `BiometricSlotWriter` (`security`) | `suspend fun createBiometricSlot(cipher: SlotCipher): AppResult<Unit>` | DbMaintenance ([db-lifecycle.md § Biometric slot commits](db-lifecycle.md#biometric-slot-commits)); the gate is not involved |
 
-- AppContainer passes each raiser a **provider** of the listener, for example `DefaultDatabaseHolder(…, corruptionListener = { sessionGate }, flowProblemListener = FlowProblemListener { e -> appMessages.post(errorMessage(e)) })`, where `errorMessage` builds the `UserMessage` of [ui.md § 2.4](ui.md#24-snackbars-and-notices) with `UiText.Error(e)` and `isError = true`; the provider is resolved at the first event. No constructor takes the gate, so the lazy members never recurse (SessionGate depends on the holder, the maintenance and the lock controller; they do not depend on SessionGate).
-- Threads: `LockListener` and `MaintenanceListener` calls already arrive on the main thread (the lifecycle observer and BiometricPrompt callbacks run on it; DbMaintenance calls the listener inside `withContext(dispatchers.main)`, so the gate has changed before the next pipeline step runs, [db-lifecycle.md § Interface and status](db-lifecycle.md#interface-and-status)). `CorruptionListener.onRuntimeCorruption()` may arrive on any thread; the implementation launches `dispatch(CorruptAtRuntime)` on `dispatchers.main` in `applicationScope` and returns at once.
-- SessionGate calls the other way directly, because `session` may import `security`: whenever the state changes from a non-`Locked` state to `Locked`, or back, `dispatch` calls `appLockController.onGateLockedChanged(locked)`, which arms the one-shot auto-prompt ([security.md § 7.3](security.md#73-applockcontroller-and-mainactivity)). AppLockController holds only the exemption and the prompt-in-flight and auto-prompt flags; the lock state is `GateState.Locked`.
+- AppContainer passes each raiser a **provider** of the listener, for example `DefaultDatabaseHolder(…, corruptionListener = { sessionGate }, flowProblemListener = FlowProblemListener { e -> appMessages.post(errorMessage(e)) })`, where `errorMessage` builds the `UserMessage` of [ui.md § 2.4](ui.md#24-snackbars-and-notices) with `UiText.Error(e)` and `isError = true`; the provider is resolved at the first event. AppLockController receives `slotWriter = { dbMaintenance }` the same way. No constructor takes the gate, so the lazy members never recurse (SessionGate depends on the holder, the maintenance and the lock controller; they do not depend on SessionGate; AppLockController reaches DbMaintenance only through the provider, and DbMaintenance never reaches AppLockController).
+- Threads: `LockListener` and `MaintenanceListener` calls already arrive on the main thread (the lifecycle observer and BiometricPrompt callbacks run on it; AppLockController switches back to `dispatchers.main` after any KeyVault call before it calls the listener; DbMaintenance calls the listener inside `withContext(dispatchers.main)`, so the gate has changed before the next pipeline step runs, [db-lifecycle.md § Interface and status](db-lifecycle.md#interface-and-status)). `CorruptionListener.onRuntimeCorruption()` may arrive on any thread; the implementation launches `dispatch(CorruptAtRuntime)` on `dispatchers.main` in `applicationScope` and returns at once.
+- SessionGate calls the other way directly, because `session` may import `security`. After every state change `dispatch` computes `lockScreenOf(state)` and `showsError = (state as? GateState.Locked)?.authError != null` and, when the pair differs from the previous one, calls `appLockController.onGateScreenChanged(screen, showsError)` (this replaces the former `onGateLockedChanged(locked)`). E1 calls `unlockRoute()` and E5 calls `offerSlotSetup()`. AppLockController holds only the exemption, the prompt-in-flight, auto-prompt and slot-offer state, the current `LockScreen` and the last resolved route; whether the app is locked is `GateState.Locked`.
+
+```kotlin
+// security: what the gate currently shows, as far as prompting is concerned
+enum class LockScreen { Content, Other, PromptToOpen, Prompt, PromptWithoutKey, Password }
+// session
+fun lockScreenOf(s: GateState): LockScreen = when (s) {
+    GateState.Ready -> LockScreen.Content
+    is GateState.NeedsPassword -> LockScreen.Password
+    is GateState.Locked -> when {
+        s.password != null -> LockScreen.Password
+        s.resume == Resume.Open -> LockScreen.PromptToOpen        // a successful slot prompt raises SlotUnlocked (T42)
+        s.resume == Resume.KeyUnavailable -> LockScreen.PromptWithoutKey   // route Biometric whatever the mode
+        else -> LockScreen.Prompt                                 // Ready, Maintenance, Corrupt: the database key is not needed
+    }
+    else -> LockScreen.Other                                      // Starting, Opening, Maintenance of any origin, Corrupt, KeyUnavailable
+}
+```
+
 - Components that must read the gate state read it through SessionGate's `state` flow (ui) or are told by SessionGate (AppLockController); nothing else observes it.
+
+### AppLockController and BiometricGateway
+
+`AppLockController` (application scope, `security`) is the only component that starts an authentication prompt, and `BiometricGateway` is the only one that touches `BiometricManager`, `BiometricPrompt`, `KeyguardManager` and the system intents. The platform details (PromptInfo, error codes, the cipher parameters of the slot, the route rules per mode, the reminder rule) are in [security.md § 3.7 and § 7](security.md#7-biometric-app-lock-dec-65); this section fixes the responsibilities and the contract with the gate and the UI.
+
+| Member of `AppLockController` | Responsibility |
+|---|---|
+| `attach(activity)`, `detach(activity)` | As before: one `BiometricPrompt` per `MainActivity` instance through `BiometricGateway.attach`; the auto-prompt collector under `repeatOnLifecycle(RESUMED)` ([security.md § 7.3](security.md#73-applockcontroller-and-mainactivity)) |
+| `availability(): LockAvailability` | Settings row state (security.md § 7.1) |
+| `suspend fun unlockRoute(): UnlockRoute` | Resolves the route from the committed key mode, `security.app_lock`, `canAuthenticate(BIOMETRIC_STRONG)`, `KeyVault.hasBiometricSlot()` (whether a slot is present in the committed key-state; whether its key still works is found when the prompt's cipher is prepared) and `KeyVault.isPasswordReminderDue()`. Never prompts and starts no Keystore operation. Called by E1 and before every prompt on `Prompt` and `PromptToOpen` |
+| `val lockRoute: StateFlow<UnlockRoute?>` | The route resolved for the lock screen currently shown (null while none is resolved or the screen is not a lock). The lock screen shows "Use password" while it is `Slot` ([ui.md § 10.4](ui.md#104-lock-screen)) |
+| `onGateScreenChanged(screen: LockScreen, showsError: Boolean)` | Called by SessionGate; `showsError` is true when the new state is a `Locked` with `authError != null`. Entering `Prompt`, `PromptToOpen` or `PromptWithoutKey` arms the one-shot auto-prompt (as `onGateLockedChanged(true)` did) **unless `showsError` is true**: a lock screen that was entered because an unlock just failed (T44) waits for the "Unlock" button or the next ON_START instead of prompting again at once ([security.md § 7.3](security.md#73-applockcontroller-and-mainactivity): after any error that shows the Unlock button nothing prompts until the next ON_START). Every process ON_START without an active exemption re-arms it while the screen is one of these three, error or not. `Password`, `Content` and `Other` never prompt for unlocking; leaving `Content` clears `slotOffer` |
+| `prompt()` | The lock screen's "Unlock" button: resolves the route and prompts, as the auto-prompt does |
+| `usePassword()` | The lock screen's "Use password" button: on the `Slot` route, raises `onPasswordRequired(None, fingerprintUsable = true, counters)`; otherwise does nothing |
+| `suspend fun confirm(purpose): AppResult<Boolean>` | `EnableLock` / `DisableLock` for the Settings toggle; in `PASSWORD` mode `EnableLock` creates the slot through `createSlot()` and `DisableLock` uses the slot prompt or the password, as [security.md § 7.1](security.md#71-availability-and-the-settings-row) defines |
+| `suspend fun fingerprintUnlockAvailable(): Boolean` | `PASSWORD` mode, lock on, usable strong biometric, `KeyVault.hasBiometricSlot()` (no Keystore operation, same reason as `unlockRoute()`). Shown as the fingerprint option of the Forgot password screen; the reminder does not affect it. A slot whose key proves dead when `slotPrompt(ResetPassword)` prepares its cipher returns `Ok(null)`, and the screen then withdraws the option |
+| `suspend fun slotPrompt(purpose: AuthPurpose): AppResult<SlotCipher?>` | One prompt with an unwrap cipher on the slot, for a caller that hands the cipher to DbMaintenance: `ResetPassword` (the fingerprint reset) and `RestoreKey` (the database key for a restore from `Corrupt`, status `NeedsBiometricUnlock`, [db-lifecycle.md § Interface and status](db-lifecycle.md#interface-and-status)). `Ok(cipher)`: authenticated; `Ok(null)`: cancelled, "Use password", or slot or biometric not usable (the caller falls back to the password or withdraws the option); `Err(AuthFailed)`: any other error. Raises no gate event |
+| `val slotOffer: StateFlow<SlotOffer?>`, `offerSlotSetup()`, `suspend fun createSlot(): AppResult<Boolean>`, `dismissSlotOffer()` | The re-creation offer. `offerSlotSetup()` (E5) sets `slotOffer` to `Invalidated` or `Missing` when the conditions of security.md § 7 hold, otherwise leaves it null. `createSlot()` prepares a wrap cipher (`KeyVault.biometricArmCipher()`), prompts once, and on success calls `BiometricSlotWriter.createBiometricSlot(cipher)`; `Ok(true)` created, `Ok(false)` cancelled (the offer is cleared), `Err` otherwise. `dismissSlotOffer()` clears it ("Not now"). Never persisted |
+| `ExternalCallbacks` members | Unchanged: exemption and `CredentialConfirm` result ([Result launchers](#result-launchers-and-process-death)) |
+
+Prompt handling per screen, all on the main thread, KeyVault calls on `dispatchers.io`:
+
+| Screen | Route | Prompt | Success | Unavailable, invalidated or "Use password" | Other errors |
+|---|---|---|---|---|---|
+| `PromptToOpen` | `Slot` | `strongPrompt` + `CryptoObject(KeyVault.biometricUnlockCipher())`, negative "Use password" | `onSlotUnlocked(SlotCipher)` (T42) | `onPasswordRequired(reason, fingerprintUsable, counters)` (T45); never the device credential | `onAuthError` as security.md § 7.4 |
+| `PromptToOpen` | `Biometric` | `strongPrompt`, no `CryptoObject` | `onUnlocked()` (T9) | device credential (Q7) | `onAuthError` |
+| `Prompt` | `Slot` | as `PromptToOpen` | `KeyVault.verifyBiometric(cipher)`: `Verified` → `onUnlocked()` (T10); `SlotFailed(invalidated = true)` → `onPasswordRequired(FingerprintChanged, false, counters)` (T46); other failures → `onAuthError(LockError(LockError.SLOT_FAILED, null))` | `onPasswordRequired(…)` (T46) | `onAuthError` |
+| `Prompt` | `Biometric` | `strongPrompt`, no `CryptoObject` | `onUnlocked()` (T10) | device credential (Q7) | `onAuthError` |
+| `Prompt`, `PromptToOpen` | `Password(reason, fingerprintUsable)` | none | — | `onPasswordRequired(reason, fingerprintUsable, counters)` at once (T45, T46) | — |
+| `PromptWithoutKey` | always `Biometric` | `strongPrompt`, no `CryptoObject` | `onUnlocked()` (T10) | device credential (Q7) | `onAuthError` |
+| `Password`, `Content`, `Other` | — | no unlock prompt; `Content` may show the re-creation prompt of `createSlot()` when the user taps "Set up" | — | — | — |
+
+- **Where invalidation is detected.** `unlockRoute()` starts no Keystore operation. The unwrap cipher of `KeyVault.biometricUnlockCipher()` is prepared when a prompt is about to be shown, and that one operation is the one the prompt authorizes, so no operation is begun and abandoned. Its `Invalidated` result becomes `onPasswordRequired(FingerprintChanged, …)`, `NoSlot` and `Unavailable` become `onPasswordRequired(None, …)` for this unlock, and no prompt is shown (security.md § 7.4, Cipher preparation row).
+- `counters` are `failures` and `retryAt` from `SettingsStore.snapshot()`, passed through `UnlockBackoff.effectiveRetryAt(failures, stored, appTime.elapsedMillis())`, so the password screen shows a running countdown at once.
+- `BiometricGateway.authenticate(request, crypto: Cipher?, onResult)` wraps a non-null cipher in `BiometricPrompt.CryptoObject`; `PromptResult.Succeeded(cipher: Cipher?)` returns `result.cryptoObject?.cipher`. A success without the expected cipher counts as a slot failure, never as an unlock. `FakeBiometricGateway` returns the cipher it was handed ([testing.md § 7](testing.md#7-fixtures-and-fakes)).
+- `AuthPurpose` = `Unlock`, `EnableLock`, `DisableLock`, `SetUpSlot`, `ResetPassword`, `RestoreKey`. Only `Unlock` prompts raise gate events; the others return to their caller.
+- Verify at setup: an operation of an auth-per-use Keystore key (`setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)`, API 28–29 validity −1) that BiometricPrompt authorized stays usable from the callback until E2's `doFinal` on `dispatchers.io` a few milliseconds later, also when other Keystore operations run in between, on `api28`, `api35` and the owner's phone.
 
 ### Transition table
 
-Rows are independent: for one (state, event) pair at most one row matches, because the guards are mutually exclusive. T35 applies to every pair that no other row (T1–T34 with their sub-rows, T36–T39) matches. Notation in the To column: a state named without arguments takes the defaults (`false`, `0`, `null`); `Opening()` is `Opening(viaPassword = false, lockPending = false, transientError = false)` and `Opening(viaPassword)` sets that flag only; `copy(f = v)` keeps every other field of the current state; `Locked(X)` is `Locked(Resume.X)`.
+Rows are independent: for one (state, event) pair at most one row matches, because the guards are mutually exclusive. T35 applies to every pair that no other row (T1–T34 with their sub-rows, T36–T52) matches. Notation in the To column: a state named without arguments takes the defaults (`false`, `0`, `null`, `PasswordReason.None`); `Opening()` is `Opening(viaPassword = false, lockPending = false, transientError = false, viaSlot = false)` and `Opening(viaPassword)` or `Opening(viaSlot)` sets that flag only; `copy(f = v)` keeps every other field of the current state; `Locked(X)` is `Locked(Resume.X)` with `authError = null` and `password = null`. In the From column, `Locked(X)` matches every `Locked` whose resume is `X`, with or without a `PasswordEntry`, unless the guard says otherwise.
 
 | # | From | Event (raised by) | Guard | To | Effects |
 |---|---|---|---|---|---|
 | T1 | — | `start()` (DoroApplication) | | Starting(false) | E1 |
-| T2 | Starting | StartupLoaded (E1) | mode = Password | NeedsPassword(failures, retryAt, couldNotOpen = false) | |
+| T2 | Starting | StartupLoaded (E1) | mode = Password, route ≠ Slot | NeedsPassword(failures, retryAt, couldNotOpen = false, reason, fingerprintUsable), both taken from a `Password` route (`None`, false for any other route) | |
 | T3 | Starting | StartupLoaded (E1) | mode ≠ Password, lock on, not authenticated | Locked(Open) | |
 | T4 | Starting | StartupLoaded (E1) | mode ≠ Password, and lock off or authenticated | Opening() | E2() |
 | T5 | Starting | StartupKeyFailed (E1) | lock on, not authenticated | Locked(KeyUnavailable) | |
 | T6 | Starting | StartupKeyFailed (E1) | lock off or authenticated | KeyUnavailable | |
-| T7 | NeedsPassword | PasswordSubmitted (gate UI) | elapsedNow ≥ retryAt | Opening(viaPassword) | E2(password) |
+| T7 | NeedsPassword | PasswordSubmitted (gate UI) | elapsedNow ≥ retryAt | Opening(viaPassword, reason and fingerprintUsable copied) | E2(password) |
 | T8 | NeedsPassword | MaintenanceStarted(Erase) (DbMaintenance) | | Maintenance(Erase, NeedsPassword) | |
 | T9 | Locked | Unlocked (AppLockController) | resume = Open | Opening() | E2() |
-| T10 | Locked | Unlocked (AppLockController) | resume ≠ Open | the resume state (Ready, the wrapped Maintenance, Corrupt or KeyUnavailable) | |
+| T10 | Locked | Unlocked (AppLockController) | resume ≠ Open, password = null | the resume state (Ready, the wrapped Maintenance, Corrupt or KeyUnavailable) | |
 | T11 | Locked | AuthError(error) (AppLockController) | | copy(authError = error) | |
 | T12 | Locked(Ready, Corrupt or KeyUnavailable) | MaintenanceStarted(op) (DbMaintenance) | | Locked(Maintenance(op, origin = that resume)) | |
 | T13 | Locked(Ready) | CorruptAtRuntime (DatabaseHolder) | | Locked(Corrupt) | E3 |
@@ -560,19 +672,19 @@ Rows are independent: for one (state, event) pair at most one row matches, becau
 | T14d | Locked(Maintenance) | MaintenanceFinished(ReopenFailed(Transient)) (DbMaintenance) | | Locked(Open) | E3 |
 | T14e | Locked(Maintenance m) | MaintenanceFinished(Aborted) (DbMaintenance) | | Locked(m.origin as resume); Locked(Corrupt) with E3 if `m.origin = Ready` and `m.corruptPending` | |
 | T15 | Locked(Maintenance) | MaintenanceFinished(Restart) (DbMaintenance) | | Starting(false) | E1 |
-| T16 | Opening | Opened (E2) | | Ready, or Locked(Ready) if lockPending | |
+| T16 | Opening | Opened (E2) | | Ready, or Locked(Ready) if lockPending | E5 if the result is Ready and viaPassword |
 | T17 | Opening | OpenFailed(Corrupt) (E2) | | Corrupt, or Locked(Corrupt) if lockPending | E3 |
-| T18 | Opening | OpenFailed(Transient) (E2) | viaPassword | NeedsPassword(failures = 0, retryAt = 0, couldNotOpen = true) | E3 |
+| T18 | Opening | OpenFailed(Transient) (E2) | viaPassword | NeedsPassword(failures = 0, retryAt = 0, couldNotOpen = true, reason, fingerprintUsable) | E3 |
 | T19 | Opening | OpenFailed(Transient) (E2) | not viaPassword | copy(transientError = true) | E3 |
-| T20 | Opening | Retry (gate UI) | transientError | copy(transientError = false) | E2() |
-| T21 | Opening | PasswordRejected(failures, retryAt) (E2) | | NeedsPassword(failures, retryAt, couldNotOpen = false) | |
-| T22 | Opening | PasswordNeeded(failures, retryAt) (E2) | | NeedsPassword(failures, retryAt, couldNotOpen = false) | |
+| T20 | Opening | Retry (gate UI) | transientError, not viaSlot | copy(transientError = false) | E2() |
+| T21 | Opening | PasswordRejected(failures, retryAt) (E2) | | NeedsPassword(failures, retryAt, couldNotOpen = false, reason, fingerprintUsable) | |
+| T22 | Opening | PasswordNeeded(failures, retryAt, reason) (E2) | | NeedsPassword(failures, retryAt, couldNotOpen = false, reason) | |
 | T23 | Opening | KeyFailed (E2) | | KeyUnavailable, or Locked(KeyUnavailable) if lockPending | |
 | T24 | Opening | LockNow (AppLockController) | | copy(lockPending = true) | |
 | T25 | Ready | LockNow (AppLockController) | | Locked(Ready) | none: Room stays open |
 | T26 | Ready | CorruptAtRuntime (DatabaseHolder) | | Corrupt | E3 |
 | T27 | Ready | MaintenanceStarted(op) (DbMaintenance) | | Maintenance(op, Ready) | |
-| T28a | Maintenance m | MaintenanceFinished(Reopened) (DbMaintenance) | not m.corruptPending | Ready | |
+| T28a | Maintenance m | MaintenanceFinished(Reopened) (DbMaintenance) | not m.corruptPending | Ready | E5 if m.op is KeyChange or Restore |
 | T28b | Maintenance m | MaintenanceFinished(Reopened) (DbMaintenance) | m.corruptPending | Corrupt | E3 |
 | T29a | Maintenance | MaintenanceFinished(ReopenFailed(Corrupt)) (DbMaintenance) | | Corrupt (as T17) | E3 |
 | T29b | Maintenance | MaintenanceFinished(ReopenFailed(Transient)) (DbMaintenance) | | Opening(transientError = true) (as T19) | E3 |
@@ -584,30 +696,45 @@ Rows are independent: for one (state, event) pair at most one row matches, becau
 | T32 | Maintenance m | LockNow (AppLockController) | m.origin ≠ NeedsPassword | Locked(Maintenance(m)) | none: the operation continues |
 | T33 | Corrupt, KeyUnavailable | MaintenanceStarted(Restore or StartFresh) (DbMaintenance) | | Maintenance(op, this state) | |
 | T34 | Corrupt, KeyUnavailable | LockNow (AppLockController) | | Locked(this state) | |
-| T35 | any | any pair no other row matches | | unchanged | debug log of class names only; a `PasswordSubmitted` is zeroed |
+| T35 | any | any pair no other row matches | | unchanged | debug log of class names only; a `PasswordSubmitted` is zeroed; a `SlotUnlocked` cipher is dropped |
 | T36 | Starting(authenticated = true) | LockNow (AppLockController) | | Starting(false) | |
 | T37 | Opening | CorruptAtRuntime (DatabaseHolder) | | as T17 | E3 |
 | T38 | Maintenance | CorruptAtRuntime (DatabaseHolder) | | copy(corruptPending = true) | |
 | T39 | Locked(Maintenance m) | CorruptAtRuntime (DatabaseHolder) | | Locked(Maintenance(m.copy(corruptPending = true))) | |
+| T40 | Starting | StartupLoaded (E1) | mode = Password, route = Slot | Locked(Open) | |
+| T41 | NeedsPassword | MaintenanceStarted(KeyChange) (DbMaintenance: the fingerprint reset with origin NeedsPassword) | | Maintenance(KeyChange, NeedsPassword) | |
+| T42 | Locked(Open) | SlotUnlocked(cipher) (AppLockController) | | Opening(viaSlot) | E2(cipher) |
+| T43 | Opening | Retry (gate UI) | transientError, viaSlot | Locked(Open) | none: the auto-prompt asks for the fingerprint again |
+| T44 | Opening | SlotUnlockFailed (E2) | | Locked(Open, authError = LockError(SLOT_FAILED, null)) | none: the error state suppresses the auto-prompt (`showsError`, [AppLockController and BiometricGateway](#applockcontroller-and-biometricgateway)); "Unlock" or the next ON_START prompts again |
+| T45 | Locked(Open) | PasswordRequired(reason, fingerprintUsable, failures, retryAt) (AppLockController) | | NeedsPassword(failures, retryAt, couldNotOpen = false, reason, fingerprintUsable) | |
+| T46 | Locked | PasswordRequired(reason, fingerprintUsable, failures, retryAt) (AppLockController) | resume is Ready, a Maintenance or Corrupt; no check running (`password?.checking ≠ true`) | copy(authError = null, password = PasswordEntry(reason, fingerprintUsable, failures, retryAt)) | |
+| T47 | Locked, password = p | PasswordSubmitted (gate UI) | resume is Ready or Corrupt, not p.checking, elapsedNow ≥ p.retryAt | copy(password = p.copy(checking = true, checkFailed = false)) | E4(password) |
+| T48 | Locked, password = p | PasswordVerified (E4) | p.checking | the resume state (Ready or Corrupt) | E5 if the resume is Ready |
+| T49 | Locked, password = p | PasswordRejected(failures, retryAt) (E4) | p.checking | copy(password = p.copy(failures = failures, retryAt = retryAt, checking = false)) | |
+| T50 | Locked, password = p | KeyFailed (E4) | p.checking | copy(password = p.copy(checking = false, checkFailed = true)) | none: the database stays as it is, nothing is closed |
+| T51 | NeedsPassword | UseFingerprintChosen (gate UI) | fingerprintUsable | Locked(Open) | |
+| T52 | Locked, password = p | UseFingerprintChosen (gate UI) | p.fingerprintUsable, not p.checking | copy(password = null) | none: `onGateScreenChanged` re-arms the prompt |
 
 Rules that complete the table:
-- **Passwords.** `dispatch` zeroes the `CharArray` of every `PasswordSubmitted` that produces no `E2(password)` effect (T7's guard failed, or T35 applied); E2 zeroes the one it consumes.
-- **Exemptions that look like gaps.** `LockNow` in `NeedsPassword` or in `Maintenance` with origin `NeedsPassword` is ignored (T35, T32's guard): Password mode asks for the password at every cold start and never locks before it (Q8), and no data is open during that Erase. `LockNow` in `Locked` is ignored (already locked).
-- **Locking while starting.** T24, T36 and T32 keep a lock that arrives during startup or an operation. `Starting(true)` skips the biometric lock only because the user authenticated before the recovery screen; if the app is left meanwhile, T36 withdraws the exemption so T3 or T5 applies when E1 finishes. `LockNow` in `Starting(false)` needs no row of its own: T35 may drop it, because `StartupLoaded` or `StartupKeyFailed` applies T3 or T5 whenever the lock is on, and AppLockController raises `LockNow` only while the lock is on. Nothing is therefore "remembered" in `Starting`; the lock setting is read again when E1 finishes.
-- **Contract with DbMaintenance.** Every `MaintenanceStarted` is followed by exactly one `MaintenanceFinished`. `MaintenanceStarted` is raised only when every dialog of the operation has been answered, and a restore raises it only after the user's confirmation; its earlier steps run while the gate keeps its state ([db-lifecycle.md § Operation frame](db-lifecycle.md#operation-frame)). `Reopened`: Room is open again on the committed generation. `ReopenFailed(kind)`: no generation could be reopened. `Restart`: data replaced or the commit state unknown, run E1. `Aborted`: a recovery or Erase operation stopped before it changed anything (never raised from origin Ready, where the old database is reopened with `Reopened`; T31 handles it defensively).
-- **Notes.** Q8 holds because Password mode never passes through `Locked` at cold start (T2, T7, T16). `Restart` ends Start fresh, Erase and every recovery-origin Restore; `Starting(true)` skips the biometric lock, while Password mode still asks for the password (T2). T29 with `Transient` from Password mode asks for the password again after Retry (the key was zeroed by E3): E2 raises `PasswordNeeded` (T22). T18 zeroes `failures` because a correct password already reset them; the screen shows the could-not-open message, never the wrong-password message.
-- **Late events.** An effect reports whatever it finds after the gate has moved on; the reducer ignores events that do not match the current state (T35). E2 never runs twice at once: it starts only from T4, T7, T9 and T20, and E1 only from T1, T15, T30 and T31d.
+- **Passwords and ciphers.** `dispatch` zeroes the `CharArray` of every `PasswordSubmitted` that produces no `E2(password)` or `E4(password)` effect (a failed guard of T7 or T47, or T35); E2 and E4 zero the one they consume. `dispatch` drops the `SlotCipher` of every `SlotUnlocked` that produces no `E2(cipher)` (T35); the cipher holds no key material, and an unused authorization expires with it.
+- **Exemptions that look like gaps.** `LockNow` in `NeedsPassword` is ignored (T35): the database is closed and the password screen is itself the lock, whether it came from a cold start, from "Use password" or from the reminder. `LockNow` in `Maintenance` with origin `NeedsPassword` is ignored too (T32's guard): no data is open during that Erase or fingerprint reset, and both end in `Restart` or `Aborted`, which run E1 again. `LockNow` in `Locked` is ignored (already locked), also on its password screen: the `PasswordEntry` stays, so "Use password" and the reminder survive a trip to the background.
+- **Fresh locks.** Every row whose To is `Locked(X)` (not a `copy`) starts without `authError` and without `PasswordEntry`, so the lock screen comes back and `AppLockController` resolves the route again. This matters after T12, T13 and T14a–e: the operation that ran may have changed the key mode or dropped the slot, so a password entry from before it must not be reused. A late E4 result for such a state finds no `checking` entry and is ignored (T35).
+- **Locking while starting.** T24, T36 and T32 keep a lock that arrives during startup or an operation. `Starting(true)` skips the biometric lock in `PLAIN` and `DEVICE` mode only because the user authenticated before the recovery screen; if the app is left meanwhile, T36 withdraws the exemption so T3 or T5 applies when E1 finishes. `LockNow` in `Starting(false)` needs no row of its own: T35 may drop it, because `StartupLoaded` or `StartupKeyFailed` applies T3, T5 or T40 (or T2, the password screen) whenever the lock is on, and AppLockController raises `LockNow` only while the lock is on. Nothing is therefore "remembered" in `Starting`; the lock setting is read again when E1 finishes.
+- **Contract with DbMaintenance.** Every `MaintenanceStarted` is followed by exactly one `MaintenanceFinished`. `MaintenanceStarted` is raised only when every dialog of the operation has been answered, and a restore raises it only after the user's confirmation; its earlier steps run while the gate keeps its state ([db-lifecycle.md § Operation frame](db-lifecycle.md#operation-frame)). The fingerprint reset raises `MaintenanceStarted(KeyChange)` only after its cipher unwrapped the DEK, from `NeedsPassword` (T41) or behind `Locked(Ready)` (T12), never from a `Locked(Open)`, `Locked(Corrupt)` or `Locked(KeyUnavailable)`; from `NeedsPassword` it ends with `Restart` or `Aborted`. `Reopened`: Room is open again on the committed generation. `ReopenFailed(kind)`: no generation could be reopened. `Restart`: data replaced or the commit state unknown, run E1. `Aborted`: a recovery, Erase or fingerprint-reset operation from a closed database stopped before it changed anything (never raised from origin Ready, where the old database is reopened with `Reopened`; T31a handles it defensively).
+- **Notes.** In `PASSWORD` mode the gate reaches `Ready` only through a key-producing or key-checking step: a cold-start password (T7, T16), a slot unwrap (T42, T16), a password checked with the database open (T47, T48), or, on return from background, a slot cipher that `KeyVault.verifyBiometric` accepted (T10); the device credential and a plain biometric prompt never unlock it except over `KeyUnavailable`, where no data is readable. `Restart` ends Start fresh, Erase, every recovery-origin Restore and a fingerprint reset from `NeedsPassword`. T29 with `Transient` from `PASSWORD` mode asks for the password again after Retry (the key was zeroed by E3): E2 raises `PasswordNeeded` (T22). T18 zeroes `failures` because a correct password already reset them; the screen shows the could-not-open message, never the wrong-password message. T43 sends a failed slot open back to the fingerprint instead, because the cipher is spent and only a new prompt can produce another.
+- **Late events.** An effect reports whatever it finds after the gate has moved on; the reducer ignores events that do not match the current state (T35). E2 never runs twice at once: it starts only from T4, T7, T9, T20 and T42, and E1 only from T1, T15, T30 and T31d. E4 starts only from T47, whose guard excludes a running check, so at most one runs.
 
 ### Rendering
 
 | State | DoroRoot shows (screen designs in [ui.md § 10](ui.md#10-gate-screens)) |
 |---|---|
 | Starting | the held system splash at activity creation, otherwise a blank background |
-| NeedsPassword | password screen with "Forgot password?" (DEC-62, DEC-63): the wrong-password error when `failures > 0`, the could-not-open message when `couldNotOpen`, and the countdown with the field disabled while `AppTime.elapsedMillis() < retryAt` ([security.md § 5.3](security.md#53-backoff-dec-62)) |
-| Locked | lock screen; its "Unlock" button calls `AppLockController.prompt()`. The automatic prompt is fired by AppLockController at the activity's ON_RESUME ([security.md § 7.3](security.md#73-applockcontroller-and-mainactivity)), never from composition (DEC-65) |
-| Opening | blank background with a delayed progress indicator; the busy password screen when `viaPassword`; an error with "Try again" when `transientError` |
-| Ready | `NavigationSuiteScaffold` with `NavDisplay` |
-| Maintenance | origin Ready: the content, hidden from accessibility services and keyboard focus, under an opaque overlay that consumes pointer input, key events and Back and holds the keyboard focus (snippet below, [ui.md § 10.6](ui.md#106-maintenance-overlay-and-screen)); other origins: a progress screen |
+| NeedsPassword | password screen with "Forgot password?" (DEC-62, DEC-63): the reason line for `reason` (DEC-74 reminder, fingerprints changed), "Use fingerprint" while `fingerprintUsable` (T51), the wrong-password error when `failures > 0`, the could-not-open message when `couldNotOpen`, and the countdown with the field disabled while `AppTime.elapsedMillis() < retryAt` ([security.md § 5.3](security.md#53-backoff-dec-62)). "Forgot password?" opens the Forgot password screen, a local UI state of `GateScreen`: "Set a new password with your fingerprint" while `AppLockController.fingerprintUnlockAvailable()`, and "Erase all data and start over" |
+| Locked, `password == null` | lock screen; its "Unlock" button calls `AppLockController.prompt()`, and "Use password" (`AppLockController.usePassword()`) is shown while `AppLockController.lockRoute` is `Slot`; `authError` shows its text unless silent. The automatic prompt is fired by AppLockController at the activity's ON_RESUME ([security.md § 7.3](security.md#73-applockcontroller-and-mainactivity)), never from composition (DEC-65) |
+| Locked, `password != null` | the same password screen as `NeedsPassword`, fed from the `PasswordEntry`: reason line, "Use fingerprint" while `fingerprintUsable` (T52), wrong-password error, a generic "could not check the password, try again" line while `checkFailed` (T50; the string is ui.md's), countdown, busy while `checking`; the field is disabled while the resume is a `Maintenance` (the operation's end brings back the lock screen, "Fresh locks"). "Forgot password?" offers the fingerprint reset only while the resume is `Ready`, and Erase always |
+| Opening | blank background with a delayed progress indicator (also `viaSlot`); the busy password screen when `viaPassword`; an error with "Try again" when `transientError` (after a slot open it returns to the lock screen, T43) |
+| Ready | `NavigationSuiteScaffold` with `NavDisplay`; the shell also renders `AppLockController.slotOffer` ([ui.md § 8.13](ui.md#813-fingerprint-set-up-offer-dec-65)) |
+| Maintenance | origin Ready: the content, hidden from accessibility services and keyboard focus, under an opaque overlay that consumes pointer input, key events and Back and holds the keyboard focus (snippet below, [ui.md § 10.6](ui.md#106-maintenance-overlay-and-screen)); other origins (including Erase and the fingerprint reset from `NeedsPassword`): a progress screen |
 | Corrupt | "Restore from backup" and "Start fresh" (DEC-85) |
 | KeyUnavailable | the same two actions (DEC-86) |
 
@@ -635,16 +762,18 @@ fun DoroRoot(graph: UiGraph = LocalUiGraph.current) {
 }
 ```
 
-Dialogs of a restore that has not been confirmed yet (checking, passwords, confirmation) and failure dialogs are rendered by `MaintenanceStatusHost` over whatever screen is showing ([ui.md § 8.12](ui.md#812-maintenance-status-host)); the gate state does not change for them.
+Dialogs of a restore that has not been confirmed yet (checking, passwords, the fingerprint question of a restore from `Corrupt`, confirmation) and failure dialogs are rendered by `MaintenanceStatusHost` over whatever screen is showing ([ui.md § 8.12](ui.md#812-maintenance-status-host)); the gate state does not change for them.
 
 ### Invariants
 
-1. The Room instance on the live database is first built by E2 in `Opening` and afterwards rebuilt only by DatabaseHolder's exclusive mode (DEC-81). Nothing builds it in `DoroApplication.onCreate`, `Starting`, `NeedsPassword` or `Locked(Open)`. DbMaintenance may build temporary Room instances only on staged copies under `noBackupFilesDir`, held in local variables and never stored in a property ([db-lifecycle.md § Concurrency rules](db-lifecycle.md#concurrency-rules)).
-2. The content (`NavDisplay` and every composable or ViewModel that reads NoteRepository or EntityRepository) is composed only while `showContent` is true. Gate screens receive only a `GateGraph`: SessionGate, DbMaintenance, AppLockController, ExternalActivities, AppTime and AppMessages. They own no ViewModel: state that must survive rotation lives in GateState and `DbMaintenance.status`; password fields use `remember { TextFieldState() }` ([security.md § 6.2](security.md#62-fields-and-state)), other inputs `rememberSaveable`.
-3. `Locked` never composes content. The "main" SaveableStateProvider and the NavEntry ViewModels survive, so unlocking returns to the exact screen (DEC-66; Verify at setup item (d) of [Keys and stacks](#keys-and-stacks)).
-4. Gate state is never saved; after process death the gate starts at `Starting` (DEC-90). States, events and effects never hold passwords or keys beyond the effect that consumes them, and their `toString()` redacts (DEC-64, DEC-70).
-5. The reducer is total: rows T1–T39 (with sub-rows) plus the fallback T35 cover every (state, event) pair, and each row is a JVM test ([testing.md L-18](testing.md#5-security-and-lifecycle-tests)).
-6. Every state except `Ready` has a way forward that some component raises: a prompt, a retry, a recovery action or a running effect (`Starting`: E1; `NeedsPassword`: the password; `Locked`: the prompt, the credential result or auto-off; `Opening`: E2 or "Try again"; `Maintenance`: its `MaintenanceFinished`; `Corrupt`, `KeyUnavailable`: Restore and Start fresh).
+1. The Room instance on the live database is first built by E2 in `Opening` and afterwards rebuilt only by DatabaseHolder's exclusive mode (DEC-81). Nothing builds it in `DoroApplication.onCreate`, `Starting`, `NeedsPassword` or `Locked(Open)`; a fingerprint prompt at `Locked(Open)` only produces a `SlotCipher`, and the unwrap runs inside E2 in `Opening`. DbMaintenance may build temporary Room instances only on staged copies under `noBackupFilesDir`, held in local variables and never stored in a property ([db-lifecycle.md § Concurrency rules](db-lifecycle.md#concurrency-rules)).
+2. The content (`NavDisplay` and every composable or ViewModel that reads NoteRepository or EntityRepository) is composed only while `showContent` is true. Gate screens receive only a `GateGraph`: SessionGate, DbMaintenance, AppLockController, ExternalActivities, AppTime and AppMessages. They own no ViewModel: state that must survive rotation lives in GateState, `DbMaintenance.status` and AppLockController's flows; password fields use `remember { TextFieldState() }` ([security.md § 6.2](security.md#62-fields-and-state)), other inputs `rememberSaveable`.
+3. `Locked` never composes content, also not with a `PasswordEntry` over an open database. The "main" SaveableStateProvider and the NavEntry ViewModels survive, so unlocking returns to the exact screen (DEC-66; Verify at setup item (d) of [Keys and stacks](#keys-and-stacks)).
+4. Gate state is never saved; after process death the gate starts at `Starting` (DEC-90). States, events and effects never hold a key, a DEK or a password beyond the effect that consumes it (DEC-64): the fingerprint route carries a `SlotCipher` (an authorized cipher, no key bytes) only from the prompt callback to E2, and E2 or `dispatch` drops it. Their `toString()` redacts (DEC-70).
+5. The reducer is total: rows T1–T52 (with sub-rows) plus the fallback T35 cover every (state, event) pair, and each row is a JVM test ([testing.md L-18](testing.md#5-security-and-lifecycle-tests)).
+6. Every state except `Ready` has a way forward that some component raises: a prompt, a retry, a recovery action or a running effect (`Starting`: E1; `NeedsPassword`: the password, "Use fingerprint", the fingerprint reset or Erase; `Locked`: the prompt, the credential result, auto-off, "Use password" or the password check; `Opening`: E2 or "Try again"; `Maintenance`: its `MaintenanceFinished`; `Corrupt`, `KeyUnavailable`: Restore and Start fresh).
+7. In `PASSWORD` mode only a correct password (E2, E4) or the biometric slot (an unwrap in E2, or `KeyVault.verifyBiometric` on return from background) unlocks; the device credential and a prompt without a `CryptoObject` never do, except over `KeyUnavailable` (no readable data). AppLockController enforces this through the route; the reducer cannot see the key mode and does not need to.
+8. The route, the biometric availability and the 14-day reminder are decided outside the reducer (E1 and AppLockController) and arrive only as event payloads (`StartupLoaded.route`, `PasswordRequired`), so `reduce` stays pure and free of the wall clock.
 
 ## Threading
 
@@ -652,15 +781,16 @@ Dialogs of a restore that has not been confirmed yet (checking, passwords, confi
 |---|---|
 | Composition, `SessionGate.dispatch`, window flags, launcher calls | main (`Dispatchers.Main.immediate`) |
 | Room DAO suspend functions and Flows | Room's own executors; never wrapped in `withContext`, never `allowMainThreadQueries` |
-| E1, E2, E3, DatabaseHolder open and close, DbMaintenance SQLCipher connection, file copies, SAF and FileProvider streams, Keystore calls | `dispatchers.io` |
+| E1, E2, E3, E4, DatabaseHolder open and close, DbMaintenance SQLCipher connection, file copies, SAF and FileProvider streams, Keystore calls | `dispatchers.io` |
 | PBKDF2 derivation and calibration (DEC-60), heavy list mapping | `dispatchers.default` |
+| BiometricPrompt callbacks, `AppLockController` decisions and listener calls, E5 | main; the KeyVault calls they need (`unlockRoute`, slot cipher preparation, the `doFinal` of `verifyBiometric`) run on `dispatchers.io` and return to main before an event is raised |
 | DataStore | its own scope, `applicationScope + dispatchers.io` |
 | Backup, restore, key change, Start fresh, Erase, every repository write, the editor's save-on-leave | `applicationScope`: survives rotation and leaving the screen |
 | Observation, search debounce, one-shot reads started by the UI | `viewModelScope` |
 
 - `applicationScope` has a SupervisorJob and is never cancelled. No handler swallows uncaught exceptions; they crash the app. Detached work uses `runDetached` ([Layering](#layering-and-data-flow), rule 6), which keeps that guarantee: an `async` whose awaiting caller is gone would lose its exception, a `launch` does not.
 - Save-on-leave: the editor's save is `applicationScope.launch { val r = noteRepository.save(draft); if (r is AppResult.Err) appMessages.post(…) }` with no catch-all, so a bug still crashes while an expected `StorageFull` or `DatabaseUnavailable` reaches the user through `AppMessages` and the draft stays in the SavedStateHandle until a save succeeds ([ui.md § 6.8](ui.md#68-saving-as-the-user-experiences-it)).
-- Rotation safety: long operations publish progress in `DbMaintenance.status: StateFlow` ([db-lifecycle.md § Interface and status](db-lifecycle.md#interface-and-status)), which any screen re-reads after rotation (status is not kept across process death). `MaintenanceStatusHost` (`ui/common`, [ui.md § 8.12](ui.md#812-maintenance-status-host)) renders the restore dialogs and every outcome; it is composed in the shell (inside `MainContent`) and on the Password, Forgot password, Corrupt and KeyUnavailable screens, because a restore resets navigation and an operation can end on a gate screen.
+- Rotation safety: long operations publish progress in `DbMaintenance.status: StateFlow` ([db-lifecycle.md § Interface and status](db-lifecycle.md#interface-and-status)), which any screen re-reads after rotation (status is not kept across process death). `MaintenanceStatusHost` (`ui/common`, [ui.md § 8.12](ui.md#812-maintenance-status-host)) renders the restore dialogs and every outcome; it is composed in the shell (inside `MainContent`) and on the Password (in `NeedsPassword` and on a `Locked` password screen), Forgot password, Corrupt and KeyUnavailable screens, because a restore resets navigation and an operation can end on a gate screen.
 - `NonCancellable` appears only in DatabaseHolder close/reopen and in DbMaintenance commit/rollback ([db-lifecycle.md](db-lifecycle.md)).
 - Banned (boundary test): `runBlocking`, `GlobalScope`, creating threads or executors, any `Dispatchers.` reference outside `core.coroutines`.
 - The main thread never touches disk, the Keystore, PBKDF2, SQLCipher or a blocking DataStore read. The debug source set installs StrictMode in `DebugTools`: thread policy detecting disk reads and writes and custom slow calls, VM policy detecting leaked closables and unsafe intent launches (API 31+), each with a `penaltyListener` that logs only the violation's class name through `AppLog` (`penaltyLog()` would print the offending intent, including SAF URIs, DEC-70).
@@ -688,8 +818,7 @@ class MainActivity : FragmentActivity() {
         container.externalActivities.bind(this)                 // every result launcher (DEC-90)
         container.appLockController.attach(this)                // one BiometricPrompt per activity instance (DEC-04)
         setContent {
-            val policy by container.windowPolicy.collectAsStateWithLifecycle()
-            CompositionLocalProvider(LocalUiGraph provides container, LocalKeyboardPrivacy provides policy.secure) {   // ui.md § 3.3
+            CompositionLocalProvider(LocalUiGraph provides container) {   // no keyboard-privacy local: always on (DEC-71)
                 DoroTheme { DoroRoot() }
             }
         }
@@ -705,7 +834,7 @@ class MainActivity : FragmentActivity() {
 
 ```kotlin
 interface AppTime {
-    fun nowMillis(): Long                     // System.currentTimeMillis(): every *_at value, the 1-hour share sweep, the backup file date
+    fun nowMillis(): Long                     // System.currentTimeMillis(): every *_at value, the 1-hour share sweep, the backup file date, the 14-day password reminder (DEC-74, decided in KeyVault)
     fun today(): LocalDate                    // LocalDate.now(ZoneId.systemDefault()); zone read on every call
     fun dateOf(epochMillis: Long): LocalDate  // Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
     fun elapsedMillis(): Long                 // SystemClock.elapsedRealtime(): monotonic, restarts at boot; the unlock backoff, including its persisted retryAt (security.md § 5.3), the lock exemption (§ 7.7) and the KDF calibration timing (§ 3.3)
@@ -747,7 +876,7 @@ Rules:
 ## Cross-cutting conventions
 
 - UI text, plurals, accessibility semantics, theming and insets: [ui.md](ui.md) (DEC-55, DEC-56).
-- Logging: only `AppLog` (`core.log`) logs, with ids, counts and exception class names. `toString()` redaction for entities, UI models, key holders (`KeyState`, `KeySlot`, `PreparedKey`), gate states and events, external requests and results, messages and drafts, the R8 log rule and the SQLCipher logger: [security.md § 10](security.md#10-logging-and-leak-hygiene-dec-70) (DEC-70). `GateEvent.PasswordSubmitted.toString()` is `"PasswordSubmitted(<redacted>)"`.
+- Logging: only `AppLog` (`core.log`) logs, with ids, counts and exception class names. `toString()` redaction for entities, UI models, key holders (`KeyState`, `KeySlot`, `PreparedKey`, `SlotCipher`), gate states and events, external requests and results, messages and drafts, the R8 log rule and the SQLCipher logger: [security.md § 10](security.md#10-logging-and-leak-hygiene-dec-70) (DEC-70). `GateEvent.PasswordSubmitted.toString()` is `"PasswordSubmitted(<redacted>)"` and `GateEvent.SlotUnlocked.toString()` is `"SlotUnlocked"`.
 - Screens collect state with `collectAsStateWithLifecycle()`; the gate state in DoroRoot is the one exception ([Rendering](#rendering)).
 - API-level pitfalls (compileSdk 37 against minSdk 28):
   - `MutableList.removeFirst()` and `removeLast()` bind to Java 21 methods that do not exist on API ≤ 34 (`NoSuchMethodError`). Use `removeAt(0)`, `removeAt(lastIndex)`, `removeFirstOrNull()` or `removeLastOrNull()`. The other Java 21 SequencedCollection members (`addFirst`, `addLast`, `getFirst`, `getLast`, `reversed`) carry the same risk. Verify at setup which of them Kotlin 2.4 hides; lint `NewApi` (error) catches the rest, and the boundary test additionally bans `.removeFirst()` and `.removeLast()`.
@@ -761,7 +890,7 @@ Budgets apply to a release build on the low-end reference device (Physical B in 
 
 | Path | Budget | Measured by |
 |---|---|---|
-| Cold start to first list with data | ≤ 1,500 ms median; Device mode ≤ 1,700 ms. Password mode to the password screen is recorded without a budget | `adb shell am start -S -W`, then the "Fully drawn" time that `ReportDrawnWhen { !uiState.loading }` in the All list reports (read from `adb logcat -d -s ActivityTaskManager`); P-5 |
+| Cold start to first list with data | ≤ 1,500 ms median; Device mode ≤ 1,700 ms. Password mode to the password screen or to the fingerprint prompt is recorded without a budget | `adb shell am start -S -W`, then the "Fully drawn" time that `ReportDrawnWhen { !uiState.loading }` in the All list reports (read from `adb logcat -d -s ActivityTaskManager`); P-5 |
 | Perspective switch | ≤ 250 ms from tab tap to the first frame that shows the target tab's rows | instrumented Compose test (P-2); `android.os.Trace` section `doro:switch` for Perfetto |
 | List query at 10,000 notes | first emission ≤ 100 ms for each case of P-1 | instrumented DAO timing test on the fixture (P-1) |
 | Editor open | ≤ 300 ms from row tap to editable text; ≤ 600 ms for a 200,000-character note (DEC-24) | instrumented Compose test (P-6); trace section `doro:editor` |
@@ -786,5 +915,8 @@ Budgets apply to a release build on the low-end reference device (Physical B in 
 | Toolchain friction (built-in Kotlin, KSP pins, compileSdk 37) | One version catalog, KSP 2.3.13 excluded, CI builds from a clean checkout |
 | The single static list query is too slow at 10,000 notes | Budget tests; first a larger `cache_size`, then per-perspective static queries ([data-layer.md § Size and performance](data-layer.md#size-and-performance), which owns the fallback list) |
 | A corrupt preferences file silently turns off the biometric lock and screenshot protection and resets the unlock backoff (all keys fall back to their defaults) | Accepted for v1: the keys are written only by the app and DataStore replaces files atomically. A fail-closed handler (security flags on, a notice shown) needs a new DEC in decisions.md first |
+| A finger enrolled later by someone who knows the device PIN opens `PASSWORD` mode | Every fingerprint unlock in `PASSWORD` mode, also on return from background with the database open, goes through the `CryptoObject` of the biometric slot, whose key an enrollment change invalidates (DEC-60); the device credential never unlocks `PASSWORD` mode ([Unlock routes](#unlock-routes-q8), invariant 7) |
+| A user who always unlocks with the fingerprint forgets the startup password | The 14-day reminder (DEC-74), the fingerprint password reset while the slot works (DEC-63), and "Back up first?" before a password is set (DEC-73) |
+| The authenticated slot cipher is lost or no longer usable between the prompt and E2 | E2 runs right after `SlotUnlocked`; a slot failure other than invalidation returns to the lock screen with an error and no automatic prompt (T44, `showsError`), never to KeyUnavailable, and "Use password" stays available; Verify at setup item of [AppLockController and BiometricGateway](#applockcontroller-and-biometricgateway) |
 | API 28–29 users whose strong biometrics are gone cannot unlock | The `CredentialConfirm` result is delivered to AppLockController in any gate state ([Result launchers](#result-launchers-and-process-death)); tested on the API 28 and 29 emulators ([security.md § 7.6](security.md#76-device-credential-fallback-q7)) |
 | Publishing on Google Play would require targetSdk 36 (not planned: the app is installed directly, DEC-01) | Edge-to-edge, predictive back and no orientation locks from day one, so the change is one line (DEC-01) |

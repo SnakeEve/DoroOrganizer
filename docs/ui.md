@@ -19,14 +19,21 @@ MainActivity (FragmentActivity) -> DoroTheme -> DoroRoot: one screen per gate st
 |
 +-- Gate screens: no note-derived data (DEC-66), section 10
 |   +-- Starting ............ held system splash, then a blank surface
-|   +-- NeedsPassword ....... PasswordScreen --"Forgot password?"--> ForgotPasswordScreen --> EraseDialog (typed confirmation)
-|   +-- Locked .............. LockScreen ("Unlock") + BiometricPrompt or device-credential screen (system UI)
+|   +-- NeedsPassword ....... PasswordScreen (cold start, database closed; startup, reminder or fingerprint-changed variant; "Use fingerprint")
+|   |                           --"Forgot password?"--> ForgotPasswordScreen
+|   |                              --> PasswordResetDialog + fingerprint prompt (when fingerprint unlock is available)
+|   |                              --> EraseDialog (typed confirmation)
+|   +-- Locked .............. password == null: LockScreen ("Unlock"; "Use password" while the unlock route is Slot) + BiometricPrompt
+|   |                           or device-credential screen (system UI)
+|   |                        password != null (PasswordEntry): the same PasswordScreen and ForgotPasswordScreen as NeedsPassword,
+|   |                           after a return from background, the database open (or closed over Corrupt) behind it
 |   +-- Opening ............. blank surface + delayed progress | PasswordScreen (busy) | OpenErrorScreen ("Try again")
 |   +-- Corrupt ............. CorruptScreen --> Restore flow dialogs | StartFreshDialog
 |   +-- KeyUnavailable ...... KeyUnavailableScreen --> Restore flow dialogs | StartFreshDialog
 |   +-- Maintenance ......... origin Ready: MaintenanceOverlay over the shell; other origins: MaintenanceScreen
 |
 +-- Ready: app shell = NavigationSuiteScaffold (section 2)
+    |      shell dialogs: maintenance outcomes, notices, fingerprint set-up offer (sections 2.4, 8.12, 8.13)
     |
     +-- Tab "All" ........ NoteListScreen(All)
     +-- Tab "People" ..... NoteListScreen(Individual): EntityPicker body until a person is chosen
@@ -40,7 +47,8 @@ MainActivity (FragmentActivity) -> DoroTheme -> DoroRoot: one screen per gate st
     |      date picker dialog, unlink sheet, delete-note dialog, entity delete impact dialog
     +-- PickerKey ........ EntityPicker, full screen (section 7)
     +-- SettingsKey ...... SettingsScreen (section 9)
-           backup and restore dialogs, encryption and password dialogs, open-source notices
+           backup and restore dialogs, encryption and password dialogs, the turn-off-with-password dialog,
+           open-source notices
 ```
 
 - The navigation bar or rail is shown only while the top entry is a `TabKey`; the editor, pickers and Settings cover the whole window (DEC-50).
@@ -113,10 +121,11 @@ Every perspective screen has an M3 `TopAppBar` (small, pinned scroll behavior so
   ```
 
   `id` comes from a process-wide `AtomicLong`. The snackbar duration is `Long` when `isError`, else `Short`. Arguments are only nested `UiText`, never raw strings. The text is resolved with `stringResource` or `pluralStringResource` when it is shown, in the current locale.
-- Messages that must outlive the screen that caused them go to `AppMessages`, an application-scoped member of `AppContainer` exposed through `UiGraph` and `GateGraph` ([architecture.md § Dependency injection](architecture.md#dependency-injection)): `val pending: StateFlow<List<UserMessage>>`, `fun post(message: UserMessage)`, `fun consume(id: Long)`. The shell shows the head of `pending` in `appSnackbar` and consumes it after `showSnackbar` returns. Users: the editor after it closed itself ("1 note deleted", "This note no longer exists.", a failed save on leave, section 6.8). It is state, not a `Channel`, so a message survives configuration changes (architecture.md § Layering, rule 7).
+- Messages that must outlive the screen that caused them go to `AppMessages`, an application-scoped member of `AppContainer` exposed through `UiGraph` and `GateGraph` ([architecture.md § Dependency injection](architecture.md#dependency-injection)): `val pending: StateFlow<List<UserMessage>>`, `fun post(message: UserMessage)`, `fun consume(id: Long)`. The shell shows the head of `pending` in `appSnackbar` and consumes it after `showSnackbar` returns. Users: the editor after it closed itself ("1 note deleted", "This note no longer exists.", a failed save on leave, section 6.8). It is state, not a `Channel`, so a message survives configuration changes (architecture.md § Layering, rule 7). `AppMessages` also holds one in-memory flag, the fingerprint-reset marker (`fun markFingerprintReset()`, `fun clearFingerprintReset()`, `fun consumeFingerprintReset(): Boolean`). The Forgot password flow sets it before it calls `DbMaintenance.resetPasswordWithBiometric` (section 8.15), and the maintenance status host reads it to choose the snackbar text of `KeyChanged(PASSWORD, PASSWORD)`, which the result alone cannot tell apart from a password change made with the old password (section 9.6, DEC-63). It holds no data and is not persisted; a process death before the snackbar leaves the plain "Startup password changed" text.
 - Snackbars carry counts and fixed texts only, never note text, names, search text or file names ([security.md § 8](security.md#8-screen-protection-dec-66-dec-67)). They have no action button (no undo, §7, DEC-36). Success messages use `SnackbarDuration.Short`; error messages use `SnackbarDuration.Long`.
 - Maintenance outcomes (backup, restore, key change, Start fresh) are published by `DbMaintenance.status` and rendered by the maintenance status host (section 8.12), not by the screen that started the operation, because a restore resets navigation (architecture.md § Threading). Outcome texts: section 9.6.
 - Three notices need acknowledgement and therefore show as an `AlertDialog` on top of the shell, once, as soon as the shell is composed: the Start-fresh notice (section 10.7, DEC-85), the restore encryption-off notice (section 8.7, DEC-86) and the biometric-lock auto-off notice (section 9.4, [security.md § 7.6](security.md#76-device-credential-fallback-q7)). The first two are rendered by the maintenance status host (section 8.12) from `DbMaintenance.status`; the third by the shell from the settings flow that `MainContent` already reads for `dataEpoch` ([architecture.md § Data reset](architecture.md#data-reset)).
+- The fingerprint set-up offer (section 8.13, DEC-65) is a fourth shell dialog, rendered by the shell from `AppLockController.slotOffer` (reached through `UiGraph`). The shell shows at most one of these dialogs at a time, in this priority: a dialog of the maintenance status host (section 8.12), the auto-off notice, then the set-up offer; a lower one waits until the one above it is closed. A key change therefore shows its snackbar first and then the offer. None of them is composed while the gate is locked (DEC-66); they appear after unlocking.
 
 ### 2.5 Back behavior
 
@@ -185,7 +194,7 @@ data class PerspectiveSpec(
 ### 3.3 Search bar
 
 - The Search action (section 2.2) replaces the top app bar with a search bar. It is its own composable, not the title slot of a `TopAppBar`, whose fixed 64 dp content height would clip the field at 200 % font: `Surface(color = <top app bar container color>) { Row(Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets).heightIn(min = 64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) { <close button>; TextField(Modifier.weight(1f), <transparent container, no indicator>); <clear button> } }`. It is 64 dp high at 100 % font and grows with the font size. Content: navigation icon `ic_arrow_back` ("Close search", `action_close_search`), a single-line `TextField` with placeholder "Search notes" (`search_hint`), and a trailing `ic_close` icon button ("Clear search text", `action_clear_search`) while the text is not empty. The filter chips stay visible below.
-- Opening the bar focuses the field and shows the keyboard. Keyboard options: `KeyboardType.Text`, `ImeAction.Search`, `autoCorrectEnabled = false`, `KeyboardCapitalization.None`. The field is always wrapped in `NoPersonalizedLearning(enabled = LocalKeyboardPrivacy.current)` ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)). `MainActivity` provides `LocalKeyboardPrivacy` from the same `windowPolicy` flow that sets `FLAG_SECURE`, so composables never read `SettingsStore` (architecture.md § Layering, rule 1), and the wrapper never appears or disappears, which would move the field in the composition and lose its focus and state.
+- Opening the bar focuses the field and shows the keyboard. Keyboard options: `KeyboardType.Text`, `ImeAction.Search`, `autoCorrectEnabled = false`, `KeyboardCapitalization.None`. The field is always wrapped in `NoPersonalizedLearning` ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)), which sets `EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING` on every input session of the field (DEC-71, Q11: the keyboard must never learn). The flag is unconditional: it depends on no setting, not on screenshot protection and not on the window policy, so there is no `CompositionLocal` for it and nothing reads `SettingsStore` for it. The wrapper is always present and never changes, so the field never moves in the composition and keeps its focus and state.
 - The field shows what was typed, capped at `SearchText.MAX_TERM_CHARS` (1,000) characters, surrogate pairs kept whole and without a message ([data-layer.md § Search](data-layer.md#search); the cap keeps the saved state small, section 3.10). `NoteListViewModel` stores the raw text at once (`searchText`) and copies it into `NoteFilter.search` after 300 ms without further input (debounce). Trimming, case folding and wildcard escaping happen in `SearchText.toLikeTerm` ([data-layer.md § Search](data-layer.md#search)); input that is blank after trimming means no search filter (DEC-29). The ImeAction, the clear button and closing the bar apply at once, without the debounce.
 - The ImeAction hides the keyboard and keeps the bar open. The clear button empties the field and keeps focus.
 - Closing the bar (navigation icon or Back, section 2.5) clears the text and the search filter. A search filter applies only while the bar is open, or while selection mode has temporarily replaced an open bar (section 5.1), so the user always sees or returns to the active query.
@@ -582,7 +591,7 @@ There is no "Discard changes" item: the editor saves on leave (DEC-37).
 - One multiline M3 `TextField` for title and content (DEC-39): transparent container, no indicator line, `bodyLarge`, `TextFieldLineLimits.MultiLine(minHeightInLines = 6)`, no internal scrolling (it grows and the page scrolls).
 - Placeholder "Title / content" (`content_hint`, DEC-39) in `onSurfaceVariant`, shown while the field is empty. A blank existing note shows this placeholder, never "(No data)" (DEC-25).
 - The text is plain and stored exactly as typed, Markdown included; nothing is rendered or trimmed (DEC-39, §12).
-- Keyboard: `KeyboardType.Text`, `KeyboardCapitalization.Sentences`, autocorrect on, `ImeAction.Default` (Enter inserts a line break). The field is always wrapped in `NoPersonalizedLearning(enabled = LocalKeyboardPrivacy.current)`, as in section 3.3 ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)).
+- Keyboard: `KeyboardType.Text`, `KeyboardCapitalization.Sentences`, autocorrect on, `ImeAction.Default` (Enter inserts a line break). The field is always wrapped in `NoPersonalizedLearning`, which always asks the keyboard not to learn (DEC-71, Q11), as in section 3.3 ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)).
 - Focus: a new note (opened with `noteId = null`) requests focus once, on the first composition after `loading` becomes false (section 6.14), and shows the keyboard, for low-friction capture (§10). A `focusRequested` flag in the `SavedStateHandle` prevents a second request after rotation or process death. An existing note opens without focus, so the keyboard does not cover it.
 - State: `EditorViewModel` owns a `TextFieldState` saved through `SavedStateHandle.saveable(key = "content", saver = TextFieldState.Saver)`. The field uses the `ContentCap` input transformation (section 6.9). Verify at setup: `SavedStateHandle.saveable` for `TextFieldState` in the pinned lifecycle-viewmodel-compose; the fallback is a value-based `TextField` whose `onValueChange` applies the same cap and writes the text to the `SavedStateHandle`.
 
@@ -740,7 +749,7 @@ A create row exists only in `EditorLinks` and `BatchAssociate`: a person or proj
 Full-screen form, top to bottom:
 1. `TopAppBar`. Multi-select: navigation icon `ic_close` "Cancel" (`action_cancel`), title, and the confirm `TextButton` as the action. Single-select: navigation icon `ic_arrow_back` "Back" (`action_back`) and the title.
 2. `BatchAssociate` only: a `PrimaryTabRow` with the tabs "People" and "Projects" (`tab_people`, `tab_projects`); while a tab has chosen entities its label reads "People (2)" (`pluralStringResource(R.plurals.tab_with_count, n, label, n)`).
-3. The name search field: a single-line `TextField` with leading `ic_search`, placeholder "Search people" / "Search projects" (`picker_search_people`, `picker_search_projects`), trailing `ic_close` "Clear search text" (`action_clear_search`) while not empty, `ImeAction.Done`, no autofocus (the keyboard would hide the list). Input longer than `MAX_NAME_CHARS` (200) characters is cut without a message, surrogate pairs kept whole, so the create row never produces a name that `EntityRepository` rejects (data-layer.md INV-9; names that arrive longer through a restore are not cut and are shown with ellipsis). The field is wrapped in `NoPersonalizedLearning(enabled = LocalKeyboardPrivacy.current)` as in section 3.3 ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)).
+3. The name search field: a single-line `TextField` with leading `ic_search`, placeholder "Search people" / "Search projects" (`picker_search_people`, `picker_search_projects`), trailing `ic_close` "Clear search text" (`action_clear_search`) while not empty, `ImeAction.Done`, no autofocus (the keyboard would hide the list). Input longer than `MAX_NAME_CHARS` (200) characters is cut without a message, surrogate pairs kept whole, so the create row never produces a name that `EntityRepository` rejects (data-layer.md INV-9; names that arrive longer through a restore are not cut and are shown with ellipsis). The field is always wrapped in `NoPersonalizedLearning`, which always asks the keyboard not to learn (DEC-71, Q11), as in section 3.3 ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)).
 4. A `LazyColumn` with the rows of sections 7.3 and 7.4, keyed by `"any"`, `"create"`, `"new:<key>"`, `"header:<n>"` and the entity id.
 
 The embedded form has no app bar and no tabs: the search field and the list fill the perspective body under the perspective's own app bar.
@@ -830,7 +839,7 @@ sealed interface PickerResult {
 - A destructive confirm button ("Delete", "Replace", "Turn off", "Delete and start fresh", "Erase all data") uses `ButtonDefaults.textButtonColors(contentColor = colorScheme.error)`.
 - Dialogs with password fields set `DialogProperties(dismissOnClickOutside = false)`, so a stray tap does not lose typed input; Back and "Cancel" still close them. Other dialogs keep the defaults.
 - `securePolicy` stays `SecureFlagPolicy.Inherit` on every dialog, sheet, menu and date picker (DEC-67).
-- Every dialog and bottom sheet wraps its content in `SecureDialogWindow` (`ui/common`, [security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)), which keeps autofill out of that window. The security dialogs (the key-change dialogs of section 8.8, the backup and restore password dialogs, the restore confirmation, Start fresh and Erase) pass `hideOverlays = true` ([security.md § 9.4](security.md#94-task-hijacking-and-overlays)).
+- Every dialog and bottom sheet wraps its content in `SecureDialogWindow` (`ui/common`, [security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)), which keeps autofill out of that window. The security dialogs (the key-change dialogs of section 8.8, the turn-off-with-password dialog of section 8.14, the fingerprint password reset dialog of section 8.15, the backup and restore password dialogs, the restore confirmation, Start fresh and Erase) pass `hideOverlays = true` ([security.md § 9.4](security.md#94-task-hijacking-and-overlays)).
 - Which dialog is open is part of the owning ViewModel's UiState (`ListDialog`, section 3.10; `EditorDialog`, section 6.14; the Settings dialog, section 9.8), so it survives rotation and process death. Password field contents never are: they live in `remember { TextFieldState() }` and are empty after recreation ([security.md § 6.2](security.md#62-fields-and-state), testing.md M-09).
 - While an operation started by a dialog runs, its buttons are disabled; long operations continue under the maintenance overlay (section 10.6).
 
@@ -965,24 +974,32 @@ The flows, checks and key handling are in [security.md § 4](security.md#4-key-c
 | Flow (security.md § 4) | Title | Body | Fields | Confirm |
 |---|---|---|---|---|
 | Turn on encryption, `PLAIN` → `DEVICE` | "Encrypt the database?" (`enc_on_title`) | "Your notes, people and projects will be encrypted with a key kept in this device's secure hardware. Backups and shared copies made earlier are not changed. You can add a startup password later." (`enc_on_body`) | — | "Encrypt" (`action_encrypt`) |
-| Set startup password, `PLAIN` → `PASSWORD` | "Set a startup password" (`pw_set_title`) | "You will enter this password every time the app starts. It cannot be recovered: if you forget it, the only way back in is to erase all data." (`pw_set_body`), then "This also encrypts the database. Backups and shared copies made earlier are not changed." (`pw_set_body_plain`) | New password (`password_new`), Repeat new password (`password_repeat`), acknowledgement | "Set password" (`action_set_password`) |
+| Set startup password, `PLAIN` → `PASSWORD` | "Set a startup password" (`pw_set_title`) | "You will enter this password when the app starts, unless fingerprint unlock is on. It cannot be recovered: if you forget it and cannot use your fingerprint, the only way back in is to erase all data." (`pw_set_body`), then "This also encrypts the database. Backups and shared copies made earlier are not changed." (`pw_set_body_plain`) | New password (`password_new`), Repeat new password (`password_repeat`), acknowledgement | "Set password" (`action_set_password`) |
 | Set startup password, `DEVICE` → `PASSWORD` | as above | `pw_set_body` only | as above | as above |
 | Change startup password, `PASSWORD` → `PASSWORD` | "Change the startup password" (`pw_change_title`) | `pw_set_body` | Current password (`password_current`), New password, Repeat new password, acknowledgement | "Change password" (`action_change_password`) |
 | Remove startup password, `PASSWORD` → `DEVICE` | "Remove the startup password?" (`pw_remove_title`) | "The app will open without asking for a password. The database stays encrypted on this device." (`pw_remove_body`) | Current password | "Remove password" (`action_remove_password`) |
 | Turn off encryption, `DEVICE` → `PLAIN` | "Turn off encryption?" (`enc_off_title`) | "Your notes, people and projects will be stored unencrypted on this device." (`enc_off_body`) | — | "Turn off" (`action_turn_off`, destructive) |
 | Turn off encryption, `PASSWORD` → `PLAIN` | as above | `enc_off_body`, then "The startup password will be removed too." (`enc_off_body_password`) | Current password | as above |
+| Set a new password with the fingerprint, `PASSWORD` → `PASSWORD` (DEC-63) | "Set a new password" (`pw_reset_title`) | Section 8.15 | New password, Repeat new password, acknowledgement | "Set password" (`action_set_password`) |
 
 - All dialogs have "Cancel" as the dismiss button.
+- The last flow is started from the Forgot password screen (section 10.3), never from Settings, and has no current-password field: the fingerprint replaces the old password (DEC-61, DEC-63). Its dialog and steps are in section 8.15.
+- Body additions while the biometric lock is on (DEC-65): the flows that end in `PASSWORD` ("Set startup password" from `PLAIN` or `DEVICE`, and "Change startup password") append "Afterwards, touch the fingerprint sensor once to keep fingerprint unlock." (`pw_body_fingerprint_again`); "Remove startup password" and "Turn off encryption" from `PASSWORD` append "The biometric lock stays on. Without a usable fingerprint, the phone's screen lock is asked instead." (`pw_remove_body_lock`). With the lock off neither sentence appears. "Turn on encryption" and "Turn off encryption" from `DEVICE` involve no biometric slot and get no addition.
 - Confirm calls `DbMaintenance.changeKey(target, currentPassword, newPassword)` ([db-lifecycle.md § Key changes](db-lifecycle.md#key-changes)). The dialog stays open, with its buttons disabled, while the current password is checked. `Err(WrongPassword)` and `Err(Throttled)` come back before any change: the dialog shows them inline and calls `acknowledge()` itself.
 - Any other outcome closes the dialog. The operation runs under the maintenance overlay with "Updating encryption…" (section 10.6). On success the maintenance status host shows the snackbar of the flow that ran, chosen from `KeyChanged(from, to)` (mapping in section 9.6).
 - On failure the old database and key stay in force (security.md § 4 step 6) and the dialog "Encryption was not changed" (`key_change_failed_title`) shows the message of section 9.6.
+- Outcomes for the biometric lock (DEC-61, DEC-65). Every key change makes a new DEK, which drops the biometric slot ([db-lifecycle.md § Key changes](db-lifecycle.md#key-changes)):
+  - A change from Settings that ends in `PASSWORD` with the lock on (set or change) shows its snackbar and then the fingerprint set-up offer of section 8.13 (body `slot_offer_body_missing`). One fingerprint touch re-creates the slot. Until the user does that, the app asks for the startup password at the next unlock, and the offer returns after that password unlock. The fingerprint reset (section 8.15) ends with a restart or a fresh lock, so its offer comes after the next password unlock.
+  - A change that leaves `PASSWORD` with the lock on (remove the password, turn off encryption from `PASSWORD`) deletes the slot and its Keystore key with the commit. The lock stays on and from then on unlocks as in `PLAIN` and `DEVICE` mode: fingerprint, or the phone's screen lock (section 9.4). No offer appears.
+  - With the lock off there is no slot and no offer.
+- A correct current password in these dialogs is a successful startup-password entry, which restarts the 14-day reminder (DEC-74, [security.md § 7](security.md#7-biometric-app-lock-dec-65)).
 
 Backup offer before a first startup password (DEC-73). The two "Set startup password" flows (`PLAIN` → `PASSWORD`, `DEVICE` → `PASSWORD`) start with this dialog when `NoteRepository.hasAnyData()` is true ([data-layer.md § Editor loads, pickers and existence probes](data-layer.md#editor-loads-pickers-and-existence-probes)); with an empty database they open "Set a startup password" directly. "Change startup password" and "Remove startup password" never show it.
 
 | Part | Text |
 |---|---|
 | Title | "Back up first?" (`pw_backup_offer_title`) |
-| Body | "If you ever forget the startup password, a backup is the only way back to your notes. Make one now?" (`pw_backup_offer_body`) |
+| Body | "If you ever forget the startup password and cannot use your fingerprint, a backup is the only way back to your notes. Make one now?" (`pw_backup_offer_body`) |
 | Buttons | "Skip" (`action_skip`) · "Back up now" (`action_backup_now`) |
 
 - "Back up now" runs the normal backup flow of section 9.2, including the unencrypted-backup warning (section 8.5) and the backup password (section 8.6) wherever DEC-83 requires them. When the backup finishes with `Ok`, "Set a startup password" opens at once. When it is cancelled or fails (after the failure message of section 9.6), this dialog appears again, so the user can retry, skip or leave.
@@ -1016,19 +1033,23 @@ The erase itself: [security.md § 5.4](security.md#54-forgotten-password-erase-d
 
 ### 8.11 System authentication prompts (DEC-65)
 
-`AppLockController` builds the prompts ([security.md § 7.2](security.md#72-promptinfo)) with these texts:
+`AppLockController` builds the prompts ([security.md § 7.2](security.md#72-promptinfo)) with these texts. Which prompt runs when, and which prompts carry a `CryptoObject` for the biometric slot (DEC-60), is defined in [security.md § 7](security.md#7-biometric-app-lock-dec-65).
 
 | Prompt | Title | Negative button |
 |---|---|---|
-| Unlock (strong biometric, API 30+ device credential, API 28–29 confirm-credential intent) | "Unlock Doro Organizer" (`biometric_unlock_title`) | "Cancel" (`action_cancel`); none on the device-credential prompt |
-| Turning the lock on (also the test prompt for `BIOMETRIC_STATUS_UNKNOWN`) | "Turn on biometric lock" (`biometric_enable_title`) | "Cancel" |
-| Turning the lock off | "Turn off biometric lock" (`biometric_disable_title`) | "Cancel"; none on the device-credential prompt |
+| Unlock in `PLAIN` or `DEVICE` mode (strong biometric, API 30+ device credential, API 28–29 confirm-credential intent) | "Unlock Doro Organizer" (`biometric_unlock_title`) | "Cancel" (`action_cancel`); none on the device-credential prompt |
+| Unlock in `PASSWORD` mode (strong biometric through the biometric slot, at cold start and on return from background, DEC-65) | "Unlock Doro Organizer" (`biometric_unlock_title`) | "Use password" (`action_use_password`, DEC-65) |
+| Turning the lock on (also the test prompt for `BIOMETRIC_STATUS_UNKNOWN`; in `PASSWORD` mode the same prompt also creates the biometric slot) | "Turn on biometric lock" (`biometric_enable_title`) | "Cancel" |
+| Turning the lock off | "Turn off biometric lock" (`biometric_disable_title`) | `PLAIN` and `DEVICE`: "Cancel"; none on the device-credential prompt. `PASSWORD` (the slot prompt with a `CryptoObject`, shown only while a usable strong biometric and a valid slot exist, [security.md § 7.1](security.md#71-availability-and-the-settings-row)): "Use password" (`action_use_password`), which leads to the password dialog of section 8.14. Without a usable biometric or a valid slot no system prompt runs: the dialog opens at once |
+| Setting up fingerprint unlock again (section 8.13 and the Settings row, section 9.4) | "Set up fingerprint unlock" (`biometric_slot_title`) | "Cancel" |
+| Setting a new password with the fingerprint (sections 8.15 and 10.3, DEC-63) | "Confirm with your fingerprint" (`biometric_reset_title`) | "Cancel" |
 
-No subtitle or description is set.
+- No subtitle or description is set on any prompt.
+- "Use password" is the negative button of the `PASSWORD`-mode unlock prompt, so pressing it ends the prompt with `ERROR_NEGATIVE_BUTTON` (13). There it is not a silent cancel: `AppLockController` raises `PasswordRequired`, and the password screen (section 10.2) replaces the lock screen (`NeedsPassword` at cold start, `Locked` with a `PasswordEntry` over an open database), exactly like the lock screen's "Use password" button (section 10.4). On the "Turn off biometric lock" prompt of `PASSWORD` mode the same button ends the prompt with `Ok(false)` from `AppLockController.confirm(DisableLock)`, and Settings opens the dialog of section 8.14. The event and the transition are in [architecture.md § SessionGate](architecture.md#sessiongate), the error mapping in [security.md § 7.4](security.md#74-unlock-route-and-error-mapping). In `PLAIN` and `DEVICE` mode "Cancel" keeps its meaning: stay locked, with the "Unlock" button for a retry.
 
 ### 8.12 Maintenance status host
 
-`MaintenanceStatusHost` (`ui/common`) is the only composable that renders `DbMaintenance.status` ([db-lifecycle.md § Interface and status](db-lifecycle.md#interface-and-status)). It is composed in the shell and on the Password, Forgot password, Corrupt and KeyUnavailable screens: the places where operations start, and where a failed operation returns the gate (an Erase that fails before it changes anything returns to `NeedsPassword`, architecture.md T31d). Nothing of it is composed while the gate is `Locked`; the status waits and its dialog returns after unlocking.
+`MaintenanceStatusHost` (`ui/common`) is the only composable that renders `DbMaintenance.status` ([db-lifecycle.md § Interface and status](db-lifecycle.md#interface-and-status)). It is composed in the shell and on the Password, Forgot password, Corrupt and KeyUnavailable screens: the places where operations start, and where a failed operation returns the gate (an Erase that fails before it changes anything returns to `NeedsPassword`, architecture.md T31d). Nothing of it is composed while the gate is `Locked`, a `Locked` password screen included; the status waits and its dialog returns after unlocking (a fingerprint reset started over an open database ends in a fresh lock, so its outcome appears after the next unlock, section 8.15). A host composed on a gate screen has no snackbar: it shows the dialogs of the table below and leaves `Ok(KeyChanged)` pending for the shell's host, which shows its snackbar once the app is in `Ready`.
 
 | `status` | Rendering |
 |---|---|
@@ -1039,8 +1060,77 @@ No subtitle or description is set.
 | `Finished(op, result)` | The outcome of section 9.6, then `acknowledge()` |
 
 - `acknowledge()` is called after `showSnackbar` returns, or when the user closes the outcome dialog. `Finished` therefore survives rotation, a lock and a navigation reset until the user has seen it.
-- Exceptions: `Finished(KeyChange, Err(WrongPassword))` and `Finished(KeyChange, Err(Throttled))` belong to the key-change dialog, which shows them inline (section 8.8) and acknowledges them itself; the host ignores them. `Ok(RestoreCancelled)` and `Err(Busy)` are acknowledged without any message.
+- Exceptions: `Finished(KeyChange, Err(WrongPassword))` and `Finished(KeyChange, Err(Throttled))` belong to the key-change dialog, which shows them inline (section 8.8) and acknowledges them itself; the host ignores them. `Ok(RestoreCancelled)` and `Err(Busy)` are acknowledged without any message. A cancelled fingerprint prompt of a password reset never reaches `DbMaintenance` and so has no status (section 8.15).
 - `Finished(Backup, Ok(BackupShared(uri, displayName)))`: the host posts the share chooser as an `ExternalRequest` (chooser title "Share backup", `share_chooser_title`) and acknowledges; there is no message (section 9.2).
+
+### 8.13 Fingerprint set-up offer (DEC-65)
+
+In `PASSWORD` mode the fingerprint opens the app through the biometric slot, a second copy of the database key that only a `BIOMETRIC_STRONG` authentication can unwrap (DEC-60). Every new DEK drops the slot (DEC-61), and a change of the phone's enrolled fingerprints invalidates it. This dialog lets the user re-create it with one fingerprint touch.
+
+When it appears. `AppLockController` decides and exposes the result as `slotOffer: StateFlow<SlotOffer?>` (`SlotOffer` = `Invalidated` or `Missing`); the rules are owned by [security.md § 7](security.md#7-biometric-app-lock-dec-65), the UI only renders the value:
+1. The key mode is `PASSWORD`, the biometric lock is on, `canAuthenticate(BIOMETRIC_STRONG)` is `SUCCESS` or `STATUS_UNKNOWN`, and the slot is missing or invalidated.
+2. One of these has just happened: a successful startup-password unlock (cold start or return from background, section 10.2); or a committed operation that made a new DEK and ends in `PASSWORD` mode with the lock on (a key change of section 8.8, including the fingerprint reset of section 8.15, or any other operation that [db-lifecycle.md](db-lifecycle.md) lists as dropping the slot).
+3. The offer is not persisted. "Not now", a cancelled prompt and a process death clear it; it returns after the next successful password unlock (DEC-65). The Settings row of section 9.4 offers the same set-up at any time.
+
+Rendering: an `AlertDialog` composed by the shell in `Ready` (section 2.4, which also fixes its priority among the shell dialogs), so it never appears over a gate screen; while the gate is locked it waits.
+
+| Part | Text |
+|---|---|
+| Title | "Set up fingerprint unlock again?" (`slot_offer_title`) |
+| Body, `SlotOffer.Invalidated` (the phone's fingerprints changed) | "The fingerprints on this phone changed, so fingerprint unlock was switched off to keep others out. Touch the sensor once to switch it on again." (`slot_offer_body_invalidated`) |
+| Body, `SlotOffer.Missing` (a new key, or an earlier offer was declined) | "Fingerprint unlock is not set up for your current password. Touch the sensor once to set it up, so the app opens with your fingerprint again." (`slot_offer_body_missing`) |
+| Buttons | "Not now" (`action_not_now`) · "Set up" (`action_slot_setup`) |
+
+- "Set up" calls `AppLockController.createSlot(): AppResult<Boolean>`, which shows the "Set up fingerprint unlock" prompt (section 8.11) with a `CryptoObject` and commits the slot ([security.md § 7](security.md#7-biometric-app-lock-dec-65); the slot-only key-state commit is in [db-lifecycle.md](db-lifecycle.md)). While the prompt is shown, the dialog stays open with both buttons disabled and cannot be dismissed. This is not a key change: no maintenance overlay, and the database stays open.
+- `Ok(true)`: the dialog closes and the shell shows "Fingerprint unlock is on" (`slot_created`) as a Short snackbar.
+- `Ok(false)` (the prompt was cancelled): the dialog closes without a message, and the offer is cleared until the next password unlock.
+- `Err(error)`: the dialog closes and the shell shows the `AppError` text (section 11.13; typically `AuthFailed` or `KeyUnavailable`) in a Long snackbar. The lock stays on and the password keeps working.
+- "Not now", Back and a tap outside call `AppLockController.dismissSlotOffer()`. Nothing else changes: the app keeps asking for the startup password until the slot exists.
+- The dialog holds no secret. It survives rotation because the offer is controller state, not composition state.
+
+### 8.14 Turn off the biometric lock with the startup password (DEC-65)
+
+In `PASSWORD` mode the startup password is the unlock route whenever fingerprint unlock is not available (DEC-65), and in the same mode the biometric lock is turned off through the slot prompt, which needs a valid slot ([security.md § 7.1](security.md#71-availability-and-the-settings-row)). A prompt without a `CryptoObject` is not allowed in `PASSWORD` mode, so whenever the fingerprint cannot turn the lock off, the password does, and the owner is never stuck until the slot has been re-created. This dialog replaces the phone's screen lock as the fallback. Opened by the "Biometric lock" switch (section 9.4) when the key mode is `PASSWORD`, the lock is on and one of these holds:
+- fingerprint unlock is not available: `canAuthenticate(BIOMETRIC_STRONG)` is neither `SUCCESS` nor `STATUS_UNKNOWN`, or `LockAvailability.slot` (section 9.8) is `Missing` or `Invalidated`. No prompt is shown first;
+- the "Turn off biometric lock" prompt of section 8.11 ended without turning the lock off and `AppLockController.confirm(DisableLock)` returned `Ok(false)`: "Use password" on the prompt, or a slot found missing or invalidated when the prompt was prepared. In `PASSWORD` mode `Ok(false)` cannot tell "Use password" from a plain cancel of the prompt, so both open this dialog; its "Cancel" button closes it with no change.
+
+| Part | Text |
+|---|---|
+| Title | "Turn off biometric lock?" (`lock_off_password_title`) |
+| Body | "Enter your startup password. Afterwards the app asks for it every time it starts, and no longer when it comes back from the background." (`lock_off_password_body`) |
+| Field | `PasswordField` (section 8.1) "Password" (`password_label`) |
+| Buttons | "Cancel" · "Turn off" (`action_turn_off`) |
+
+- Confirm copies the field into a `CharArray`, clears the field and calls `AppLockController.disableWithPassword(password: CharArray): AppResult<Boolean>` from `SettingsViewModel`; `ui` never reaches `KeyVault` (the controller does). The controller verifies the password with the backoff of DEC-62 ([security.md § 5.3](security.md#53-backoff-dec-62)), refreshes the 14-day reminder, removes the slot and its Keystore key, and then writes the lock flag off ([security.md § 7.1](security.md#71-availability-and-the-settings-row)). The dialog stays open with its buttons disabled during the check.
+- `Ok(true)`: the lock is off and the slot and its Keystore key are deleted (DEC-65); the dialog closes and the switch follows the setting. `Ok(false)` is not expected here; if it comes, the dialog closes and nothing changes.
+- `Err(WrongPassword)` and `Err(Throttled)`: shown under the field exactly as in section 8.8 ("Wrong password.", or the disabled field with the `m:ss` countdown).
+- Any other error: the dialog closes and the `AppError` text appears in a Long snackbar; the setting is unchanged.
+- A correct password here is a successful startup-password entry and restarts the 14-day reminder (DEC-74).
+
+### 8.15 Set a new password with the fingerprint (DEC-63)
+
+Opened by "Set a new password with your fingerprint" on the Forgot password screen (section 10.3), which offers it while `AppLockController.fingerprintUnlockAvailable()` is true. It is the `PASSWORD` → `PASSWORD` key change of DEC-61 without the old password: the fingerprint unwraps the DEK through the biometric slot instead (DEC-63).
+
+One flow, the same in security.md, architecture.md and db-lifecycle.md: the UI collects the new password, `AppLockController.slotPrompt(AuthPurpose.ResetPassword)` obtains an authorized unwrap cipher, and `DbMaintenance.resetPasswordWithBiometric(origin, cipher, newPassword)` runs the change. `DbMaintenance` never calls `AppLockController` (architecture.md § Event wiring), so the prompt belongs to the UI step, not to the operation. The coordinating class is `ForgotPasswordViewModel` in `ui/gate`.
+
+| Part | Text |
+|---|---|
+| Title | "Set a new password" (`pw_reset_title`) |
+| Body | "Choose a new startup password. It replaces the old one; your notes stay as they are. After you confirm, touch the fingerprint sensor." (`pw_reset_body`), then `pw_set_body` (section 8.8) |
+| Fields | New password (`password_new`), Repeat new password (`password_repeat`), acknowledgement "I understand this cannot be recovered" (`password_ack`) |
+| Buttons | "Cancel" · "Set password" (`action_set_password`) |
+
+Steps:
+1. Confirm runs the password policy of section 8.1 (a violation shows inline and nothing else happens), copies both fields into `CharArray`s and clears every field. The dialog stays open with its buttons disabled.
+2. `ForgotPasswordViewModel` calls `AppLockController.slotPrompt(AuthPurpose.ResetPassword)`, which shows the "Confirm with your fingerprint" prompt (section 8.11) with an unwrap `CryptoObject` on the slot ([architecture.md § AppLockController and BiometricGateway](architecture.md#applockcontroller-and-biometricgateway)). The new password exists only in memory meanwhile, never in saved state (DEC-64). The order (password first, then the fingerprint) keeps the unwrapped DEK out of memory while the user types.
+3. `Ok(null)` (the prompt was cancelled, "Use password" was pressed, or the slot or biometric is no longer usable): the new password is zeroed and the dialog closes locally. `DbMaintenance` is never called, so there is no status, no gate event and no message. The user is back on the Forgot password screen, which evaluates `fingerprintUnlockAvailable()` again and shows the "Not available" variant (section 10.3) if it is now false. `Err(AuthFailed)` (any other prompt error): the same, followed by the dialog "Encryption was not changed" (`key_change_failed_title`) with the `AppError` text, shown by the Forgot password screen itself.
+4. `Ok(cipher)`: the ViewModel calls `AppMessages.markFingerprintReset()` (section 2.4), then `DbMaintenance.resetPasswordWithBiometric(origin, cipher, newPassword)`, which owns the cipher and the password bytes from then on ([db-lifecycle.md § Fingerprint password reset](db-lifecycle.md#fingerprint-password-reset)). `origin` is `NeedsPassword` when the gate is `NeedsPassword` (database closed) and `Ready` when the gate is `Locked` with resume `Ready` (database open behind the lock). No other state offers the reset.
+5. `DbMaintenance` raises `MaintenanceStarted(KeyChange)` only after the cipher has unwrapped the DEK. From `NeedsPassword` the gate shows the maintenance screen "Updating encryption…" (section 10.6, architecture.md T41); from `Locked(Ready)` the gate is `Locked(Maintenance)` while it runs (T12, rendering: [architecture.md § Rendering](architecture.md#rendering)).
+6. Success: the result is `Ok(KeyChanged(PASSWORD, PASSWORD))`. The status host consumes the marker and shows "New startup password set" (`pw_reset_done`, section 9.6). The new DEK has no slot, so the next unlock asks for the new password ([architecture.md § Unlock routes](architecture.md#unlock-routes-q8)): from `NeedsPassword` the operation ends with `Restart` and the gate starts again at the password screen; from `Locked(Ready)` it ends in a fresh lock. The snackbar appears once the shell is composed (a gate screen's host leaves it pending, section 8.12), followed by the set-up offer of section 8.13, because the new DEK has no slot yet.
+7. Failure: `Err(AuthFailed)` (the slot turned out unusable inside the operation), `Err(Unexpected)` (the slot key differs from the live key of an open database; nothing was changed), or any other key-change error. The marker is cleared by the host on every `Finished(KeyChange, Err(…))`, and the dialog "Encryption was not changed" (`key_change_failed_title`) shows the message of section 9.6, `OutcomeUnknown` included. The old password and the data stay in force (DEC-61). From `NeedsPassword` the gate returns to the password screen and the Forgot password screen is still shown (architecture.md T31d, section 10.3), now without the fingerprint option if the slot is no longer usable. From `Locked(Ready)` the dialog appears after the next unlock (section 8.12).
+
+- No backoff applies, because no password is checked. The acknowledgement is required as for every new password (DEC-64).
+- `Err(AuthFailed)` never counts toward the backoff and never shows "Wrong password.".
 
 ## 9. Settings screen
 
@@ -1103,15 +1193,23 @@ The mechanics (export pipeline, share copies, validation, swap) are in [db-lifec
 |---|---|---|---|
 | `PLAIN` | off | "Off. Notes are stored unencrypted on this device." (`encryption_summary_off`) | "Startup password" · "Off" (`startup_password_off`): opens the backup offer, then "Set a startup password" (`PLAIN` → `PASSWORD`, section 8.8) |
 | `DEVICE` | on | "On. Notes are encrypted with a key kept on this device." (`encryption_summary_on`) | "Startup password" · "Off": opens the backup offer, then "Set a startup password" (`DEVICE` → `PASSWORD`, section 8.8) |
-| `PASSWORD` | on | `encryption_summary_on` | "Change startup password" (`startup_password_change`) · "Asked every time the app starts" (`startup_password_on`), opening the change dialog; and "Remove startup password" (`startup_password_remove`), opening the remove dialog |
+| `PASSWORD` | on | `encryption_summary_on` | "Change startup password" (`startup_password_change`) · "Asked every time the app starts" (`startup_password_on`) while the biometric lock is off, or "Asked when your fingerprint cannot be used, and every 14 days" (`startup_password_on_fingerprint`) while it is on (DEC-65, DEC-74), opening the change dialog; and "Remove startup password" (`startup_password_remove`), opening the remove dialog |
 
 - Tapping the switch never flips it directly: off → the "Encrypt the database?" dialog; on → the "Turn off encryption?" dialog of the current mode (section 8.8). The switch shows the committed mode, so it changes only when the key change succeeds.
 - The mode is `DbMaintenance.keyMode`, the mode of the committed key-state slot ([db-lifecycle.md § Interface and status](db-lifecycle.md#interface-and-status)); `ui` never reads `KeyVault` (architecture.md § Import rules). It is never null in `Ready`.
 - Every dialog of section 8.8 calls `DbMaintenance.changeKey(target, currentPassword, newPassword)` with the `CharArray`s of its fields (null where a field does not exist).
+- With the biometric lock on, the dialogs add the fingerprint sentences of section 8.8, and a change that ends in `PASSWORD` mode is followed by the fingerprint set-up offer (section 8.13). A change that leaves `PASSWORD` mode deletes the biometric slot; the lock row of section 9.4 then shows the `PLAIN`/`DEVICE` behavior.
 - No-screen-lock hint (DEC-72): an outlined card at the top of the section with `ic_warning` and "This device has no screen lock, so anyone holding it can open its apps. Set a screen lock in system settings, or use a startup password." (`security_no_screen_lock`). Informational only: no button, nothing is blocked.
 - Recents hint for encryption (API 28–32 only): when the database is encrypted (`DEVICE` or `PASSWORD`), the biometric lock is off and screenshot protection is off, the "Database encryption" row shows a second supporting line, "On this Android version the recent apps screen can still show the app's last screen, even though the database is encrypted. Turn on screenshot protection to hide it." (`encryption_recents_hint`). Below API 33 no API hides only the Recents thumbnail, and with the lock off the recents hint of section 9.4 is not shown ([security.md § 12](security.md#12-residual-risks-and-documented-limitations)); from API 33 the thumbnail is hidden whenever encryption is on (DEC-66).
 
 ### 9.4 Biometric lock
+
+What the lock does depends on the committed key mode (DEC-65, fingerprint first; the unlock rules per mode are owned by [security.md § 7](security.md#7-biometric-app-lock-dec-65), the gate states by [architecture.md § SessionGate](architecture.md#sessiongate)). This table is what the screens of section 10 show:
+
+| Key mode | Lock on, usable strong biometric | Lock on, no usable strong biometric (none enrolled, hardware unavailable, permanent lockout; in `PASSWORD` mode also an invalidated or missing slot) | Lock off |
+|---|---|---|---|
+| `PLAIN`, `DEVICE` | The fingerprint prompt at cold start and on every return from background (section 10.4) | The phone's screen lock (Q7; section 8.11) | Nothing is asked |
+| `PASSWORD` | The fingerprint alone, at cold start and on return from background, through the biometric slot (section 10.4). "Use password" on the prompt and on the lock screen switches to the password. Once the startup password has not been typed for 14 days, the next unlock asks for the password instead (DEC-74, section 10.2) | The startup password, at cold start and also on return from background (section 10.2) | The startup password at cold start only; nothing on return from background (DEC-62) |
 
 Availability comes from `BiometricManager.canAuthenticate(BIOMETRIC_STRONG)`, read through `AppLockController` on every resume ([security.md § 7.1](security.md#71-availability-and-the-settings-row)):
 
@@ -1119,12 +1217,26 @@ Availability comes from `BiometricManager.canAuthenticate(BIOMETRIC_STRONG)`, re
 |---|---|---|
 | `BIOMETRIC_SUCCESS` | Row shown, switch enabled | Row shown, switch enabled |
 | `BIOMETRIC_STATUS_UNKNOWN` | Row shown, switch enabled; the turn-on prompt doubles as the test prompt | Row shown, switch enabled |
-| `BIOMETRIC_ERROR_NONE_ENROLLED` | Row shown, switch disabled; supporting text "No fingerprint or face is set up for unlocking." (`biometric_none_enrolled`) and, below it in the `supportingContent`, a `TextButton` "Set up" (`action_enroll`) that opens the enrollment screen. The row's `toggleable` is disabled, the Switch stays in the trailing slot, and the button is its own focusable node | Row shown, switch enabled (turning off uses the device credential) |
-| Any other code | Row hidden | Row shown, switch enabled |
+| `BIOMETRIC_ERROR_NONE_ENROLLED` | Row shown, switch disabled; supporting text "No fingerprint or face is set up for unlocking." (`biometric_none_enrolled`) and, below it in the `supportingContent`, a `TextButton` "Set up" (`action_enroll`) that opens the enrollment screen. The row's `toggleable` is disabled, the Switch stays in the trailing slot, and the button is its own focusable node | Row shown, switch enabled (turning off uses the device credential; in `PASSWORD` mode the password dialog of section 8.14) |
+| Any other code | Row hidden | Row shown, switch enabled (turning off as in the row above) |
 
-- Supporting text in the normal case: "Ask for your fingerprint or face when the app opens or comes back from the background" (`biometric_summary`).
-- On API 28–32, while the lock is on and screenshot protection is off, a second supporting line reads "On this Android version the recent apps screen can still show the app's last screen. Turn on screenshot protection to hide it." (`biometric_recents_hint`) ([security.md § 12](security.md#12-residual-risks-and-documented-limitations)).
-- Turning on: the "Turn on biometric lock" prompt (section 8.11); success sets the switch. Turning off: the "Turn off biometric lock" prompt on the unlock route (strong biometric or the device-credential fallback); success clears it. A cancel leaves the switch unchanged without a message; any other failure shows "Authentication failed. The setting was not changed." (`error_auth_failed`) in a Long snackbar.
+Supporting text:
+- `PLAIN` and `DEVICE` mode: "Ask for your fingerprint or face when the app opens or comes back from the background" (`biometric_summary`).
+- `PASSWORD` mode: "Open the app with your fingerprint instead of the startup password. The password is still asked every 14 days and whenever the fingerprint cannot be used." (`biometric_summary_password`).
+- `PASSWORD` mode, lock on, slot missing or invalidated, and `canAuthenticate` = `SUCCESS` or `STATUS_UNKNOWN` (`LockAvailability.slot`, section 9.8): a second supporting line "Fingerprint unlock is not set up, so the app asks for your password." (`biometric_slot_missing`) and below it a `TextButton` "Set up" (`action_slot_setup`), its own focusable node like the enroll button. It does exactly what "Set up" does in the offer dialog of section 8.13 (`AppLockController.createSlot()`, the "Set up fingerprint unlock" prompt, the same outcome messages).
+- On API 28–32, while the lock is on and screenshot protection is off, a further supporting line reads "On this Android version the recent apps screen can still show the app's last screen. Turn on screenshot protection to hide it." (`biometric_recents_hint`) ([security.md § 12](security.md#12-residual-risks-and-documented-limitations)).
+
+Turning on (one successful `BIOMETRIC_STRONG` prompt, never the fallback, DEC-65):
+- `PLAIN` and `DEVICE` mode: the "Turn on biometric lock" prompt (section 8.11); success sets the switch.
+- `PASSWORD` mode: the same prompt carries a `CryptoObject`, and creating the biometric slot is part of turning on: the switch turns on only when the prompt succeeded and the slot is committed ([security.md § 7](security.md#7-biometric-app-lock-dec-65)). One fingerprint touch, no password, no maintenance overlay; the database stays open.
+
+Turning off:
+- `PLAIN` and `DEVICE` mode: with a usable strong biometric the "Turn off biometric lock" prompt (section 8.11); without one the device-credential fallback (Q7).
+- `PASSWORD` mode: with a usable strong biometric and a valid slot (`LockAvailability.slot` = `Ready`) the "Turn off biometric lock" prompt with the slot's `CryptoObject`, whose negative button is "Use password" (section 8.11). `AppLockController.confirm(DisableLock)` returning `Ok(false)` (that button, or any cancel) opens the password dialog of section 8.14. When there is no usable strong biometric, or the slot is missing or invalidated, no prompt can be shown and the dialog opens at once, so the lock can always be turned off.
+- In `PASSWORD` mode, turning off also deletes the slot and its Keystore key (DEC-65).
+
+Results and other controls:
+- For every switch action: a cancel leaves the switch unchanged without a message (in `PASSWORD` mode a cancel of the turn-off prompt opens the dialog of section 8.14 instead, whose "Cancel" does the same); an authentication failure shows "Authentication failed. The setting was not changed." (`error_auth_failed`) in a Long snackbar; a failure to create or delete the slot shows the `AppError` text of section 11.13 (`KeyUnavailable`) in a Long snackbar and leaves the switch unchanged.
 - "Set up" launches the enrollment intent of security.md § 7.1; returning re-reads the availability.
 - Auto-off notice ([security.md § 7.6](security.md#76-device-credential-fallback-q7)): when `security.lock_auto_off_notice` is true, the shell (section 2.4) shows once: title "Biometric lock turned off" (`lock_auto_off_title`), body "This device no longer has a screen lock, so the biometric lock was turned off. Set a screen lock in system settings to use it again." (`lock_auto_off_body`), button "OK"; "OK" clears the flag.
 
@@ -1132,7 +1244,7 @@ Availability comes from `BiometricManager.canAuthenticate(BIOMETRIC_STRONG)`, re
 
 | Row | Supporting text | Behavior |
 |---|---|---|
-| "Screenshot protection" | "Blocks screenshots and screen recording, shows a blank screen when sharing the screen, hides the app's content in recent apps, and asks the keyboard not to learn what you type" (`screenshot_summary`) | Toggles at once; the window flag changes live without recreating the activity (DEC-67, [security.md § 8](security.md#8-screen-protection-dec-66-dec-67)); keyboard learning follows DEC-71 |
+| "Screenshot protection" | "Blocks screenshots and screen recording, shows a blank screen when sharing the screen, and hides the app's content in recent apps" (`screenshot_summary`) | Toggles at once; the window flag changes live without recreating the activity (DEC-67, [security.md § 8](security.md#8-screen-protection-dec-66-dec-67)). It does not affect the keyboard: note, person, project and search fields always ask the keyboard not to learn, whatever this switch says (DEC-71, Q11; section 3.3) |
 | "Encrypt backups", database `PLAIN` | "Protect backup files with a separate password" (`encrypt_backups_summary`) | Toggles at once (DEC-83) |
 | "Encrypt backups", database encrypted | "Always on while the database is encrypted" (`encrypt_backups_forced`) | Shown on and disabled; the stored value is kept and applies again after encryption is turned off (security.md § 2) |
 
@@ -1144,7 +1256,7 @@ The maintenance status host (section 8.12) renders every `Finished(op, result)`:
 |---|---|---|
 | `Backup` | `BackupSaved`: snackbar "Backup saved" (`backup_done`). `BackupShared`: the share sheet opens, no message | Dialog "Backup failed" (`backup_failed_title`) with the message below and "OK"; with `previousContentLost` the message is `backup_error_overwritten` whatever the error |
 | `Restore` | `Restored`: snackbar "Backup restored" (`restore_done`) on All, or the encryption-off notice (section 8.7). `RestoreCancelled`: nothing | The restore error dialog (section 8.7) |
-| `KeyChange` | `KeyChanged(from, to)`: the snackbar of the mapping below | `WrongPassword`, `Throttled`: inline in the dialog (section 8.8). `OutcomeUnknown`: the dialog below. Others: dialog "Encryption was not changed" (`key_change_failed_title`) with the message below and "OK" |
+| `KeyChange` | `KeyChanged(from, to)`: the snackbar of the mapping below; when the change ends in `PASSWORD` with the biometric lock on, the fingerprint set-up offer follows (section 8.13) | `WrongPassword`, `Throttled`: inline in the dialog (section 8.8). `OutcomeUnknown`: the dialog below. Others: dialog "Encryption was not changed" (`key_change_failed_title`) with the message below and "OK" |
 | `StartFresh` | `StartedFresh`: the Start-fresh notice (section 10.7) | Dialog on the Corrupt or KeyUnavailable screen: title "Start fresh failed" (`start_fresh_failed_title`), the message below, "OK" |
 | `Erase` | `Erased`: nothing; the app is in the first-run state | Dialog on the Password or Forgot password screen, whichever is shown: title "Erase failed" (`erase_failed_title`), the message below, "OK" |
 
@@ -1154,7 +1266,7 @@ Key-change snackbars, by `KeyChanged(from, to)` (the target alone cannot tell "s
 |---|---|
 | `PLAIN` → `DEVICE` | "Database encryption turned on" (`enc_on_done`) |
 | `PLAIN` → `PASSWORD`, `DEVICE` → `PASSWORD` | "Startup password set" (`pw_set_done`) |
-| `PASSWORD` → `PASSWORD` | "Startup password changed" (`pw_changed_done`) |
+| `PASSWORD` → `PASSWORD` | "Startup password changed" (`pw_changed_done`); when `AppMessages.consumeFingerprintReset()` returns true (the marker set by the reset of section 8.15, section 2.4) "New startup password set" (`pw_reset_done`) |
 | `PASSWORD` → `DEVICE` | "Startup password removed" (`pw_removed_done`) |
 | `DEVICE` → `PLAIN`, `PASSWORD` → `PLAIN` | "Database encryption turned off" (`enc_off_done`) |
 
@@ -1165,6 +1277,8 @@ Message of a failure dialog:
 - `DatabaseUnavailable` of any other operation or screen (the frame could not clear its temporary files, an Erase aborted because a generation could not be deleted, the holder was no longer open): "The operation could not run right now. Nothing was changed. Try again." (`maintenance_unavailable`).
 - `Err(OutcomeUnknown)` of any operation: the dialog "Please check your data" (`outcome_unknown_title`) with `error_outcome_unknown` and "OK". It replaces the dialogs above, so `restore_error_unchanged` and `key_change_failed_title` never appear with it. The status stays `Finished` through the `Restart` that follows (same process), so the host shows the dialog once the shell or the screen that follows is composed; the user must not be led to erase anything because of it (after a password change the app may ask for the new password or the old one; the text says to try the new one first).
 - Anything else: the `AppError` text (section 11.13).
+
+The fingerprint-reset marker (section 2.4) is consumed by the host when it renders `Ok(KeyChanged(PASSWORD, PASSWORD))` and cleared by the host on every `Finished(KeyChange, Err(…))`, so it cannot leak into a later password change.
 
 Outcomes of operations started in `Ready` are shown by the host in the shell; outcomes of Start fresh, Erase and of restores started on a gate screen are shown by the host on that screen, or by the shell's host when the operation ended in `Ready` after a restart.
 
@@ -1179,7 +1293,7 @@ Outcomes of operations started in `Ready` are shown by the host in the shell; ou
 `SettingsViewModel` combines, without any database access:
 - `SettingsStore.settings` (screenshot protection, biometric lock, encrypt backups, the lock auto-off notice, the unlock backoff values);
 - the committed key mode (section 9.3);
-- biometric availability and `isDeviceSecure()` from `AppLockController`, refreshed on resume;
+- biometric availability and `isDeviceSecure()` from `AppLockController`, refreshed on resume, including the biometric slot state `LockAvailability.slot` (`NotUsed` outside `PASSWORD` mode or with the lock off, `Ready`, `Missing`, `Invalidated`) for the rows of section 9.4;
 - `DbMaintenance.status` for running operations, restore phases and outcomes (section 8.7).
 
 The open dialog is part of its UiState, saved as a String key like `ListDialog` (section 3.10); password texts never are (section 8.1).
@@ -1200,48 +1314,80 @@ The open dialog is part of its UiState, saved as a String key like `ListDialog` 
 | Gate state | Screen |
 |---|---|
 | `Starting` | Section 10.8 |
-| `NeedsPassword` | Password screen (section 10.2), Forgot password screen (section 10.3) |
-| `Locked` (any `resume`) | Lock screen (section 10.4) |
+| `NeedsPassword` (cold start only: the database is closed) | Password screen (section 10.2; startup, reminder and fingerprint-changed variants), Forgot password screen (section 10.3) |
+| `Locked` with `password == null` (any `resume`; in `PASSWORD` mode also `Locked(Open)` at cold start, DEC-65) | Lock screen (section 10.4) |
+| `Locked` with a `PasswordEntry` (after a return from background in `PASSWORD` mode: `resume` is `Ready`, `Corrupt` or a `Maintenance`; never `Open` or `KeyUnavailable`) | The same password screen and Forgot password screen as for `NeedsPassword`, fed from the `PasswordEntry` (sections 10.2, 10.3) |
 | `Opening` | Section 10.5 |
 | `Maintenance` | Overlay or screen (section 10.6) |
 | `Corrupt`, `KeyUnavailable` | Section 10.7 |
 
+Gate inputs of the fingerprint-first unlock (DEC-65, DEC-74). The gate screens read only the gate state. The values below are this document's contract with [architecture.md § SessionGate](architecture.md#sessiongate), which owns the states, fields, events and transitions; if a name differs there, architecture.md wins and this table follows it:
+
+| Field or event | Meaning for the UI |
+|---|---|
+| `Locked.password: PasswordEntry?` with `PasswordEntry(reason, fingerprintUsable, failures, retryAt, checking)` | Non-null: the password screen over a `Locked` gate (database open for `resume` `Ready`, closed for `Corrupt`). `failures` and `retryAt` feed the wrong-password text and the countdown, `checking` the busy state (section 10.2) |
+| `NeedsPassword.reason` and `PasswordEntry.reason: PasswordReason` (`None`, `Reminder`, `FingerprintChanged`) | Which reason line the password screen shows (section 10.2) |
+| `NeedsPassword.fingerprintUsable` and `PasswordEntry.fingerprintUsable: Boolean` | Shows "Use fingerprint" on the password screen, and nothing else. It is true only after the user chose "Use password" on a usable fingerprint route (button or prompt), so that the way back is offered; it is false in the reminder and fingerprint-changed variants and wherever no usable route existed. It does not decide the Forgot password screen (section 10.3) |
+| `AppLockController.lockRoute: StateFlow<UnlockRoute?>` and `AppLockController.usePassword()` | The lock screen shows "Use password" while `lockRoute` is `Slot`; the button calls `usePassword()` (section 10.4) |
+| `AppLockController.fingerprintUnlockAvailable(): Boolean` | Decides whether the Forgot password screen offers the fingerprint reset (section 10.3) |
+| `UseFingerprintChosen` (gate UI, "Use fingerprint") | `NeedsPassword` → `Locked(Open)` (architecture.md T51); `Locked` with a `PasswordEntry` → the same `Locked` without it (T52). Either way the automatic fingerprint prompt starts again (section 10.4) |
+| `PasswordSubmitted` (gate UI) | `NeedsPassword` → `Opening(viaPassword)` (T7); `Locked` with a `PasswordEntry` → check without reopening (T47) |
+
 ### 10.2 Password screen
 
-Shown in `NeedsPassword` and, busy, in `Opening(viaPassword = true)` (DEC-62).
+Shown in `NeedsPassword` (cold start, database closed), in `Locked` with a `PasswordEntry` (after a return from background, section 10.1) and, busy, in `Opening(viaPassword = true)` (DEC-62). The screen looks the same in all three; only the transition behind "Unlock" differs (section 10.1). In `PASSWORD` mode the gate asks for the startup password in these cases (rules: [security.md § 7](security.md#7-biometric-app-lock-dec-65); states and transitions: [architecture.md § Unlock routes](architecture.md#unlock-routes-q8)):
+- at cold start (`NeedsPassword`, T2 or T45), when fingerprint unlock is not available: the biometric lock is off, no usable strong biometric exists, or the biometric slot is missing or invalidated (DEC-62, DEC-65);
+- at cold start and on return from background, when the 14-day reminder is due (DEC-74; T2, T46);
+- on return from background with the lock on (`Locked` with a `PasswordEntry`, T46), when no usable strong biometric exists or the slot is missing or invalidated (DEC-65); the database stays open meanwhile. With the lock off nothing is asked on return (DEC-62);
+- whenever the user chooses "Use password" on the lock screen or on the fingerprint prompt (section 10.4): reason `None`, and "Use fingerprint" is offered so the user can go back.
+
+In `PASSWORD` mode with the lock on, a usable fingerprint and a valid slot, the fingerprint alone unlocks and the password is not asked (DEC-65), except when the 14-day reminder is due. A password entered at cold start does not stand in for the lock later: every return from background resolves the route again.
 
 | Element | Content |
 |---|---|
 | Title | "Enter your password" (`gate_password_title`) |
 | Body | "Doro Organizer is protected by a startup password." (`gate_password_body`) |
+| Reason line | By `reason` (section 10.1), directly below the body, one line in `bodyMedium` and `onSurfaceVariant` (it wraps at large font sizes): `None` shows nothing; `Reminder` shows "Your regular password check: enter it so you keep remembering it." (`gate_password_reminder`, DEC-74); `FingerprintChanged` shows "The fingerprints on this phone changed, so your password is needed." (`gate_password_fingerprint_changed`, DEC-65) |
 | Field | `PasswordField` (section 8.1) labelled "Password" (`password_label`), with show/hide; focused with the keyboard open when the screen appears; `ImeAction.Done` submits |
 | Primary button | Filled `Button` "Unlock" (`action_unlock`), full width, enabled while the field is not empty and no backoff runs |
-| Secondary | `TextButton` "Forgot password?" (`gate_forgot`) |
+| Secondary | `TextButton` "Use fingerprint" (`action_use_fingerprint`), shown only while `fingerprintUsable` (never in the reminder variant, DEC-74); then `TextButton` "Forgot password?" (`gate_forgot`), always shown |
 
-| State (from `NeedsPassword(failures, retryAt, couldNotOpen)`) | Shows |
+| State (from `NeedsPassword(failures, retryAt, couldNotOpen)` or `PasswordEntry(failures, retryAt, checking)`) | Shows |
 |---|---|
 | First attempt | No message |
 | After a wrong password | "Wrong password." (`password_wrong`) as the field's error text |
 | Backoff running (`retryAt` in the future) | Field and "Unlock" disabled; "Too many attempts. Try again in %1$s." (`password_throttled`) as the field's supporting text, with the remaining time as `m:ss`: `retryAt` minus the current `AppTime` reading, recomputed every second. `retryAt` and `AppTime.elapsedMillis()` share one clock base, which [security.md § 5.3](security.md#53-backoff-dec-62) and [architecture.md § Error model](architecture.md#error-model) fix; the screen never converts between bases. The text is not a live region; when the backoff starts, the screen announces it once through `Announcer`. "Forgot password?" stays enabled ([security.md § 5.3](security.md#53-backoff-dec-62)) |
-| `couldNotOpen` | Above the field, in `error` color: "Your password was accepted, but the database could not be opened. Enter it again to try again." (`gate_could_not_open`) |
-| Busy (`Opening(viaPassword)`) | Field empty and disabled; in place of the button a 24 dp `CircularProgressIndicator` with "Unlocking…" (`gate_unlocking`); "Forgot password?" disabled |
+| `couldNotOpen` (`NeedsPassword` only, T18) | Above the field, in `error` color: "Your password was accepted, but the database could not be opened. Enter it again to try again." (`gate_could_not_open`) |
+| Busy (`Opening(viaPassword)`, or `PasswordEntry.checking` while the database stays open after a return from background) | Field empty and disabled; in place of the button a 24 dp `CircularProgressIndicator` with "Unlocking…" (`gate_unlocking`); "Use fingerprint" and "Forgot password?" disabled |
 
-- Submit copies the text into a `CharArray`, clears the field and dispatches `PasswordSubmitted` (architecture.md T7; [security.md § 6.2](security.md#62-fields-and-state)).
-- Rotation and process death empty the field; the error, the backoff and the busy state come back from the gate state (`NeedsPassword(failures, retryAt, couldNotOpen)`, `Opening(viaPassword)`), which `SessionGate` fills from the persisted values. The screen reads nothing else (architecture.md § SessionGate, invariant 2).
+- Submit copies the text into a `CharArray`, clears the field and dispatches `PasswordSubmitted` (architecture.md T7 from `NeedsPassword`, T47 from `Locked` with a `PasswordEntry`; [security.md § 6.2](security.md#62-fields-and-state)).
+- "Use fingerprint" dispatches `UseFingerprintChosen`: from `NeedsPassword` the gate returns to `Locked(Open)` (T51), from a `Locked` password screen to the lock screen over the same resume (T52), and `AppLockController` shows the fingerprint prompt automatically (section 10.4). The button stays enabled while the password backoff runs, because the backoff limits password guesses only; the fingerprint has the system's own lockout.
+- In the reminder variant the fingerprint is deliberately not offered (DEC-74): `fingerprintUsable` is false there. "Forgot password?" on it leads to the Forgot password screen, which offers the fingerprint reset whenever `AppLockController.fingerprintUnlockAvailable()` is true, whatever `fingerprintUsable` says (section 10.3).
+- After a correct password the 14-day reminder restarts (DEC-74). When the lock is on and the slot is missing or invalidated, the shell then shows the fingerprint set-up offer (section 8.13).
+- Rotation and process death empty the field; the error, the backoff and the busy state come back from the gate state (`NeedsPassword(failures, retryAt, couldNotOpen)`, `PasswordEntry(failures, retryAt, checking)`, `Opening(viaPassword)`), which `SessionGate` fills from the persisted values. The screen reads nothing else (architecture.md § SessionGate, invariant 2).
 - The screen composes the maintenance status host (section 8.12): a failed erase returns the gate to `NeedsPassword`, and its "Erase failed" dialog appears here or on the Forgot password screen.
 
 ### 10.3 Forgot password screen (DEC-63)
 
-- Reached from "Forgot password?". The flag that selects it is a `rememberSaveable` of `GateScreen`, outside the per-state branches, so it survives the round trip `NeedsPassword` → `Maintenance(Erase)` → `Starting` → `NeedsPassword` of a failed erase (architecture.md T31d) and the user returns to this screen with the failure dialog. It holds no secret and is cleared when the gate reaches any state other than those. Back, or the navigation icon, returns to the password screen.
+- Reached from "Forgot password?" on every variant of the password screen (`NeedsPassword` and `Locked` with a `PasswordEntry`), the reminder variant included (DEC-74). The flag that selects it is a `rememberSaveable` of `GateScreen`, outside the per-state branches, so it survives the round trip `NeedsPassword` → `Maintenance(Erase)` → `Starting` → `NeedsPassword` of a failed erase (architecture.md T31d) and the user returns to this screen with the failure dialog. It holds no secret and is cleared when the gate reaches any state other than those. Back, or the navigation icon, returns to the password screen.
 - `TopAppBar`: `ic_arrow_back` "Back", title "Forgot password?" (`forgot_title`).
-- Body: "The password cannot be recovered or reset, and without it the data in this app cannot be opened.\n\nYou can erase all data and start over. Afterwards you can restore a backup from Settings; an encrypted backup needs the password it was made with." (`forgot_body`, §8).
-- A filled `Button` in `error` colors: "Erase all data and start over" (`action_erase_start_over`). It opens the typed confirmation of section 8.10, whose confirm button calls `DbMaintenance.erase()`. No password or biometric is asked (security.md § 5.4).
-- The screen composes the maintenance status host (section 8.12), which shows a failed erase.
+- The content depends on `AppLockController.fingerprintUnlockAvailable()`, evaluated when the screen opens and again before the fingerprint prompt ([architecture.md § Unlock routes](architecture.md#unlock-routes-q8)). It is independent of `fingerprintUsable`, of `reason` and of the 14-day reminder: a user on the reminder screen has forgotten the password and the fingerprint reset is exactly what DEC-74 and DEC-63 offer there, although the password screen itself does not offer "Use fingerprint" in that variant. The fingerprint reset part is shown only while the gate is `NeedsPassword` or `Locked` with resume `Ready` (the two origins `resetPasswordWithBiometric` accepts, [db-lifecycle.md § Fingerprint password reset](db-lifecycle.md#fingerprint-password-reset)); over `Locked(Corrupt)` or a `Locked(Maintenance)` no reset is offered, because the database cannot be checked or exported there, and the screen shows the "Not available" variant. The fingerprint reset comes first whenever it is available; the erase path is always available (DEC-63):
+
+| Element | Fingerprint unlock available | Not available |
+|---|---|---|
+| Body | "You can set a new startup password with your fingerprint. Your notes stay as they are." (`forgot_body_fingerprint`) | "The password cannot be recovered or reset, and without it the data in this app cannot be opened.\n\nYou can erase all data and start over. Afterwards you can restore a backup from Settings; an encrypted backup needs the password it was made with." (`forgot_body`, §8) |
+| First action | Filled `Button` "Set a new password with your fingerprint" (`action_reset_with_fingerprint`, verbatim DEC-63), full width: opens the dialog of section 8.15 | none |
+| Erase part | A heading "Or start over" (`forgot_erase_heading`, `titleMedium`, `heading()` semantics), the text "If you cannot use your fingerprint, erase all data and start over. Afterwards you can restore a backup from Settings; an encrypted backup needs the password it was made with." (`forgot_erase_body`), then an `OutlinedButton` with `error` content color "Erase all data and start over" (`action_erase_start_over`) | A filled `Button` in `error` colors "Erase all data and start over" (`action_erase_start_over`) |
+
+- "Erase all data and start over" opens the typed confirmation of section 8.10, whose confirm button calls `DbMaintenance.erase()`. No password or biometric is asked (security.md § 5.4). Both actions stay enabled while the password backoff runs.
+- The fingerprint reset asks for the fingerprint only, never for the old password (DEC-61, DEC-63). If the slot becomes unusable while the screen is shown (for example the prompt returned `Ok(null)` or the reset failed because the slot was invalidated), `fingerprintUnlockAvailable()` is evaluated again, returns false, and the screen switches to the "Not available" variant. The gate states carry no flag for this; the screen asks the controller.
+- The screen composes the maintenance status host (section 8.12), which shows a failed erase and a failed fingerprint reset.
 - After the erase the app shows the maintenance screen "Erasing all data…" and then lands in the first-run state: an empty, unencrypted database on the All tab, with Restore available in Settings.
+- After a fingerprint reset the app shows the maintenance screen "Updating encryption…" and continues as section 8.15 step 4 describes.
 
 ### 10.4 Lock screen
 
-Shown in `Locked`, whatever the `resume` state (DEC-65, DEC-66).
+Shown in `Locked` with `password == null`, whatever the `resume` state (DEC-65, DEC-66). A `Locked` with a `PasswordEntry` shows the password screen of section 10.2 instead.
 
 | Element | Content |
 |---|---|
@@ -1249,9 +1395,12 @@ Shown in `Locked`, whatever the `resume` state (DEC-65, DEC-66).
 | Title | "Doro Organizer" (`app_name`) |
 | Body | "Doro Organizer is locked." (`gate_locked_body`) |
 | Primary button | Filled `Button` "Unlock" (`action_unlock`): asks `AppLockController` to prompt now |
-| Error text | Below the button, in `error` color with `liveRegion = Polite`, only for the codes that [security.md § 7.4](security.md#74-unlock-route-and-error-mapping) shows: the system's `errString` (already localized by the system) |
+| Secondary | `TextButton` "Use password" (`action_use_password`), shown only while `AppLockController.lockRoute` is `Slot` (the screen collects the flow): never in `PLAIN` or `DEVICE` mode and never over `Locked(KeyUnavailable)` or `Locked(Corrupt)`, whose route is `Biometric`. It calls `AppLockController.usePassword()`, which raises `PasswordRequired` with reason `None` and `fingerprintUsable = true`: the password screen (section 10.2) replaces the lock screen without a prompt (`NeedsPassword` over `Locked(Open)`, T45; a `PasswordEntry` over `Locked(Ready)`, T46) |
+| Error text | Below the buttons, in `error` color with `liveRegion = Polite`, only for the codes that [security.md § 7.4](security.md#74-unlock-route-and-error-mapping) shows: the system's `errString` (already localized by the system) |
 
 - The automatic prompt on entering `Locked` and on returning to the foreground is started by `AppLockController` from the activity's `ON_RESUME`, never from composition (security.md § 7.3). The screen only offers "Unlock" for a manual retry.
+- In `PASSWORD` mode the lock screen also appears at cold start, before the database opens: the fingerprint unwraps the database key through the biometric slot, and a successful prompt goes on to `Opening` (DEC-60, DEC-65). The prompt's negative button "Use password" (section 8.11) does what the screen's "Use password" button does.
+- In `PASSWORD` mode, when the fingerprint cannot be used at prompt time (the cases that start the device-credential fallback in `PLAIN` and `DEVICE` mode, a slot found invalidated or missing, or the 14-day reminder due), `AppLockController` raises `PasswordRequired` at once and the password screen replaces the lock screen ([architecture.md § AppLockController and BiometricGateway](architecture.md#applockcontroller-and-biometricgateway), [security.md § 7.4](security.md#74-unlock-route-and-error-mapping)), with the `FingerprintChanged` reason line when the slot was invalidated and the `Reminder` line when the reminder is due. The device credential is never offered in `PASSWORD` mode (DEC-65).
 - The biometric prompt, the device-credential prompt and the API 28–29 confirm-credential screen are system UI with the titles of section 8.11.
 
 ### 10.5 Opening
@@ -1267,7 +1416,7 @@ Shown in `Locked`, whatever the `resume` state (DEC-65, DEC-66).
 | `Maintenance` origin | Rendering |
 |---|---|
 | `Ready` | The shell stays composed and the overlay covers the whole window (architecture.md § Rendering) |
-| `Corrupt`, `KeyUnavailable`, `NeedsPassword` | The same content as a standalone screen |
+| `Corrupt`, `KeyUnavailable`, `NeedsPassword` (an Erase, or the fingerprint password reset of section 8.15, started from the Forgot password screen) | The same content as a standalone screen |
 
 - The overlay is opaque (`surface` color), so no note is visible while an operation runs, also when the app is backgrounded during it ([security.md § 7.7](security.md#77-re-lock-rules)). It consumes all pointer input and Back (`BackHandler(enabled = true)`), and it has no cancel button: operations finish or roll back (DEC-87).
 - Blocking pointer input is not enough: the shell stays composed under the overlay, and accessibility services and a hardware keyboard bypass pointer input, so TalkBack or Switch Access could still read note text and start a write while `DatabaseHolder` is in exclusive mode (`DatabaseUnavailable` errors under the overlay). While the gate is `Maintenance` with origin `Ready`, `DoroRoot` therefore applies `Modifier.clearAndSetSemantics {}` and `Modifier.focusProperties { canFocus = false }` to the container of `MainContent()` (a modifier on a container that is always present, never a wrapper that appears and disappears, so the single call site of [architecture.md § Rendering](architecture.md#rendering) keeps all state). The overlay root is `Modifier.fillMaxSize().focusRequester(r).focusable().onPreviewKeyEvent { true }` with `LaunchedEffect(Unit) { r.requestFocus() }`, and it sets `paneTitle` to the operation text. Verify at setup: that `focusProperties` on a container removes keyboard focus from every descendant in the pinned Compose, with TalkBack and a hardware keyboard (testing.md M-07).
@@ -1293,7 +1442,7 @@ Shown in `Locked`, whatever the `resume` state (DEC-65, DEC-66).
 | Primary | Filled `Button` "Restore from backup" (`restore_from_backup`) | same |
 | Secondary | `OutlinedButton` "Start fresh" (`action_start_fresh`), `error` content color | same |
 
-- These screens appear only after the authentication the gate requires: the biometric lock when it is on (architecture.md T5, T13, T17, and T23 with `lockPending`; T34 locks them again after a return from the background), and in `PASSWORD` mode the startup password, except when the key state cannot be read (T6) (DEC-85; [db-lifecycle.md § The two screens](db-lifecycle.md#the-two-screens)).
+- These screens appear only after the authentication the gate requires: the biometric lock when it is on (architecture.md T5, T13, T17, and T23 with `lockPending`; T34 locks them again after a return from the background), and in `PASSWORD` mode the startup password or, with the lock on, the fingerprint through the biometric slot (DEC-65), except when the key state cannot be read (T6) (DEC-85; [db-lifecycle.md § The two screens](db-lifecycle.md#the-two-screens)).
 - Both screens compose the maintenance status host (section 8.12), so restore dialogs and failure dialogs appear over them; the screen stays in place until the user confirms ([db-lifecycle.md § Corruption and KeyUnavailable recovery](db-lifecycle.md#corruption-and-keyunavailable-recovery)).
 - "Restore from backup" runs the restore of section 9.2 from this screen: the same picker, `DbMaintenance.restore(uri, origin)` with the screen's own state (`Corrupt` or `KeyUnavailable`) and the dialogs of section 8.7 (from Corrupt in `PASSWORD` mode including the startup password question), then the maintenance screen, then a fresh start of the gate. The file is never deleted unless the user confirms a restore or "Start fresh" (DEC-85, DEC-86).
 - "Start fresh" opens the confirmation of section 8.9, whose confirm button calls `DbMaintenance.startFresh(origin)` with the screen's own state (`Corrupt` or `KeyUnavailable`); the maintenance screen then shows "Starting fresh…".
@@ -1527,16 +1676,19 @@ In `picker_entity_meta` the separator " · " is part of the resource; `%2$s` is 
 | `startup_password_title` | Startup password | Settings row | DEC-60 |
 | `startup_password_off` | Off | Settings row | design |
 | `startup_password_change` | Change startup password | Settings row | §8 |
-| `startup_password_on` | Asked every time the app starts | Settings row | DEC-62 |
+| `startup_password_on` | Asked every time the app starts | Settings row, `PASSWORD` mode, biometric lock off | DEC-62 |
+| `startup_password_on_fingerprint` | Asked when your fingerprint cannot be used, and every 14 days | Settings row, `PASSWORD` mode, biometric lock on | DEC-65, DEC-74 |
 | `startup_password_remove` | Remove startup password | Settings row | DEC-61 |
 | `biometric_title` | Biometric lock | Settings row | §8 |
-| `biometric_summary` | Ask for your fingerprint or face when the app opens or comes back from the background | Settings row | §11 |
+| `biometric_summary` | Ask for your fingerprint or face when the app opens or comes back from the background | Settings row, `PLAIN` and `DEVICE` mode | §11 |
+| `biometric_summary_password` | Open the app with your fingerprint instead of the startup password. The password is still asked every 14 days and whenever the fingerprint cannot be used. | Settings row, `PASSWORD` mode | DEC-65, DEC-74 |
+| `biometric_slot_missing` | Fingerprint unlock is not set up, so the app asks for your password. | Settings row, `PASSWORD` mode, lock on, slot missing or invalidated | DEC-65 |
 | `biometric_none_enrolled` | No fingerprint or face is set up for unlocking. | Settings row, `NONE_ENROLLED` | DEC-65 |
 | `action_enroll` | Set up | Settings row, `NONE_ENROLLED` | DEC-65 |
 | `biometric_recents_hint` | On this Android version the recent apps screen can still show the app's last screen. Turn on screenshot protection to hide it. | Settings row, API 28–32 | security.md § 12 |
 | `encryption_recents_hint` | On this Android version the recent apps screen can still show the app's last screen, even though the database is encrypted. Turn on screenshot protection to hide it. | Settings encryption row, API 28–32, encrypted, lock off, screenshot protection off | security.md § 12 |
 | `screenshot_title` | Screenshot protection | Settings row | §8 |
-| `screenshot_summary` | Blocks screenshots and screen recording, shows a blank screen when sharing the screen, hides the app's content in recent apps, and asks the keyboard not to learn what you type | Settings row | DEC-67, DEC-71 |
+| `screenshot_summary` | Blocks screenshots and screen recording, shows a blank screen when sharing the screen, and hides the app's content in recent apps | Settings row | DEC-67 (keyboard learning is no longer part of it, DEC-71) |
 | `encrypt_backups_title` | Encrypt backups | Settings row | §8 |
 | `encrypt_backups_summary` | Protect backup files with a separate password | Settings row | DEC-83 |
 | `encrypt_backups_forced` | Always on while the database is encrypted | Settings row | DEC-83 |
@@ -1615,10 +1767,15 @@ In `picker_entity_meta` the separator " · " is part of the resource; `%2$s` is 
 | `enc_on_body` | Your notes, people and projects will be encrypted with a key kept in this device's secure hardware. Backups and shared copies made earlier are not changed. You can add a startup password later. | Key-change dialog | security.md § 4 |
 | `action_encrypt` | Encrypt | Key-change dialog | design |
 | `pw_set_title` | Set a startup password | Key-change dialog | DEC-62 |
-| `pw_set_body` | You will enter this password every time the app starts. It cannot be recovered: if you forget it, the only way back in is to erase all data. | Key-change dialogs | §8, DEC-63 |
+| `pw_set_body` | You will enter this password when the app starts, unless fingerprint unlock is on. It cannot be recovered: if you forget it and cannot use your fingerprint, the only way back in is to erase all data. | Key-change dialogs, fingerprint reset dialog | §8, DEC-63, DEC-65 |
+| `pw_body_fingerprint_again` | Afterwards, touch the fingerprint sensor once to keep fingerprint unlock. | Key-change dialogs that end in `PASSWORD`, biometric lock on | DEC-61, DEC-65 |
+| `pw_remove_body_lock` | The biometric lock stays on. Without a usable fingerprint, the phone's screen lock is asked instead. | Remove password and turn off encryption from `PASSWORD`, biometric lock on | DEC-65 (Q7) |
+| `pw_reset_title` | Set a new password | Fingerprint password reset dialog | DEC-63 |
+| `pw_reset_body` | Choose a new startup password. It replaces the old one; your notes stay as they are. After you confirm, touch the fingerprint sensor. | Fingerprint password reset dialog | DEC-63 |
+| `pw_reset_done` | New startup password set | Snackbar after the fingerprint reset | DEC-63 |
 | `pw_set_body_plain` | This also encrypts the database. Backups and shared copies made earlier are not changed. | Key-change dialog from `PLAIN` | security.md § 4 |
 | `pw_backup_offer_title` | Back up first? | Backup offer before a first startup password | DEC-73 |
-| `pw_backup_offer_body` | If you ever forget the startup password, a backup is the only way back to your notes. Make one now? | Backup offer | DEC-73 |
+| `pw_backup_offer_body` | If you ever forget the startup password and cannot use your fingerprint, a backup is the only way back to your notes. Make one now? | Backup offer | DEC-73, DEC-63 |
 | `action_backup_now` | Back up now | Backup offer | DEC-73 |
 | `action_skip` | Skip | Backup offer | DEC-73 |
 | `action_set_password` | Set password | Key-change dialog | design |
@@ -1641,6 +1798,17 @@ In `picker_entity_meta` the separator " · " is part of the resource; `%2$s` is 
 | `biometric_unlock_title` | Unlock Doro Organizer | Unlock prompts | DEC-65 |
 | `biometric_enable_title` | Turn on biometric lock | Prompt when turning the lock on | DEC-65 |
 | `biometric_disable_title` | Turn off biometric lock | Prompt when turning the lock off | DEC-65 |
+| `biometric_slot_title` | Set up fingerprint unlock | Prompt that creates the biometric slot (set-up offer, Settings "Set up") | DEC-65 |
+| `biometric_reset_title` | Confirm with your fingerprint | Prompt of the fingerprint password reset | DEC-63 |
+| `action_use_password` | Use password | Negative button of the `PASSWORD`-mode unlock prompt and of the `PASSWORD`-mode turn-off prompt; lock screen button | verbatim DEC-65 |
+| `slot_offer_title` | Set up fingerprint unlock again? | Fingerprint set-up offer | DEC-65 |
+| `slot_offer_body_invalidated` | The fingerprints on this phone changed, so fingerprint unlock was switched off to keep others out. Touch the sensor once to switch it on again. | Set-up offer, slot invalidated | DEC-65 |
+| `slot_offer_body_missing` | Fingerprint unlock is not set up for your current password. Touch the sensor once to set it up, so the app opens with your fingerprint again. | Set-up offer, slot missing | DEC-65 |
+| `action_not_now` | Not now | Set-up offer | design |
+| `action_slot_setup` | Set up | Set-up offer; Settings biometric row, slot missing | DEC-65 |
+| `slot_created` | Fingerprint unlock is on | Snackbar after the slot was created | design |
+| `lock_off_password_title` | Turn off biometric lock? | Turn-off-with-password dialog | DEC-65 |
+| `lock_off_password_body` | Enter your startup password. Afterwards the app asks for it every time it starts, and no longer when it comes back from the background. | Turn-off-with-password dialog | DEC-65, DEC-62 |
 
 ### 11.12 Gate screens and notices
 
@@ -1649,12 +1817,19 @@ In `picker_entity_meta` the separator " · " is part of the resource; `%2$s` is 
 | `gate_password_title` | Enter your password | Password screen | DEC-62 |
 | `gate_password_body` | Doro Organizer is protected by a startup password. | Password screen | DEC-62 |
 | `action_unlock` | Unlock | Password and lock screens | DEC-65 |
-| `gate_forgot` | Forgot password? | Password screen | verbatim DEC-63 |
+| `gate_forgot` | Forgot password? | Password screen, every variant | verbatim DEC-63 |
+| `action_use_fingerprint` | Use fingerprint | Password screen, while `fingerprintUsable` (the user left a usable fingerprint route with "Use password"; never in the reminder variant) | DEC-65 |
+| `gate_password_reminder` | Your regular password check: enter it so you keep remembering it. | Password screen, reminder variant | DEC-74 |
+| `gate_password_fingerprint_changed` | The fingerprints on this phone changed, so your password is needed. | Password screen, slot invalidated | DEC-65 |
+| `forgot_body_fingerprint` | You can set a new startup password with your fingerprint. Your notes stay as they are. | Forgot password screen, fingerprint unlock available | DEC-63 |
+| `action_reset_with_fingerprint` | Set a new password with your fingerprint | Forgot password screen | verbatim DEC-63 |
+| `forgot_erase_heading` | Or start over | Forgot password screen, fingerprint unlock available | design |
+| `forgot_erase_body` | If you cannot use your fingerprint, erase all data and start over. Afterwards you can restore a backup from Settings; an encrypted backup needs the password it was made with. | Forgot password screen, fingerprint unlock available | §8, DEC-63 |
 | `gate_could_not_open` | Your password was accepted, but the database could not be opened. Enter it again to try again. | Password screen, `couldNotOpen` | architecture.md T18 |
 | `gate_unlocking` | Unlocking… | Password screen, busy | design |
 | `forgot_title` | Forgot password? | Forgot password screen title | verbatim DEC-63 |
-| `forgot_body` | The password cannot be recovered or reset, and without it the data in this app cannot be opened.\n\nYou can erase all data and start over. Afterwards you can restore a backup from Settings; an encrypted backup needs the password it was made with. | Forgot password screen | §8, DEC-63 |
-| `action_erase_start_over` | Erase all data and start over | Forgot password screen | verbatim DEC-63 |
+| `forgot_body` | The password cannot be recovered or reset, and without it the data in this app cannot be opened.\n\nYou can erase all data and start over. Afterwards you can restore a backup from Settings; an encrypted backup needs the password it was made with. | Forgot password screen, fingerprint unlock not available | §8, DEC-63 |
+| `action_erase_start_over` | Erase all data and start over | Forgot password screen, both variants | verbatim DEC-63 |
 | `erase_title` | Erase all data? | Erase confirmation | DEC-63 |
 | `erase_body` | All notes, people and projects, the encryption key and the security settings will be deleted from this device. This cannot be undone. | Erase confirmation | DEC-63 |
 | `erase_prompt` | Type %1$s to confirm | Erase confirmation field label | DEC-63 |
@@ -1757,6 +1932,11 @@ TalkBack visits the row node first and then its checkbox, so the checkbox is alw
 | Settings switches | `Role.Switch` on the whole row; the headline is the name |
 | Backup and restore rows | Accessible names "Backup all data" and "Restore from backup" (verbatim §4) |
 | Password fields | `OutlinedSecureTextField` exposes `SemanticsProperties.Password` (testing.md L-25); the show/hide button has its own description |
+| "Use password" (lock screen), "Use fingerprint" (password screen) | `TextButton`s whose visible label is the accessible name; at least 48 dp high. They follow the primary "Unlock" button in reading and focus order |
+| Password screen reason line | Plain text in reading order between the body and the field; not a live region, because it is fixed while the screen is shown. The field takes input focus when the screen appears, so a TalkBack user might skip the line: the screen therefore announces it once through `Announcer` when it appears with a `reason` other than `None` (section 12.3) |
+| Forgot password screen | "Set a new password with your fingerprint" is a `Button` (label = name); "Or start over" is a heading, so TalkBack users can jump to the erase path |
+| Settings biometric row, "Set up" (slot missing) | Its own focusable `TextButton` inside the row's `supportingContent`, like the enroll button; the switch keeps the row's `toggleable` node |
+| Fingerprint set-up offer | `AlertDialog` defaults: title is a heading, "Not now" and "Set up" are buttons; while the system prompt is open both are disabled and expose the disabled state |
 | Screens | Root `paneTitle` = screen title (section 2.2); dialog titles are headings (M3 default) |
 
 ### 12.3 Announcements
@@ -1769,6 +1949,7 @@ TalkBack visits the row node first and then its checkbox, so the checkbox is alw
 | Field errors (passwords, wrong password) | Supporting text with `liveRegion = Polite` |
 | Backoff starts | One `Announcer` call with the first countdown text; the per-second countdown is not a live region |
 | Lock screen error | Error text with `liveRegion = Polite` |
+| Password screen with a reason line (reminder, fingerprints changed) | One `Announcer` call with the reason text when the screen appears; not repeated after rotation (`rememberSaveable` flag) |
 | Maintenance operation | Operation text with `liveRegion = Polite` |
 | Snackbars | M3 `Snackbar` semantics. Verify at setup: TalkBack reads a snackbar without moving focus |
 
@@ -1805,7 +1986,7 @@ Layouts hold at 200 % font scale, including Android 14+ non-linear scaling (DEC-
 ### 12.7 Focus and keyboard
 
 - Default Compose focus order (reading order). With a hardware keyboard, Tab and arrow keys reach every control; Enter activates rows and buttons; Space toggles checkboxes and switches.
-- Automatic focus only in three places: the content field of a new note (section 6.3), the password field (section 10.2) and the search field when the search bar opens (section 3.3).
+- Automatic focus only in three places: the content field of a new note (section 6.3), the password field (section 10.2, every variant, also when the screen is reached through "Use password") and the search field when the search bar opens (section 3.3).
 
 ### 12.8 Test tags
 
@@ -1823,6 +2004,9 @@ UI tests find nodes by these `Modifier.testTag` values; texts are asserted as li
 | `editor_content`, `editor_people`, `editor_projects`, `editor_date`, `editor_done` | Editor parts |
 | `picker_search`, `picker_create`, `picker_row_<id>`, `picker_new_<key>` | `EntityPicker` parts |
 | `gate_password_field`, `gate_unlock`, `gate_forgot` | Password and lock screens |
+| `gate_use_password`, `gate_use_fingerprint`, `gate_password_reason` | "Use password" on the lock screen, "Use fingerprint" and the reason line on the password screen |
+| `forgot_reset_fingerprint`, `forgot_erase` | The two actions of the Forgot password screen |
+| `slot_offer_setup`, `slot_offer_dismiss`, `settings_slot_setup` | "Set up" and "Not now" of the set-up offer (section 8.13); "Set up" in the Settings biometric row (section 9.4) |
 | `maintenance_overlay` | Maintenance overlay or screen |
 
 ## 13. Visual system

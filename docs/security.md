@@ -3,7 +3,7 @@
 Purpose: the threat model and the binding rules for keys, passwords, the app lock, screen and platform hardening, and log hygiene.
 Related: [decisions.md](decisions.md) · [architecture.md](architecture.md) · [db-lifecycle.md](db-lifecycle.md) · [data-layer.md](data-layer.md) · [ui.md](ui.md) · [testing.md](testing.md) · [spec](../stakeholder-notepad-spec.md)
 
-Ownership: this file owns the key model, `KeyVault`, the password and unlock flows, the biometric lock logic, window protection, the manifest and backup-rule XML, offline enforcement, the logging policy, secrets in memory and keyboard/autofill rules. File layout, commit, restore and key-change mechanics are in [db-lifecycle.md](db-lifecycle.md); gate states and transitions are in [architecture.md](architecture.md) § SessionGate (T1–T35); screens and strings are in [ui.md](ui.md).
+Ownership: this file owns the key model (including the biometric slot: key parameters, `CryptoObject` use, invalidation handling and re-creation), the key-state file fields and format version, `KeyVault`, the password and unlock flows, the unlock-method rules per mode, the 14-day password reminder and its timestamp, the fingerprint password reset policy, the biometric lock logic, window protection, the manifest and backup-rule XML, offline enforcement, the logging policy, secrets in memory and keyboard/autofill rules. File layout, key-state commits (including slot-only rewrites), restore, erase and key-change mechanics are in [db-lifecycle.md](db-lifecycle.md); gate states, events and transitions are in [architecture.md](architecture.md) § SessionGate; screens and strings are in [ui.md](ui.md).
 
 ## 1. Threat model
 
@@ -12,8 +12,10 @@ Ownership: this file owns the key model, `KeyVault`, the password and unlock flo
 |---|---|
 | Notes, person/project names, dates, links | Live database `databases/doro-<generation>.db` and its `-wal` (DEC-80, DEC-89); staging files in `noBackupFilesDir` |
 | Exported backups | User-chosen SAF targets; share copies in `cacheDir/share/` until the next backup, the next cold start or the one-hour sweep while the app runs ([db-lifecycle.md](db-lifecycle.md#share-file-lifetime), DEC-83) |
-| DEK and its wrapped form | Process memory as the 67-byte raw key while the database is open (section 6.4); `noBackupFilesDir/db-state.json` (section 3.5) |
+| DEK and its wrapped forms | Process memory as the 67-byte raw key while the database is open (section 6.4); `noBackupFilesDir/db-state.json` (section 3.5): wrapped by the KEK and, in `PASSWORD` mode with fingerprint unlock, also by the biometric key (`bioSlot`, section 3.7) |
 | Keystore KEK | AndroidKeyStore (TEE or StrongBox); never in the app process |
+| Biometric key `doro_bio_v1` | AndroidKeyStore (TEE-backed, never StrongBox, section 3.7.1); usable only for one operation after a strong biometric authentication; never in the app process (section 3.7) |
+| Password-reminder timestamp | `SettingsStore` `security.password_verified_at` (section 5.6); not secret |
 | Database and backup passwords | Process memory for one operation (section 6) |
 | Screen content | The window, the Recents thumbnail, screenshots, screen recordings, the platform's content capture |
 | UI state | `SavedStateHandle` holds drafts, filters and search text (DEC-28, DEC-37); `SettingsStore` holds no user text |
@@ -21,9 +23,9 @@ Ownership: this file owns the key model, `KeyVault`, the password and unlock flo
 ### 1.2 Adversaries in scope
 | Adversary | Can | Controls |
 |---|---|---|
-| A1 Person holding the unlocked phone | Open the app, Recents and Settings; take screenshots; change the system clock | Biometric lock (DEC-65), startup password (DEC-62, backoff on a time base the clock cannot move, section 5.3), `FLAG_SECURE` (DEC-67), Recents protection and data-free gate screens (DEC-66) |
+| A1 Person holding the unlocked phone | Open the app, Recents and Settings; take screenshots; change the system clock | Biometric lock (DEC-65); in `PASSWORD` mode the fingerprint opens the database only through the enrollment-bound biometric slot, so a finger added later does not work (section 3.7); startup password (DEC-62, backoff on a time base the clock cannot move, section 5.3), `FLAG_SECURE` (DEC-67), Recents protection and data-free gate screens (DEC-66) |
 | A2 Holder of a copied backup file | Guess passwords offline without limit | Backup password and SQLCipher 4 KDF (DEC-83), plaintext-export warning, password policy (DEC-64) |
-| A3 Someone extracting app files from a lost device | Read `databases/`, `files/`, `cache/` and `noBackupFilesDir` without running the app, including an undeleted share copy (plaintext in `PLAIN` mode, offline-attackable in the other modes) | `DEVICE`/`PASSWORD`: the DEK unwraps only in this device's Keystore; `PASSWORD` also needs the password; file-based encryption (§11 Device Assumptions); no cloud or D2D copies (DEC-69); share copies deleted on the triggers of DEC-83 and after a committed key change (section 4 step 5) |
+| A3 Someone extracting app files from a lost device | Read `databases/`, `files/`, `cache/` and `noBackupFilesDir` without running the app, including an undeleted share copy (plaintext in `PLAIN` mode, offline-attackable in the other modes) | `DEVICE`/`PASSWORD`: the DEK unwraps only in this device's Keystore; `PASSWORD` also needs the password, or a strong biometric authentication on this device for the biometric slot (section 3.7); file-based encryption (§11 Device Assumptions); no cloud or D2D copies (DEC-69); share copies deleted on the triggers of DEC-83 and after a committed key change (section 4 step 5) |
 | A4 Other apps on the device | Send intents, request URIs, draw overlays, hijack tasks, act as keyboard or autofill service | One exported activity that ignores its launch intent, private FileProvider (DEC-68), overlay hiding (section 9.4), keyboard and autofill rules (DEC-71) |
 | A5 Screen capture | Screenshots, recording, casting, Recents thumbnails, system content capture | `FLAG_SECURE` (DEC-67), `setRecentsScreenshotEnabled(false)` (DEC-66), content-capture opt-out (section 8) |
 
@@ -46,13 +48,14 @@ All settings are off at first run (§11 Initial State). `SettingsStore` values a
 | Setting | Default | Stored where | Effect | DEC |
 |---|---|---|---|---|
 | Database encryption | off | Key-state file `slot.mode` (`PLAIN`, `DEVICE`, `PASSWORD`); never in `SettingsStore`. Exposed to the UI as `DbMaintenance.keyMode` ([db-lifecycle.md](db-lifecycle.md#interface-and-status)) | `DEVICE`/`PASSWORD`: SQLCipher file keyed by a random DEK (section 3) | DEC-60, DEC-61 |
-| Startup password | off | Key-state file (`slot.mode = PASSWORD`, `slot.kdf`); the password itself is never stored | Asked at every cold start before the database opens (section 5) | DEC-62, DEC-64 |
-| Biometric lock | off | `SettingsStore` `security.app_lock` | Lock at cold start and on return from background (section 7) | DEC-65, DEC-66 |
-| Screenshot protection | off | `SettingsStore` `security.screenshot_protection` | `FLAG_SECURE` on the window (section 8); keyboard-learning opt-out (section 11) | DEC-67, DEC-71 |
+| Startup password | off | Key-state file (`slot.mode = PASSWORD`, `slot.kdf`); the password itself is never stored | Asked before the database opens at every cold start when fingerprint unlock is not available; with the biometric lock on and a usable strong biometric the fingerprint replaces it, except when the 14-day reminder is due (sections 5.1, 5.6) | DEC-62, DEC-64, DEC-74 |
+| Biometric lock | off | `SettingsStore` `security.app_lock`; in `PASSWORD` mode also the biometric slot (`bioSlot` in the key-state file and the Keystore key `doro_bio_v1`, section 3.7) | Lock at cold start and on return from background (section 7). `PLAIN`/`DEVICE`: a strong-biometric prompt without a `CryptoObject`, with the device-credential fallback (Q7). `PASSWORD`: the fingerprint unlocks the database key through the biometric slot; without a usable strong biometric the startup password alone, also on return from background (sections 5.1, 5.5) | DEC-60, DEC-65, DEC-66 |
+| Screenshot protection | off | `SettingsStore` `security.screenshot_protection` | `FLAG_SECURE` on the window (section 8). It no longer affects the keyboard: section 11 always opts out of keyboard learning (DEC-71) | DEC-67 |
+| Password reminder (not a setting) | always active | `SettingsStore` `security.password_verified_at`, written by `KeyVault` only | `PASSWORD` mode with fingerprint unlock: once the startup password has not been entered successfully for 14 days, the next unlock asks for it (section 5.6) | DEC-74 |
 | Encrypt backups | off | `SettingsStore` `security.encrypt_backups` | `PLAIN` mode: exports ask for a backup password. `DEVICE`/`PASSWORD` exports always do, whatever this value | DEC-83 |
 
 - Mode mapping: encryption off = `PLAIN`; on without a password = `DEVICE`; on with a password = `PASSWORD`. A startup password without encryption does not exist.
-- The six security members of `SettingsStore` ([architecture.md](architecture.md) § Dependency injection) and their DataStore keys:
+- The seven security members of `SettingsStore` ([architecture.md](architecture.md) § Dependency injection) and their DataStore keys:
 
 | `Settings` property | DataStore key | Type | Default | Written by |
 |---|---|---|---|---|
@@ -62,9 +65,10 @@ All settings are off at first run (§11 Initial State). `SettingsStore` values a
 | `unlockFailures` | `security.unlock_failures` | Int | 0 | `KeyVault` only (section 5.3) |
 | `unlockRetryAtElapsedMs` | `security.unlock_retry_at` | Long, `AppTime.elapsedMillis()` base | 0 | `KeyVault` only (section 5.3) |
 | `lockAutoOffNotice` | `security.lock_auto_off_notice` | Boolean | false | `AppLockController` (set), the shell notice (clear) |
+| `passwordVerifiedAt` | `security.password_verified_at` | Long, `AppTime.nowMillis()` base (epoch ms, UTC) | 0 (reminder due) | `KeyVault` only (section 5.6) |
 
-- `SettingsStore` never holds user text, secrets or URIs. Backups never carry these settings and restore never changes them (DEC-84). Erase resets all six (section 5.4).
-- A corrupt preferences file is replaced with defaults ([architecture.md](architecture.md) § Dependency injection), which turns the lock and screenshot protection off and resets the backoff; accepted (section 12).
+- `SettingsStore` never holds user text, secrets or URIs. Backups never carry these settings and restore never changes them (DEC-84). Erase resets all seven (section 5.4).
+- A corrupt preferences file is replaced with defaults ([architecture.md](architecture.md) § Dependency injection), which turns the lock and screenshot protection off, resets the backoff and loses the reminder timestamp (the reminder is then due, which only matters once the lock is on again); a biometric slot left behind by the lock turning off is removed after the next open (section 3.7.5); accepted (section 12).
 
 ## 3. Key model (DEC-60)
 
@@ -76,16 +80,19 @@ Decided by the owner (Q1, 2026-11-19): random DEK protected by the Keystore, opt
 | DEK | 32 bytes from `SecureRandom()` (default instance, never seeded). A new DEK for every key change (DEC-61); none in `PLAIN` |
 | Keystore KEK | AndroidKeyStore AES-256 (`setKeySize(256)`; the default is 128), GCM, no padding, alias `doro_kek_v1`, non-exportable, no user-authentication flags, no `setUnlockedDeviceRequired`, StrongBox when available |
 | Password KEK | PBKDF2-HMAC-SHA256 over UTF-8(NFC(password)), 16-byte random salt, ≥ 600,000 iterations (section 3.3), 32-byte output. Never stored |
-| Wrap | AES/GCM/NoPadding, 12-byte IV, 128-bit tag. AAD (ASCII), outer layer: `DEVICE` = `doro.kek.v1:DEVICE`; `PASSWORD` = `doro.kek.v1:PASSWORD:PBKDF2-HMAC-SHA256:<iterations>:<salt base64>:<innerIv base64>`. Inner layer: `doro.pw.v1`. The base64 parts are re-encoded from the decoded bytes with the encoder of section 3.5, never taken from the file text |
+| Biometric key | AndroidKeyStore AES-256 GCM, no padding, alias `doro_bio_v1`, non-exportable, user authentication required for every use with `BIOMETRIC_STRONG` only, invalidated by biometric enrollment changes, TEE-backed and never StrongBox (section 3.7.1). Normally exists only while a biometric slot exists (`PASSWORD` mode with the lock on); an unused key left by a cancelled arming or a crash wraps no committed DEK and is deleted by the next arming, removal, new-DEK commit or Erase (section 3.7.5) |
+| Wrap | AES/GCM/NoPadding, 12-byte IV, 128-bit tag. AAD (ASCII), outer layer: `DEVICE` = `doro.kek.v1:DEVICE`; `PASSWORD` = `doro.kek.v1:PASSWORD:PBKDF2-HMAC-SHA256:<iterations>:<salt base64>:<innerIv base64>`. Inner layer: `doro.pw.v1`. Biometric slot: `doro.bio.v1:<slot.outerIv base64>` (section 3.7.2). The base64 parts are re-encoded from the decoded bytes with the encoder of section 3.5, never taken from the file text |
 | `DEVICE` slot | `wrappedDek` = GCM(KEK, DEK): 48 bytes |
 | `PASSWORD` slot | inner = GCM(password KEK, DEK): 48 bytes; `wrappedDek` = GCM(KEK, inner): 64 bytes |
+| Biometric slot (`bioSlot`) | `PASSWORD` mode with the biometric lock on: `wrappedDek` = GCM(biometric key, DEK): 48 bytes, with a Keystore-chosen 12-byte IV. A second, independent wrap of the same DEK; the password slot stays unchanged and works unless its KEK fails (section 3.7.3, `kekBroken`) |
 | Live database | SQLCipher 4 keyed with the raw key `x'<64 hex>'` (no per-connection KDF): AES-256-CBC, HMAC-SHA512 per page, 4096-byte pages. `PLAIN`: key `ByteArray(0)` on the same engine (DEC-08) |
 | Backup file | SQLCipher 4 passphrase mode: PBKDF2-HMAC-SHA512, 256,000 iterations, per-file salt; passphrase = UTF-8(NFC(backup password)) (DEC-83) |
 
 - No GCM tag covers the inner IV, the salt or the iteration count, so the outer AAD of a `PASSWORD` slot binds them. A damaged value then fails the outer tag and is KeyUnavailable, never a wrong password that counts toward the backoff (section 5.2).
 - A copied key-state file cannot be attacked offline, because the inner layer is reachable only through this device's Keystore. The Keystore unwrap itself does not depend on the password: guesses made through the app pay the PBKDF2 cost and the backoff (section 5.3), while code running as the app could attack the inner layer offline after one unwrap (out of scope, section 1.3).
 - Keystore layer: `Cipher.getInstance("AES/GCM/NoPadding")`, `init(ENCRYPT_MODE, kek)` with no parameters (the Keystore picks the IV and rejects caller IVs), store `cipher.iv`; decrypt with `GCMParameterSpec(128, iv)`. Password layer: `SecretKeySpec(passwordKek, "AES")` with a fresh 12-byte `SecureRandom` IV. Both layers call `updateAAD` before `doFinal`.
-- KEK lifecycle: generated only when the alias is missing and the target mode is `DEVICE` or `PASSWORD`. Never deleted or regenerated while the committed slot uses it, so a failure before a commit leaves the old slot readable. Deleted after a committed switch to `PLAIN` (a key change to `PLAIN`, Start fresh, and a Restore from KeyUnavailable, section 4.1) and by Erase (section 5.4); a failed delete is ignored. While the committed mode is `PLAIN`, an unusable alias is deleted and regenerated once.
+- The biometric slot bypasses the password layer by design (Q8, DEC-60): a strong biometric authentication on this device releases the DEK without the password. It does not bypass the Keystore: the biometric key never leaves the Keystore and works only after the system has verified an enrolled Class 3 biometric for that single operation. Its lifecycle is in section 3.7.5.
+- KEK lifecycle: generated only when the alias is missing and the target mode is `DEVICE` or `PASSWORD`. Never deleted or regenerated while the committed slot uses it, so a failure before a commit leaves the old slot readable. One exception: the `prepare` of a fingerprint password reset (section 4.3) in a process where a biometric unlock has just reported `kekBroken` for the committed generation (section 3.7.3) deletes and regenerates the KEK once, because the committed slot's outer layer already fails and the password can no longer open it; the commit replaces that slot. No other operation replaces a KEK that fails its self-check: it throws `KeyVaultException(KeyUnavailable)`. Deleted after a committed switch to `PLAIN` (a key change to `PLAIN`, Start fresh, and a Restore from KeyUnavailable, section 4.1) and by Erase (section 5.4); a failed delete is ignored. While the committed mode is `PLAIN`, an unusable alias is deleted and regenerated once.
 - All `KeyVault` work runs off the main thread ([architecture.md](architecture.md) § Threading): Keystore calls and file I/O on `dispatchers.io`, PBKDF2 and calibration on `dispatchers.default`.
 
 ### 3.2 KEK generation
@@ -140,10 +147,10 @@ fun iterationsFor(tMillis: Long): Int {                   // pure function, JVM-
 
 ### 3.4 SQLCipher key and settings
 ```kotlin
-fun sqlcipherRawKey(dek: ByteArray): ByteArray {          // ASCII x'<64 hex>' = 67 bytes, no String
+fun sqlcipherRawKey(dek: ByteArray, newSecret: (Int) -> ByteArray): ByteArray {   // ASCII x'<64 hex>' = 67 bytes, no String; allocated through KeyVault's seam (section 3.6)
     require(dek.size == 32)
     val hex = "0123456789abcdef"
-    val out = ByteArray(67)
+    val out = newSecret(67)
     out[0] = 'x'.code.toByte(); out[1] = '\''.code.toByte(); out[66] = '\''.code.toByte()
     for (i in 0 until 32) {
         val v = dek[i].toInt() and 0xFF
@@ -187,6 +194,11 @@ internal object SqlcipherEngine {
     "wrappedDek": "<base64>",
     "innerIv": "<base64>",
     "kdf": { "algorithm": "PBKDF2-HMAC-SHA256", "iterations": 820000, "salt": "<base64>" }
+  },
+  "bioSlot": {
+    "keyAlias": "doro_bio_v1",
+    "iv": "<base64>",
+    "wrappedDek": "<base64>"
   }
 }
 ```
@@ -202,13 +214,21 @@ internal object SqlcipherEngine {
 | `slot.kdf.algorithm` | string | absent | absent | `PBKDF2-HMAC-SHA256` |
 | `slot.kdf.iterations` | JSON integer | absent | absent | 600,000 ≤ n ≤ 5,000,000 (the section 3.3 clamp range) |
 | `slot.kdf.salt` | base64, 16 bytes | absent | absent | required |
+| `bioSlot` | JSON object, top level next to `slot` | absent | absent | optional: present only while the biometric slot is armed (section 3.7); a malformed member is ignored and flagged, never fatal (below) |
+| `bioSlot.keyAlias` | string | — | — | `doro_bio_v1` (required inside `bioSlot`) |
+| `bioSlot.iv` | base64, 12 bytes | — | — | required inside `bioSlot` |
+| `bioSlot.wrappedDek` | base64, 48 bytes | — | — | required inside `bioSlot` |
 
 - Path `noBackupFilesDir/db-state.json` (DEC-80); UTF-8 JSON; base64 = `java.util.Base64` basic alphabet with padding (encoder and decoder).
+- Format version: the biometric slot does not change `formatVersion`, which stays 1. `bioSlot` is an optional, additive member: a reader that does not know it ignores it (unknown field names are ignored, below) and loses only fingerprint unlock, never data or the password slot. `formatVersion` increases only for a change that an older reader would misread if it ignored the new part. Reading: a file without `bioSlot` is read exactly as before and means "no biometric slot"; a file with `bioSlot` is read by the rules below. Every writer writes `formatVersion` 1.
 - Parser: `android.util.JsonReader` with an explicit `peek()` check before every read, so a quoted number or a fractional number is never coerced. Do not use `org.json`: its `JSONException` messages contain the input text, which here includes the wrapped DEK, IVs and salt (section 10).
-- The file is invalid if any of these holds: `formatVersion` is not the JSON integer 1 (a larger value means a newer app wrote it, section 12); `generation` is not a JSON integer ≥ 1; `mode` is not one of the three strings; `kekAlias` differs from `doro_kek_v1`; `kdf.algorithm` differs; `kdf.iterations` is outside the range of the table; a required field is missing or has the wrong JSON type; a field marked absent for the mode is present; a base64 value does not decode or has the wrong length. Field names not in the table are ignored. Any parser exception is caught at the parsing boundary and replaced by `KeyVaultException(InvalidState)` with constant text and no cause.
-- Write only with `androidx.core.util.AtomicFile`: `startWrite()`, write, `finishWrite()` (it syncs before renaming), `failWrite()` on any exception. Read only through `AtomicFile.readFully()`, which reads the base file and never recovers an interrupted write: a stale `db-state.json.new` is ignored and discarded when the base file exists. When only `.new` exists (an interrupted first write) `readFully()` throws `FileNotFoundException`, which `readState()` reports as no file (`null`, Missing), not as an invalid file. Any other `IOException` while reading is an invalid file. Verify at setup: the `.new` behavior of the pinned `androidx.core.util.AtomicFile` ([db-lifecycle.md](db-lifecycle.md#generation-commit)). The directory sync that makes the commit durable is part of `DbMaintenance.commitGeneration` ([db-lifecycle.md](db-lifecycle.md#generation-commit)); `eraseState()` runs the same best-effort `syncDirectory(noBackupFilesDir)` after its deletion. Startup cleanup and reconciliation never write `db-state.json*`; only `commit` and `eraseState` do.
+- The file is invalid if any of these holds: `formatVersion` is not the JSON integer 1 (a larger value means a newer app wrote it, section 12); `generation` is not a JSON integer ≥ 1; `mode` is not one of the three strings; `kekAlias` differs from `doro_kek_v1`; `kdf.algorithm` differs; `kdf.iterations` is outside the range of the table; a required field is missing or has the wrong JSON type; a field marked absent for the mode is present; a base64 value of the main `slot` does not decode or has the wrong length. The main-slot rules alone decide whether the file is invalid. Field names not in the table are ignored.
+- `bioSlot` is validated separately and never makes the file invalid. If it is present but malformed (not a JSON object, a member missing or of the wrong JSON type, a `keyAlias` other than `doro_bio_v1`, a base64 value that does not decode or has the wrong length, or present while `mode` is not `PASSWORD`), the parser reports the file as valid with `bioSlot = null` and `deadBioSlot = true`. The slot is then treated as dead: the password route with the cause `SlotMissing` (public reason `None`), the alias is deleted best effort, and the next commit drops it. Reasons: an invalid file shows only the KeyUnavailable screen (DEC-86), which has no password entry, so a damaged optional member would lock the user out of data that the intact, GCM-authenticated password slot still opens; and trusting the main slot alone is sound, because its outer AAD binds every KDF parameter (section 3.1) and the biometric slot has its own GCM tag and an AAD bound to `slot.outerIv`, so ignoring a malformed `bioSlot` can never release a wrong key. For the read-back of [db-lifecycle.md](db-lifecycle.md#generation-commit) (`KeyState.matches`) a dead slot reads back as `null`. A flipped base64 character in `bioSlot` gives the password screen, never KeyUnavailable ([testing.md](testing.md) L-05 / L-33).
+- Any parser exception is caught at the parsing boundary and replaced by `KeyVaultException(InvalidState)` with constant text and no cause.
+- Write only with `androidx.core.util.AtomicFile`: `startWrite()`, write, `finishWrite()` (it syncs before renaming), `failWrite()` on any exception. Read only through `AtomicFile.readFully()`, which reads the base file and never recovers an interrupted write: a stale `db-state.json.new` is ignored and discarded when the base file exists. When only `.new` exists (an interrupted first write) `readFully()` throws `FileNotFoundException`, which `readState()` reports as no file (`null`, Missing), not as an invalid file. Any other `IOException` while reading is an invalid file. Verify at setup: the `.new` behavior of the pinned `androidx.core.util.AtomicFile` ([db-lifecycle.md](db-lifecycle.md#generation-commit)). The directory sync that makes the commit durable is part of `DbMaintenance.commitGeneration` ([db-lifecycle.md](db-lifecycle.md#generation-commit)); `eraseState()` runs the same best-effort `syncDirectory(noBackupFilesDir)` after its deletion. Startup cleanup and reconciliation never write `db-state.json*`; only `commit` and `eraseState` do. Neither the unlock path nor any slot failure rewrites the file (section 3.7.4).
 - `AtomicFile` gives no locking: every `KeyVault` operation (read, commit, erase, and every password attempt, section 3.6) runs under one `Mutex`.
-- The file exists whenever a database exists, `PLAIN` included (it carries `generation`). Only `KeyVault` writes it, and only when `DbMaintenance.commitGeneration` or Erase calls it: first run, every committed swap (key change, Restore, Start fresh), the adoption of a plaintext file at startup, and Erase (section 5.4). Generation semantics, commit order and the handling of a missing or invalid file next to existing database files (first run, adoption, KeyUnavailable): [db-lifecycle.md](db-lifecycle.md#startup-reconciliation) and [db-lifecycle.md](db-lifecycle.md#failure-classification). An invalid file is never rewritten or deleted automatically (DEC-86).
+- The file exists whenever a database exists, `PLAIN` included (it carries `generation`). Only `KeyVault` writes it: through `commit` when `DbMaintenance.commitGeneration` calls it (first run, every committed swap: key change, Restore, Start fresh, and the adoption of a plaintext file at startup), through `eraseState` for Erase (section 5.4). A biometric slot commit (creation, removal) is the same `commit` called with the committed `generation` and `slot` and a different `bio`, driven by `DbMaintenance` under its operation mutex ([db-lifecycle.md](db-lifecycle.md#biometric-slot-commits)); `KeyVault` has no separate slot-only writer.
+- `commit(generation, slot, bio)` writes exactly what it is given; it keeps or drops nothing by itself. Callers pass `bio` as [db-lifecycle.md](db-lifecycle.md#generation-commit) lists: `null` for every commit that installs a new DEK (first run, adoption, every key change, Start fresh, Restore from `KeyUnavailable`), the committed `bioSlot` for a Restore from `Ready` or `Corrupt` (same DEK; a backup makes no commit), the new or removed slot for a slot commit. Rules: `require(bio == null || slot.mode == KeyMode.PASSWORD)`; before `startWrite()` it parses its own serialized bytes back with the strict parser above and checks `generation`, `slot.sameAs` and the biometric slot against its inputs, so that a serialization bug throws `IllegalStateException` with constant text in memory (`DbMaintenance` classifies that as `NotCommitted`) and never reaches the only copy of the wrapped DEK. It does not delete the alias `doro_bio_v1`: that is `DbMaintenance`'s `DELETE_BIO_KEY` step, after the commit. Its backoff effect is in section 3.6. Generation semantics, commit order and the handling of a missing or invalid file next to existing database files (first run, adoption, KeyUnavailable): [db-lifecycle.md](db-lifecycle.md#startup-reconciliation) and [db-lifecycle.md](db-lifecycle.md#failure-classification). An invalid file is never rewritten or deleted automatically (DEC-86).
 - Never in SharedPreferences or DataStore (§11 Key Management, DEC-09); never logged.
 
 ### 3.6 KeyVault surface
@@ -222,14 +242,53 @@ class KeySlot(val mode: KeyMode, val outerIv: ByteArray?, val wrappedDek: ByteAr
     fun sameAs(other: KeySlot): Boolean            // owner definition: db-lifecycle.md § Generation commit. Equal mode; equal outerIv, wrappedDek, innerIv, kdf.iterations and kdf.salt (absent equals absent); kekAlias and kdf.algorithm are validated constants (section 3.5) and so implied; never ==
     override fun toString() = "KeySlot(mode=$mode)"
 }
-class KeyState(val generation: Long, val slot: KeySlot)
+class BioSlot(val iv: ByteArray, val wrappedDek: ByteArray) {   // section 3.7; keyAlias is the validated constant doro_bio_v1
+    fun sameAs(other: BioSlot): Boolean            // byte-for-byte equal iv and wrappedDek; never ==
+    override fun toString() = "BioSlot"
+}
+/** bioSlot only with slot.mode == PASSWORD. deadBioSlot = true when the file held a malformed bioSlot that the parser ignored (section 3.5);
+ *  then bioSlot is null, so a read-back (db-lifecycle.md KeyState.matches) sees a dead slot as "no slot". */
+class KeyState(val generation: Long, val slot: KeySlot, val bioSlot: BioSlot? = null, val deadBioSlot: Boolean = false)
 class PreparedKey(val slot: KeySlot, val rawKey: ByteArray)      // rawKey = ByteArray(0) for PLAIN
 
+/** A Cipher on the biometric key, initialized by KeyVault and authorized by exactly one BiometricPrompt (section 3.7). Single use.
+ *  Only KeyVault creates one (the constructor is internal to the security package); AppLockController and the gateway pass the handle on
+ *  unopened and never construct one (section 7.3). Only the security package touches the Cipher. */
+enum class SlotUse { Unlock, Arm }
+class SlotCipher internal constructor(
+    val use: SlotUse,
+    internal val cipher: javax.crypto.Cipher,
+    internal val generation: Long,           // the committed state the cipher was prepared for
+    internal val outerIv: ByteArray,         // copy of that state's slot.outerIv (the AAD binding, section 3.7.2)
+) { override fun toString() = "SlotCipher(use=$use)" }
+
+sealed interface SlotCipherResult {
+    class Ready(val slotCipher: SlotCipher) : SlotCipherResult
+    data object NoSlot : SlotCipherResult        // mode != PASSWORD, or no bioSlot
+    data object Invalidated : SlotCipherResult   // KeyPermanentlyInvalidatedException, a missing alias or a slot judged dead (3.7.4); KeyVault has deleted the alias, the dead bioSlot stays in the file
+    data object Unavailable : SlotCipherResult   // any other Keystore failure after one retry; the slot is kept
+}
+
+/** Result of wrapForBiometric (3.7.2); nothing is persisted either way. */
+sealed interface WrapResult {
+    class Wrapped(val bioSlot: BioSlot) : WrapResult
+    data object BiometricUnusable : WrapResult    // the cipher failed, or its generation or outerIv no longer match the committed state; the alias is deleted
+}
+
+/** Condition of the biometric slot in the committed state (3.7.5). */
+enum class BioSlotStatus {
+    None,    // no file, an invalid file, mode != PASSWORD, or no usable bioSlot member (including a malformed one, 3.5)
+    Live,    // bioSlot present and the alias doro_bio_v1 present
+    Dead,    // bioSlot present but the alias is missing (invalidated, judged dead or deleted): the password unlocks, the re-creation offer is due
+}
+
 sealed interface UnlockResult {
-    class Key(val rawKey: ByteArray) : UnlockResult              // PLAIN: ByteArray(0)
+    class Key(val rawKey: ByteArray, val kekBroken: Boolean = false) : UnlockResult   // PLAIN: ByteArray(0). kekBroken: biometric path only (3.7.3)
+    data class Verified(val kekBroken: Boolean = false) : UnlockResult                // verifyPassword / verifyBiometric: correct, nothing returned. kekBroken: verifyBiometric only
     data class PasswordRejected(val failures: Int, val retryAtElapsedMs: Long) : UnlockResult
     data class Throttled(val failures: Int, val retryAtElapsedMs: Long) : UnlockResult
     data object PasswordNeeded : UnlockResult                    // PASSWORD slot, password == null
+    data class SlotFailed(val invalidated: Boolean) : UnlockResult   // biometric slot path only (section 3.7.4); never KeyUnavailable
     data object KeyFailed : UnlockResult                         // section 5.2 KeyUnavailable
 }
 enum class KeyFailure { KeyUnavailable, InvalidState }
@@ -239,20 +298,167 @@ interface KeyVault {
     suspend fun readState(): KeyState?                                       // null = no file; throws KeyVaultException(InvalidState) for an unreadable or invalid file
     suspend fun unlock(password: ByteArray?): UnlockResult                   // effect E2
     suspend fun openKey(slot: KeySlot, password: ByteArray?): UnlockResult   // key change, restore from Corrupt; db-lifecycle.md
-    suspend fun prepare(target: KeyMode, newPassword: ByteArray?): PreparedKey   // new DEK and slot; persists nothing but a missing KEK
-    suspend fun commit(generation: Long, slot: KeySlot)                      // AtomicFile rewrite = the commit point
-    suspend fun eraseState()                                                 // AtomicFile.delete(), then deleteKek()
+    suspend fun verifyPassword(password: ByteArray): UnlockResult            // Verified | PasswordRejected | Throttled | KeyFailed; return-from-background password (section 5.5)
+    suspend fun prepare(target: KeyMode, newPassword: ByteArray?): PreparedKey   // new DEK and slot; persists nothing but a missing (or, section 3.1, a broken) KEK
+    suspend fun commit(generation: Long, slot: KeySlot, bio: BioSlot?)       // AtomicFile rewrite = the commit point; writes exactly what it is given (section 3.5)
+    suspend fun eraseState()                                                 // AtomicFile.delete(), then deleteKek() and deleteBiometricKey()
     suspend fun deleteKek()                                                  // failures ignored
+
+    // Biometric slot (section 3.7)
+    suspend fun biometricSlotStatus(): BioSlotStatus                         // reads the committed state and asks the Keystore only whether the alias exists; no authentication
+    suspend fun hasBiometricSlot(): Boolean                                  // file level: the committed state has a bioSlot, live or dead; no Keystore call; false for no file or an invalid file
+    suspend fun biometricUnlockCipher(): SlotCipherResult                    // DECRYPT cipher on the committed bioSlot (3.7.3)
+    suspend fun unlockWithBiometric(cipher: SlotCipher): UnlockResult        // Key | SlotFailed | KeyFailed; cold start (E2), Restore from Corrupt and the fingerprint reset
+    suspend fun verifyBiometric(cipher: SlotCipher): UnlockResult            // Verified | SlotFailed | KeyFailed; return from background, DisableLock
+    suspend fun biometricArmCipher(): SlotCipherResult                       // new biometric key, ENCRYPT cipher (3.7.2)
+    suspend fun wrapForBiometric(cipher: SlotCipher, liveRawKey: ByteArray): WrapResult   // wraps the DEK of liveRawKey; persists nothing (3.7.2)
+    suspend fun deleteBiometricKey()                                         // deletes the alias doro_bio_v1, best effort; never touches the file; idempotent
+    suspend fun isPasswordReminderDue(): Boolean                             // section 5.6
 }
 ```
-- `unlock(password)` is effect E2's entry. It reads the committed state with `readState()` (an invalid file returns `KeyFailed`), then: `PLAIN` returns `Key(ByteArray(0))`; `DEVICE` calls `openKey(slot, null)`; `PASSWORD` with `password == null` returns `PasswordNeeded`; otherwise `openKey(slot, password)`. `null` means "no password supplied"; an empty array means "supplied but unusable" (section 6.3 returns null for malformed input and E2 passes `ByteArray(0)` then).
-- `openKey(slot, password)` order for a `PASSWORD` slot, all under the mutex so parallel attempts cannot bypass the throttle: (1) throttle check: while `AppTime.elapsedMillis() < retryAt` return `Throttled` without any crypto; (2) an empty password returns `PasswordRejected` with the stored values, not counted (such a password can never have been set); (3) Keystore layer (section 5.2 on failures); (4) PBKDF2 and the inner GCM: `AEADBadTagException` increments `unlockFailures`, persists both values before returning `PasswordRejected` (the write runs in `NonCancellable`); success resets both and returns `Key`. `DEVICE` and `PLAIN` slots involve no backoff.
-- `KeyVault` alone reads and writes `unlockFailures` and `unlockRetryAtElapsedMs` (through `SettingsStore`), and `commit` resets both after its file write succeeded (a commit follows a verified password or an explicit recovery action).
-- `prepare` is specified in sections 3.2 and 3.3 and never persists anything except creating a missing KEK. For `PASSWORD`, `newPassword` must be non-empty (`require`). It zeroes the DEK and the password KEK before returning. Cancelling the caller while `prepare()` runs does not cancel it, because `DbMaintenance` runs every operation detached in `applicationScope` (section 3.6 below, ownership of secret arrays): the slot that `commit` later stores unlocks with the typed password ([testing.md](testing.md) L-03).
-- Test seam for zeroing: `DefaultKeyVault` takes `newSecret: (Int) -> ByteArray = ::ByteArray` and allocates every 32-byte DEK, every 32-byte password-KEK array and the 67-byte raw key through it. `KeyVaultTest` injects an allocator that records every array it hands out and asserts that all of them, except the raw key returned inside `UnlockResult.Key` or `PreparedKey`, are all-zero when `unlock`, `openKey` or `prepare` returns ([testing.md](testing.md) L-03). The calibration of section 3.3 coerces a measured duration of 0 to 1 ms, so `iterationsFor(0)` returns 5,000,000 without a division by zero.
-- Every operation that reports a failed password check persists the counters first (item 4 of `openKey`): `KeyVault` writes `security.unlock_failures` and `security.unlock_retry_at` before it returns `PasswordRejected`, and resets both after a correct password and in `commit`. `KeyVault` returns `UnlockResult` and throws `KeyVaultException` rather than `AppResult` because its callers (effect E2 and `DbMaintenance`) map the results to gate events and to `AppError` themselves ([architecture.md](architecture.md#error-model)).
-- Error mapping at the boundary ([architecture.md](architecture.md) § Error model): E2 maps `Key` to `DatabaseHolder.open`, `PasswordRejected` and `Throttled` to the gate event `PasswordRejected(failures, retryAt)` (T21), `PasswordNeeded` to T22 and `KeyFailed` to T23. `DbMaintenance` maps `PasswordRejected` to `AppError.WrongPassword`, `Throttled` to `AppError.Throttled(retryAtElapsedMs)`, `KeyFailed` and every `KeyVaultException` to `AppError.KeyUnavailable`; it zeroes `Key.rawKey` at once when it only verified a password.
-- Ownership of secret arrays. A secret array changes owner when it is passed to a call that starts a detached operation. `SessionGate.dispatch(PasswordSubmitted(chars))` hands `chars` to effect E2, and every `DbMaintenance` entry point that takes a password hands it to the operation; the receiver zeroes the arrays in its own `finally` after the last use. The caller never reads, zeroes or reuses an array after handing it over, even when the caller is cancelled (the operation runs detached in `applicationScope`, [architecture.md](architecture.md) § Layering and data flow). A caller that still needs the array passes `copyOf()`. `KeyVault` never zeroes its inputs; arrays it returns belong to the receiver. `PreparedKey.rawKey` belongs to `DbMaintenance` until `commit` returns `Committed`, then to `DatabaseHolder`; on any failure before the commit `DbMaintenance` zeroes it.
+- Locking discipline (every `KeyVault` operation runs under one `Mutex`, section 3.5). Kotlin's `Mutex` is not reentrant, so a public member that called another public member while holding the lock would suspend forever, and on the cold-start path the app would hang in `Opening` with no recovery screen. Therefore every public member takes the mutex exactly once (`mutex.withLock { … }`) and calls only private `*Locked` helpers (`readStateLocked`, `openKeyLocked`, `deleteBioKeyLocked`, `outerUnwrapLocked`, …), which never lock. No public member calls another public member; `verifyPassword` and `unlock` share `openKeyLocked`, not each other. `KeyVaultTest` drives every slot failure path (3.7.4) under a test timeout, so a re-entrant call fails as a timeout, never as a hang.
+- `unlock(password)` is effect E2's entry for the password path. It reads the committed state (an invalid file returns `KeyFailed`), then: `PLAIN` returns `Key(ByteArray(0))`; `DEVICE` runs `openKeyLocked(slot, null)`; `PASSWORD` with `password == null` returns `PasswordNeeded`; otherwise `openKeyLocked(slot, password)`. `null` means "no password supplied"; an empty array means "supplied but unusable" (section 6.3 returns null for malformed input and E2 passes `ByteArray(0)` then). The fingerprint path is `unlockWithBiometric`, never `unlock`.
+- `openKey(slot, password)` order for a `PASSWORD` slot, all under the mutex so parallel attempts cannot bypass the throttle: (1) throttle check: while `AppTime.elapsedMillis() < retryAt` return `Throttled` without any crypto; (2) an empty password returns `PasswordRejected` with the stored values, not counted (such a password can never have been set); (3) Keystore layer (section 5.2 on failures); (4) PBKDF2 and the inner GCM: `AEADBadTagException` increments `unlockFailures`, persists both values before returning `PasswordRejected` (the write runs in `NonCancellable`); success resets both, sets `passwordVerifiedAt` and returns `Key`. `DEVICE` and `PLAIN` slots involve no backoff.
+- `verifyPassword(password)` runs the `openKeyLocked` steps on the committed `PASSWORD` slot (same throttle, same counting, same reminder refresh), zeroes the raw key it built and returns `Verified()`. It is used where the database is already open and only the password has to be proven (section 5.5). For a non-`PASSWORD` slot it returns `KeyFailed` (a caller bug made harmless).
+- Counters and timestamp. `KeyVault` alone reads and writes `unlockFailures`, `unlockRetryAtElapsedMs` and `passwordVerifiedAt` (through `SettingsStore`). Two rules govern a failing `SettingsStore` write (a full disk makes DataStore throw an `IOException`, which is not a `KeyVaultException`, so unhandled it would crash a correct password entry or, wrapped, send the user to KeyUnavailable):
+  - The success-path write (backoff reset and `passwordVerifiedAt = AppTime.nowMillis()` in one `SettingsStore` edit, section 5.6) is best effort. A failure is logged by exception class only (section 10), the unlock proceeds as if it had succeeded, and the reminder simply stays due (a lost or stale timestamp counts as due). A correct password never fails because of it.
+  - The failure-path write (counting a wrong password, item 4 of `openKey`) must succeed before `PasswordRejected` is returned. If it throws, `KeyVault` returns `Throttled(failures, retryAtElapsedMs = AppTime.elapsedMillis() + max(UnlockBackoff.delayMillis(failures + 1), 30_000))` computed in memory, never a crash and never a free extra guess; that pair is not persisted.
+  - `KeyVaultTest` covers both with a `SettingsStore` fake whose `edit` throws.
+- `commit(generation, slot, bio)` is the only writer of `db-state.json` besides `eraseState` (section 3.5). Its backoff and reminder effects: the two backoff values are reset after the file write succeeded only when the commit installs a new key configuration, that is when no valid committed state existed or `slot` is not `sameAs` the committed slot (a commit follows a verified password, a fingerprint reset or an explicit recovery action). A commit that keeps the key slot (every biometric slot commit, a Restore from `Ready` or `Corrupt`) leaves them alone: a fingerprint is not a password entry (sections 5.3, 5.6).
+- `prepare(PASSWORD, newPassword)` remembers the `KeySlot` it returned (in memory only, under the mutex) as the "freshly typed" slot; when `commit` later stores a slot that is `sameAs` it, `commit` also sets `passwordVerifiedAt = AppTime.nowMillis()` (best effort, as above), because the user has just typed the new password twice (set, change and fingerprint reset). Any other commit leaves `passwordVerifiedAt` unchanged. The remembered slot is cleared by the next `prepare` or `commit`.
+- The biometric-slot methods are specified in section 3.7. They never touch the backoff values or `passwordVerifiedAt`, and none of them throws for a Keystore failure of the biometric key: such failures are results (`SlotCipherResult`, `SlotFailed`, `WrapResult`), because the password slot still works (unless the KEK itself fails, which `kekBroken` reports, 3.7.3). A missing or invalid key-state file makes them return `NoSlot`, `KeyFailed` or `None`, and the main path reports it (section 5.2). None of them rewrites the key-state file: the slot-only commits are `DbMaintenance`'s, through `commit` ([db-lifecycle.md](db-lifecycle.md#biometric-slot-commits)).
+- `prepare` is specified in sections 3.2 and 3.3 and never persists anything except creating a missing KEK (or replacing a broken one, section 3.1). For `PASSWORD`, `newPassword` must be non-empty (`require`). It zeroes the DEK and the password KEK before returning. Cancelling the caller while `prepare()` runs does not cancel it, because `DbMaintenance` runs every operation detached in `applicationScope` (section 3.6 below, ownership of secret arrays): the slot that `commit` later stores unlocks with the typed password ([testing.md](testing.md) L-03).
+- Test seam for zeroing: `DefaultKeyVault` takes `newSecret: (Int) -> ByteArray = ::ByteArray` and allocates through it every 32-byte DEK (including the DEK unwrapped through the biometric slot and the DEK decoded for wrapping), every 32-byte password-KEK array and every 67-byte raw key (`sqlcipherRawKey` takes the allocator as a parameter, section 3.4). `KeyVaultTest` injects an allocator that records every array it hands out and asserts that all of them, except the raw key returned inside `UnlockResult.Key` or `PreparedKey`, are all-zero when `unlock`, `openKey`, `verifyPassword`, `prepare`, `unlockWithBiometric`, `verifyBiometric` or `wrapForBiometric` returns ([testing.md](testing.md) L-03). The array that `Cipher.doFinal` returns inside the biometric methods is allocated by the provider, not by `newSecret`; the code copies it into the allocator's array and zeroes it in `finally` (3.7.3), and the test checks that through the `BioKeystore` seam, whose `doFinal` returns an array the fake keeps a reference to. The Keystore half of the biometric methods sits behind that second seam, `BioKeystore` (generate, delete, `containsAlias`, `initDecrypt`, `initEncrypt`, `updateAad`, `doFinal`), so the JVM tests can drive every failure class of section 3.7.4 with a fake; the real Keystore behavior is covered by instrumented tests. The calibration of section 3.3 coerces a measured duration of 0 to 1 ms, so `iterationsFor(0)` returns 5,000,000 without a division by zero.
+- Every operation that reports a failed password check persists the counters first (item 4 of `openKey`, and the failure-path rule above): `KeyVault` writes `security.unlock_failures` and `security.unlock_retry_at` before it returns `PasswordRejected`, and resets both after a correct password and in a `commit` that installs a new key configuration. `KeyVault` returns `UnlockResult` and throws `KeyVaultException` rather than `AppResult` because its callers (effect E2 and `DbMaintenance`) map the results to gate events and to `AppError` themselves ([architecture.md](architecture.md#error-model)).
+- Error mapping at the boundary ([architecture.md](architecture.md) § Error model): E2 maps `Key` to `DatabaseHolder.open`, `PasswordRejected` and `Throttled` to the gate event `PasswordRejected(failures, retryAt)` (T21), `PasswordNeeded` to T22 and `KeyFailed` to T23. For the slot path, E2 maps `SlotFailed(invalidated = true)` to `PasswordNeeded` with the public reason `FingerprintChanged` and `SlotFailed(invalidated = false)` back to the lock with a generic error (section 3.7.4); the event names and rows are [architecture.md](architecture.md) § SessionGate's. `DbMaintenance` maps `PasswordRejected` to `AppError.WrongPassword`, `Throttled` to `AppError.Throttled(retryAtElapsedMs)`, `KeyFailed` and every `KeyVaultException` to `AppError.KeyUnavailable`; it zeroes `Key.rawKey` at once when it only verified a password.
+- Ownership of secret arrays. A secret array changes owner when it is passed to a call that starts a detached operation. `SessionGate.dispatch(PasswordSubmitted(chars))` hands `chars` to effect E2, and every `DbMaintenance` entry point that takes a password hands it to the operation; the receiver zeroes the arrays in its own `finally` after the last use. The caller never reads, zeroes or reuses an array after handing it over, even when the caller is cancelled (the operation runs detached in `applicationScope`, [architecture.md](architecture.md) § Layering and data flow). A caller that still needs the array passes `copyOf()`. `KeyVault` never zeroes its inputs; arrays it returns belong to the receiver. `PreparedKey.rawKey` belongs to `DbMaintenance` until `commit` returns `Committed`, then to `DatabaseHolder`; on any failure before the commit `DbMaintenance` zeroes it. A `SlotCipher` changes owner the same way: whoever receives it uses it once and drops it; it is never stored in a ViewModel, `SavedStateHandle`, Bundle or navigation key.
+
+### 3.7 Biometric slot (DEC-60, DEC-65, Q8)
+
+In `PASSWORD` mode with the biometric lock on, a second wrap of the DEK lets a strong biometric open the database without the password. The password slot of section 3.1 is unchanged and works unless its Keystore KEK fails (3.7.3, `kekBroken`); the biometric slot is an optional extra that can be lost at any time (enrollment change, Keystore problem) and is then re-created after one password unlock. `PLAIN` and `DEVICE` mode never have a biometric slot: their lock is a prompt without a `CryptoObject` (section 7.2).
+
+Who does what. `KeyVault` (this file) owns the Keystore half: key generation, the `CryptoObject` ciphers, wrap and unwrap, deleting the key. `DbMaintenance` owns every write of the key-state file that adds or removes a `bioSlot` ([db-lifecycle.md](db-lifecycle.md#biometric-slot-commits): operation mutex, `commitSlotOnly`, directory sync, read-back, repair). `AppLockController` owns the prompts and hands the authorized `SlotCipher` on ([architecture.md](architecture.md) § AppLockController and BiometricGateway). `KeyVault` never rewrites the key-state outside `commit` and `eraseState` (section 3.5).
+
+#### 3.7.1 Biometric key generation
+```kotlin
+const val BIO_ALIAS = "doro_bio_v1"
+
+/** The production spec. BiometricKeySpecTest (testing.md L-30) pins every parameter by calling this function; it generates nothing. */
+internal fun bioKeySpec(): KeyGenParameterSpec = KeyGenParameterSpec.Builder(
+        BIO_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+    .setKeySize(256)
+    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+    .setUserAuthenticationRequired(true)
+    .apply {
+        if (Build.VERSION.SDK_INT >= 30)
+            setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)   // 0 s: every operation needs its own authentication
+        else
+            @Suppress("DEPRECATION") setUserAuthenticationValidityDurationSeconds(-1) // API 28–29: per operation, biometric only
+    }
+    .setInvalidatedByBiometricEnrollment(true)    // the platform default, set explicitly (DEC-60)
+    .setIsStrongBoxBacked(false)                  // TEE-backed on purpose, see below; no setUnlockedDeviceRequired, no setUserAuthenticationValidWhileOnBody
+    .build()
+
+fun generateBioKey(): SecretKey {
+    deleteBioKeyQuietly()                         // arming always starts from a new key
+    val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+    gen.init(bioKeySpec())
+    return gen.generateKey()
+}
+```
+- The biometric key is never StrongBox-backed. DEC-60 asks for StrongBox only for the KEK, and a StrongBox authentication-bound key that generates but then fails at `doFinal` (seen on some OEM StrongBox implementations) would fail on every unlock with no self-check at arming (3.7.2 step 5) and cost the user a fingerprint touch each time. The trade-off is that the key lives in the TEE, whose authentication enforcement is the platform's normal one. There is no `allowStrongBox` flag and no per-process state.
+- `setRandomizedEncryptionRequired` keeps its default (true), so the Keystore chooses every encryption IV and rejects caller IVs.
+- A per-operation key accepts only an authentication bound to that operation through a `BiometricPrompt.CryptoObject`; the device credential cannot authorize it on any API level used here. That is why the slot prompt allows `BIOMETRIC_STRONG` only (section 7.2).
+- The key becomes permanently invalid when a new biometric is enrolled or all biometrics are removed (`setInvalidatedByBiometricEnrollment(true)`), and, like every authentication-bound key, when the secure lock screen is removed. Using it then throws `KeyPermanentlyInvalidatedException` from `Cipher.init`.
+- Verify at setup: on the api28 and api35 emulators and on Physical A, (a) a TEE-backed key with these parameters generates and works through a `CryptoObject` prompt, with `Cipher.init` never throwing `UserNotAuthenticatedException` for a per-use key; (b) enrolling an additional fingerprint and removing all fingerprints each make `Cipher.init` throw `KeyPermanentlyInvalidatedException`; (c) whether removing one of several fingerprints invalidates the key (platform-dependent; both outcomes are handled); (d) with validity −1 on API 28–29, androidx.biometric 1.1.0 authorizes the `CryptoObject` with `BIOMETRIC_STRONG` and a Class 3 face (where present) as well as a fingerprint.
+
+#### 3.7.2 Arming the slot
+Arming creates the biometric slot from the live DEK. Preconditions: the committed mode is `PASSWORD`, the database is open (`Ready`), the lock is being turned on or is on without a live slot (section 7.8), and a strong biometric is usable.
+1. `KeyVault.biometricArmCipher()`, under the mutex: read the committed state (mode must be `PASSWORD`, else `NoSlot`); `generateBioKey` (3.7.1, which deletes any older key first, so a slot committed earlier is dead from this moment on); `Cipher.getInstance("AES/GCM/NoPadding").init(Cipher.ENCRYPT_MODE, key)` with no parameters, so the Keystore generates the 12-byte GCM IV. Any exception here deletes the alias and returns `Unavailable`. Otherwise `Ready(SlotCipher(Arm, cipher, state.generation, state.slot.outerIv.copyOf()))`.
+2. `AppLockController` shows the slot prompt with `BiometricPrompt.CryptoObject(cipher)` (purpose `EnableLock` or `SetUpSlot`, section 7.2). A cancel or an error ends here; the unused key stays until the next arming, removal, new-DEK commit or Erase deletes it (3.7.5).
+3. On success `AppLockController` calls the injected `BiometricSlotWriter.createBiometricSlot(cipher)` (section 7.3, [architecture.md](architecture.md) § Event wiring), implemented by `DbMaintenance.createBiometricSlot`. Its mechanics are [db-lifecycle.md](db-lifecycle.md#biometric-slot-commits)'s: operation mutex, read the committed state, `PREPARE_BIO_SLOT` (copy of the live raw key, `KeyVault.wrapForBiometric(cipher, live)`, zero the copy in `finally`), `COMMIT_BIO_SLOT` through `KeyVault.commit(generation, slot, bio)`, directory sync, read-back with the `Committed` / `NotCommitted` / `Unknown` classification and the one repair attempt. This file owns the crypto in step 4 and nothing about the file write.
+4. `KeyVault.wrapForBiometric(cipher, liveRawKey)`, under the mutex (`require(cipher.use == SlotUse.Arm)` first, before any Keystore call, so a caller bug is a crash and not a state change):
+   - Re-read the committed state. If its generation differs from `cipher.generation`, or the mode is not `PASSWORD`, or its `slot.outerIv` differs from `cipher.outerIv`, a key change committed meanwhile: delete the alias, return `BiometricUnusable`.
+   - `dek = dekFromRawKey(liveRawKey)` (below), allocated through `newSecret`.
+   - `cipher.updateAAD("doro.bio.v1:" + base64(state.slot.outerIv))` (ASCII), then `wrapped = cipher.doFinal(dek)`, `iv = cipher.iv`. AAD is added only now, after the authentication: on an authentication-bound key every operation step after `init` needs the authorization.
+   - Check `iv.size == 12` and `wrapped.size == 48`; zero `dek` in `finally`.
+   - Return `Wrapped(BioSlot(iv, wrapped))`. Nothing is written: the caller commits.
+   - Any exception from `updateAAD`, `doFinal` or the checks: delete the alias, return `BiometricUnusable`.
+5. No self-check by unwrapping: it would need a second authentication. The first unlock through the slot is the check. A slot that fails its tag (3.7.4) is dead from then on, and a slot that wraps a wrong DEK is caught when the open fails through it (3.7.3), so a bad slot costs one password entry, never data.
+
+The AAD binds the biometric slot to the password slot it was armed next to: `slot.outerIv` is new for every wrap of every new DEK, so a stale `bioSlot` paired with a newer `slot` (which `DbMaintenance` never writes, section 3.5) would fail the tag instead of releasing a wrong key.
+
+```kotlin
+/** Inverse of sqlcipherRawKey (section 3.4) without a String. The caller zeroes the result. */
+internal fun dekFromRawKey(raw: ByteArray, newSecret: (Int) -> ByteArray): ByteArray {
+    require(raw.size == 67 && raw[0] == 'x'.code.toByte() && raw[1] == '\''.code.toByte() && raw[66] == '\''.code.toByte())
+    fun nibble(b: Byte): Int = when (val c = b.toInt()) {
+        in 0x30..0x39 -> c - 0x30
+        in 0x61..0x66 -> c - 0x61 + 10
+        else -> throw IllegalArgumentException("raw key")       // constant message (section 10)
+    }
+    val out = newSecret(32)
+    for (i in 0 until 32) out[i] = ((nibble(raw[2 + 2 * i]) shl 4) or nibble(raw[3 + 2 * i])).toByte()
+    return out
+}
+```
+
+#### 3.7.3 Unwrapping through the slot
+Every step below runs inside one public `KeyVault` member under the single mutex and uses only `*Locked` helpers (section 3.6).
+1. `KeyVault.biometricUnlockCipher()`: read the committed state. No file, an invalid file, mode ≠ `PASSWORD` or no `bioSlot` (a malformed one included, section 3.5; then the alias is also deleted, best effort): `NoSlot` (an invalid file is then reported by the main path, section 5.2). Alias `doro_bio_v1` missing: return `Invalidated` (the alias is already gone; the dead `bioSlot` stays in the file). Otherwise `Cipher.getInstance("AES/GCM/NoPadding").init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, bioSlot.iv))`:
+   - `KeyPermanentlyInvalidatedException`: delete the alias (`deleteBioKeyLocked`), return `Invalidated`. The file is not touched.
+   - any other `GeneralSecurityException`, `ProviderException` or `IOException` from the Keystore: retry once after 1 s (`delay(1000)` on `dispatchers.io`); if it fails again, count it (3.7.4, repeated failures) and return `Unavailable`, keeping the slot.
+   - success: `Ready(SlotCipher(Unlock, cipher, state.generation, state.slot.outerIv.copyOf()))`.
+2. `AppLockController` shows the slot prompt with `CryptoObject(cipher)` (purpose `Unlock`, `DisableLock`, `ResetPassword` or `RestoreKey`). On success `BiometricGateway` reports whether `result.cryptoObject?.cipher` is the very cipher it passed (identity, `PromptResult.Succeeded.cryptoMatches`); `AppLockController` passes on the `SlotCipher` that `KeyVault` returned and never constructs one. A missing or different crypto object is handled as `SlotFailed(invalidated = false)`. Verify at setup: on api28, api35 and Physical A, `AuthenticationResult.cryptoObject.cipher === ` the `Cipher` passed to `authenticate` (identity), including on API 28 devices that androidx.biometric routes through `FingerprintManager`; if one path re-wraps the cipher, every fingerprint unlock on it would fail as `SlotFailed(false)` and the slot would be judged dead after two attempts (3.7.4), so this check gates the design.
+3. `KeyVault.unlockWithBiometric(cipher)` (cold start through E2, Restore from `Corrupt`, the fingerprint reset), under the mutex. First `require(cipher.use == SlotUse.Unlock)` (an `IllegalArgumentException` with constant text, before any Keystore call: an arm cipher that reached this path through a caller bug would encrypt 48 bytes into 64, trip the length rule below and kill a valid slot, so it must crash instead). Then re-read the committed state; if its generation or `slot.outerIv` no longer match the cipher's, return `SlotFailed(invalidated = false)` without using the cipher (a legitimate race, not counted). Otherwise:
+   - `cipher.updateAAD("doro.bio.v1:" + base64(outerIv))`.
+   - `val tmp = cipher.doFinal(bioSlot.wrappedDek); try { if (tmp.size == 32) tmp.copyInto(dek) else slotIsDead = true } finally { tmp.fill(0) }` with `dek = newSecret(32)` (the length rule below, written here as a flag so that the zeroing in `finally` runs on every path). `doFinal` returns an array that the provider allocated, outside the allocator, so it is zeroed here in `finally`; the plaintext DEK also passed through the Keystore's binder reply, whose copies cannot be cleared (section 6.5).
+   - `rawKey = sqlcipherRawKey(dek, newSecret)`, zero `dek`, then the KEK check (below), return `Key(rawKey, kekBroken)`.
+   - `AEADBadTagException` or a plaintext that is not 32 bytes: the slot is dead. Delete the alias, return `SlotFailed(invalidated = true)`. The file is not touched.
+   - any other exception, including an enrollment change during the prompt, which surfaces at the next `Cipher.init` and is then handled by step 1: return `SlotFailed(invalidated = false)` and keep the slot, counted (3.7.4). Never retried: a retry needs a new authentication. `KeyPermanentlyInvalidatedException` is an `InvalidKeyException` thrown by `init`; AndroidKeyStore reports `doFinal` failures as `IllegalBlockSizeException` or `BadPaddingException` with a `KeyStoreException` cause (section 5.2), and the classification is by class, never by message, so only the tag failure is a reliable "dead" signal at `doFinal`.
+   - Verify at setup: on api28 and api35, which exception `doFinal` throws when a finger is enrolled between `Cipher.init` and `doFinal`, and that a per-use key's `Cipher.init` never throws `UserNotAuthenticatedException`.
+4. `KeyVault.verifyBiometric(cipher)`: the same steps (including the `use` check, the counting and the KEK check), but the DEK is zeroed right after the tag check and no raw key is built; returns `Verified(kekBroken)`. Used on return from background, where the database is already open, and to turn the lock off.
+- The KEK check (`outerUnwrapLocked`). The slot wraps the DEK directly and never touches the Keystore KEK, so a lost or broken KEK would leave fingerprint unlock working while the password slot has silently become unusable; the failure would then surface only when the 14-day reminder or an enrollment change forces the password, and verifying it would close an open, readable database. Therefore both unwrap methods also run the Keystore layer of the committed `PASSWORD` slot, which needs no password and no authentication: decrypt `slot.wrappedDek` (64 bytes) with the KEK using `outerIv` and the outer AAD of section 3.1, require 48 bytes, zero the result. A Keystore-layer failure is retried once after 1 s as in section 5.2; if it still fails (or the length is wrong) the result carries `kekBroken = true` and `KeyVault` remembers, in memory under the mutex, the generation for which it failed (`brokenKekGeneration`). It never changes the unlock itself, and it is never `KeyUnavailable` while the slot works. `AppLockController` then shows a notice that offers "Back up now" and the fingerprint password reset ([ui.md](ui.md) owns the texts; the reset replaces the KEK, section 3.1).
+- None of these steps touches the backoff values or `passwordVerifiedAt`: a fingerprint is not a password entry (sections 5.3, 5.6).
+- The DEK that the slot releases is authentic (GCM tag) but not proven to be the database's key: nothing test-unwraps a slot when it is armed, so an authentic slot that wraps a wrong DEK is possible after a bug. An open through the slot that fails with `SQLiteNotADatabaseException`, a header/mode mismatch or a page-1 HMAC failure is therefore a slot failure, never Corrupt and never WrongPassword: E2 calls `KeyVault.deleteBiometricKey()` and raises `PasswordNeeded` with the public reason `FingerprintChanged` ([db-lifecycle.md](db-lifecycle.md#failure-classification) owns the row). The password path then proves the key, and only a failure after a password unlock is Corrupt. A failure after a successful open (`quick_check`, a runtime `SQLiteDatabaseCorruptException`) is Corrupt either way, because a key that decrypted and authenticated page 1 is the right key. Every other consumer of a slot-released key (Restore from `Corrupt`, the fingerprint reset's source check) applies the same rule at its first open of the old database: a NOTADB there is a slot failure (`AuthFailed`), the key is deleted and the password path remains.
+- Verify at setup: on api28 and api35, `updateAAD` on an authentication-bound AndroidKeyStore GCM cipher before the prompt fails and after the prompt succeeds (the design adds AAD only after the prompt either way), and a DECRYPT cipher initialized before a prompt that stays open for 60 s still completes `doFinal`.
+
+#### 3.7.4 Failure classes of the slot
+Cause names (`SlotMissing`, `SlotInvalidated`, …) are the internal `PasswordCause` values of section 5.1, which maps them onto the public `PasswordReason` and `fingerprintUsable` of [architecture.md](architecture.md) § Unlock routes.
+
+| Failure | Detected in | Result for the user | Slot and key |
+|---|---|---|---|
+| No `bioSlot` (mode `PASSWORD`, lock on), a malformed `bioSlot` ignored by the parser (3.5) | `UnlockPolicy.route` (section 5.1), or `NoSlot` | Password route, cause `SlotMissing`; after the password the re-creation prompt (7.8) | none to change; a malformed member is kept (dead) in the file until the next commit; the alias is deleted best effort |
+| `KeyPermanentlyInvalidatedException` at `init`, or alias missing | `biometricUnlockCipher` | Password route, cause `SlotInvalidated`; after the password the re-creation prompt | Kept in the file (dead); alias deleted |
+| Other Keystore failure at `init` (after one retry) | `biometricUnlockCipher` | Password route for this unlock, cause `SlotUnavailable` | Kept; counted (below) |
+| Prompt error or cancel | `AppLockController` (section 7.4) | Per the table of section 7.4 | Kept |
+| Tag failure or wrong plaintext length at `doFinal` | `unlockWithBiometric`, `verifyBiometric` | Password route, cause `SlotInvalidated`; after the password the re-creation prompt | Kept in the file (dead); alias deleted |
+| Open through the slot fails with `SQLiteNotADatabaseException`, a header/mode mismatch or a page-1 HMAC failure (3.7.3) | E2 | Password route, cause `SlotInvalidated`; the password path then decides between success and Corrupt | Kept in the file (dead); alias deleted by `deleteBiometricKey` |
+| Other exception at `doFinal`; key state changed between `init` and `doFinal`; missing or different crypto object in the result | same | Stay on the lock with a generic error; the "Unlock" button prepares a new cipher; "Use password" stays available | Kept; counted, except the generation race |
+| Two consecutive failures of the same slot (below) | `biometricUnlockCipher`, `unlockWithBiometric`, `verifyBiometric` | As an invalidated slot: password route, cause `SlotInvalidated`, then the re-creation prompt | Judged dead: alias deleted, kept in the file (dead) |
+| Wrapping failure while arming | `biometricArmCipher`, `wrapForBiometric` (or the commit, which is `DbMaintenance`'s) | Enabling: the toggle stays off with an error. Re-creation: offered again after the next password unlock | Nothing committed; alias deleted |
+| Outer (KEK) layer of the password slot fails during a fingerprint unlock | `unlockWithBiometric`, `verifyBiometric` | The unlock succeeds with `kekBroken = true`; the notice of 3.7.3 | Slot kept; nothing deleted |
+| Lock screen removed (device no longer secure) | `UnlockPolicy.route` (section 5.1) | `PASSWORD` mode: the password at every unlock, then the auto-off writes (7.6); the platform has invalidated the key anyway | Alias deleted with the auto-off removal (`DbMaintenance.removeBiometricSlot`) |
+
+- No slot failure is KeyUnavailable, Corrupt or WrongPassword; none counts toward the backoff, deletes data or changes `slot`. KeyUnavailable arises only from the main slot and the key-state file (section 5.2).
+- `KeyVault` never rewrites the key-state file because of a slot failure. A dead `bioSlot` is tolerated ([db-lifecycle.md](db-lifecycle.md#key-state-semantics)): the next commit of any kind (a slot commit or a generation commit) replaces or drops it, and nothing else can change the key-state while `DbMaintenance` holds its operation mutex (so a Restore or a slot commit never races with a rewrite from the unlock path). Keeping the dead slot in the file also keeps the reason: `biometricSlotStatus()` reports `Dead` while the file has a `bioSlot` and the alias is missing, so the password screen keeps the reason `FingerprintChanged` until the slot is re-created.
+- Repeated failures. A slot that fails persistently without being invalidated (a Keystore that keeps throwing at `init`, an OEM key that generates and then fails at `doFinal`) must not cost a fingerprint touch on every unlock forever, and the re-creation offer needs the slot to be dead. `KeyVault` keeps an in-memory counter keyed by the `bioSlot` IV: it increases on every `Unavailable` result of `biometricUnlockCipher` and on every `SlotFailed(invalidated = false)` except the generation race, and it resets on any successful unwrap and when the IV changes. At the second consecutive failure the slot is judged dead: delete the alias and return `Invalidated` (cipher preparation) or `SlotFailed(invalidated = true)` (unwrap). The counter is not persisted, so a restart gives the slot two more chances.
+- A failed alias deletion is ignored; the next `biometricUnlockCipher` finds the key unusable and deletes it again.
+
+#### 3.7.5 Slot lifecycle
+| Event | `bioSlot` in the file | Keystore key `doro_bio_v1` |
+|---|---|---|
+| Lock turned on in `PASSWORD` mode (section 7.1) | Added by `DbMaintenance.createBiometricSlot` | Generated by `biometricArmCipher` |
+| Re-creation prompt succeeds (section 7.8) | Added by `DbMaintenance.createBiometricSlot` (a dead slot is replaced) | Generated (any old one deleted first) |
+| Commit with a new DEK: every key change of section 4, the fingerprint reset, Restore from `KeyUnavailable`, Start fresh | Not written (`bio = null`) | Deleted by `DbMaintenance` after the commit (`DELETE_BIO_KEY`) |
+| Restore from `Ready` or `Corrupt` (same DEK; a backup does not touch the key-state) | The committed `bioSlot` is passed to `commit` unchanged | Kept |
+| Lock turned off, by the user or by the auto-off of 7.6 | Removed by `DbMaintenance.removeBiometricSlot`, which deletes the key first | Deleted first |
+| Invalidation, tag failure, repeated failure, open failure through the slot (3.7.4) | Kept (dead) until the next commit | Deleted |
+| Erase (section 5.4) | Gone with the file | Deleted by `eraseState` |
+
+- Hygiene: a `bioSlot` should exist only while the lock is on. One can be left behind with the lock off (a crash between the slot commit and the setting write of section 7.1, or a `SettingsStore` reset, DEC-09); [db-lifecycle.md](db-lifecycle.md#key-state-semantics) tolerates it as "stale". `UnlockPolicy` never uses a slot while the lock is off. `AppLockController.reconcileLock()` removes it: when the lock is off and `hasBiometricSlot()` is true, or the biometric key exists without a slot, it calls `BiometricSlotWriter.removeBiometricSlot()` (`DbMaintenance.removeBiometricSlot`, idempotent, accepted in every gate state); failures are ignored. `reconcileLock()` runs as the first step of `offerSlotSetup()` ([architecture.md](architecture.md) § AppLockController and BiometricGateway), which effect E5 calls after every successful password unlock and committed key change, and after every write of `security.app_lock = false`. It also performs the `PASSWORD`-mode auto-off of section 7.6.
+- An unused biometric key (an arming prompt cancelled, or an orphan after a crash) holds nothing: it wraps no committed DEK. It is deleted by the next arming, removal, new-DEK commit or Erase.
 
 ## 4. Key-change flows (DEC-61)
 
@@ -267,19 +473,22 @@ Each flow re-encrypts through the export-and-swap pipeline with a new DEK (none 
 | Remove password | `PASSWORD` → `DEVICE` | Current password | New raw key |
 | Turn off encryption | `DEVICE` → `PLAIN` | Confirmation | `ByteArray(0)` |
 | Turn off encryption | `PASSWORD` → `PLAIN` | Current password + confirmation | `ByteArray(0)` |
+| Reset password with fingerprint (section 4.3) | `PASSWORD` → `PASSWORD` | New password twice + checkbox, then one fingerprint through the biometric slot; never the current password | New raw key |
+
+The current password is required for every row except the last (DEC-61). The biometric slot never authorizes any other key change: a fingerprint can replace a forgotten password (section 4.3) but cannot remove it, turn encryption off or change it while the old one is known to the user.
 
 Before the two flows that set a first startup password (`PLAIN` → `PASSWORD`, `DEVICE` → `PASSWORD`), the UI offers a backup (DEC-73, [ui.md § 8.8](ui.md#88-encryption-and-startup-password-dec-61-dec-64)). The offer adds no check and no key handling to this section.
 
-Preconditions: `SessionGate` is `Ready` and no `DbMaintenance` operation runs. The biometric lock adds no prompt (the user is already past it). The entry point is `DbMaintenance.changeKey(target, currentPassword, newPassword)`; the arrays it receives are its own (section 3.6).
+Preconditions (all rows except the fingerprint reset, whose preconditions are in section 4.3): `SessionGate` is `Ready` and no `DbMaintenance` operation runs. The biometric lock adds no prompt (the user is already past it). The entry point is `DbMaintenance.changeKey(target, currentPassword, newPassword)`; the arrays it receives are its own (section 3.6).
 1. Collect the input in one dialog; password fields follow section 6. The new password is checked with `PasswordPolicy.checkNewPassword` (section 6.3); a violation returns `AppError.InvalidInput(rule)` and stops the flow.
-2. Source `PASSWORD`: verify the current password with `KeyVault.openKey(slot, passwordBytes(current))`. `PasswordRejected` maps to `AppError.WrongPassword`, shows inline, counts toward the backoff (section 5.3, except malformed or empty input, which never counts) and stops the flow. `Throttled` maps to `AppError.Throttled`: no PBKDF2 runs, and the dialog shows the countdown. Zero the returned raw key at once; the export uses the live key held by `DatabaseHolder`.
+2. Source `PASSWORD`: verify the current password with `KeyVault.openKey(slot, passwordBytes(current))`. `PasswordRejected` maps to `AppError.WrongPassword`, shows inline, counts toward the backoff (section 5.3, except malformed or empty input, which never counts) and stops the flow. `Throttled` maps to `AppError.Throttled`: no PBKDF2 runs, and the dialog shows the countdown. Zero the returned raw key at once; the export uses the live key held by `DatabaseHolder`. A correct current password also refreshes the reminder timestamp (section 5.6), even if the flow later fails.
 3. `KeyVault.prepare(target, newPassword)`: new DEK, KEK ensured, for `PASSWORD` calibration (section 3.3), derivation and both wraps, raw-key encoding, self-check (section 3.2). It zeroes the DEK and the password KEK before returning and persists nothing.
-4. `DbMaintenance` exports from the live key to `rawKey`, verifies, and commits with `KeyVault.commit(newGeneration, slot)` (through `commitGeneration`).
-5. After the commit `DatabaseHolder` owns `rawKey` and zeroes the old live key once the old Room instance and the maintenance connection are closed. Exclusive mode itself never zeroes the live key (section 6.4), so the export source and the rollback reopen can use it. Target `PLAIN`: `KeyVault.deleteKek()`. After any committed key change, `cacheDir/share/` is emptied: earlier share copies would otherwise stay readable in the form the user just replaced ([db-lifecycle.md](db-lifecycle.md#key-changes) step 14 and [Share-file lifetime](db-lifecycle.md#share-file-lifetime) list this trigger; DEC-83).
-6. Any failure before the commit: zero `rawKey`, keep the old database and slot, show the error. A KEK created in step 3 stays and is reused next time.
+4. `DbMaintenance` exports from the live key to `rawKey`, verifies, and commits with `KeyVault.commit(newGeneration, slot, bio = null)` (through `commitGeneration`). Because the DEK is new, the file is written without `bioSlot` and `DbMaintenance` deletes `doro_bio_v1` after the commit (`DELETE_BIO_KEY`, section 3.5); for a target `PASSWORD` slot built from a typed new password it also refreshes the reminder timestamp (section 3.6).
+5. After the commit `DatabaseHolder` owns `rawKey` and zeroes the old live key once the old Room instance and the maintenance connection are closed. Exclusive mode itself never zeroes the live key (section 6.4), so the export source and the rollback reopen can use it. Target `PLAIN`: `KeyVault.deleteKek()`. Target `PASSWORD` with the biometric lock on: once the gate is back in `Ready`, the re-creation prompt of section 7.8 follows (one fingerprint touch arms a slot for the new DEK). After any committed key change, `cacheDir/share/` is emptied: earlier share copies would otherwise stay readable in the form the user just replaced ([db-lifecycle.md](db-lifecycle.md#key-changes) step 14 and [Share-file lifetime](db-lifecycle.md#share-file-lifetime) list this trigger; DEC-83).
+6. Any failure before the commit: zero `rawKey`, keep the old database, slot and `bioSlot`, show the error. A KEK created in step 3 stays and is reused next time.
 
 - Turning encryption on states that existing backups and share copies are not changed; turning it off states that notes will be stored unencrypted (`enc_on_body`, `enc_off_body` in [ui.md](ui.md#1111-passwords-encryption-and-authentication-prompts)).
-- Backup, and a Restore started from `Ready`, keep the slot: the export target key is the live raw key (`DatabaseHolder.copyLiveKey()`) and the new generation commits the same slot. They never change a setting of section 2, and a backup password never becomes the database password (DEC-83, DEC-84). Recovery-origin actions follow section 4.1.
+- A backup does not touch the key-state: it creates no generation and makes no commit ([db-lifecycle.md](db-lifecycle.md#backup)). A Restore started from `Ready` keeps the slot: the export target key is the live raw key (`DatabaseHolder.copyLiveKey()`) and the new generation commits the same key slot and the same `bioSlot`. Neither changes a setting of section 2, and a backup password never becomes the database password (DEC-83, DEC-84). Recovery-origin actions follow section 4.1.
 
 ### 4.1 Key handling of recovery actions
 Restore and Start fresh are also offered on the Corrupt (DEC-85) and KeyUnavailable (DEC-86) screens, where Room is closed and the live key was zeroed (E3). Mechanics: [db-lifecycle.md](db-lifecycle.md#origins-and-target-key) and [db-lifecycle.md](db-lifecycle.md#start-fresh). Security handling:
@@ -288,34 +497,139 @@ Restore and Start fresh are also offered on the Corrupt (DEC-85) and KeyUnavaila
 |---|---|---|---|
 | Restore from `Corrupt`, mode `PLAIN` | Unchanged | `ByteArray(0)` | none |
 | Restore from `Corrupt`, mode `DEVICE` | Unchanged slot | `KeyVault.openKey(slot, null)` again | A Keystore failure ends the restore with `AppError.KeyUnavailable`; the user stays on the Corrupt screen |
-| Restore from `Corrupt`, mode `PASSWORD` | Unchanged slot | The restore dialog asks for the database password once; `openKey(slot, passwordBytes)` | A database-password check: counts toward the backoff and is subject to `Throttled` (section 5.3) |
-| Restore from `KeyUnavailable` | `PLAIN` slot (the current configuration cannot produce a key) | `ByteArray(0)` | `commit` of the `PLAIN` slot resets the backoff values; then `KeyVault.deleteKek()`; the confirmation states that encryption will be off |
+| Restore from `Corrupt`, mode `PASSWORD` | Unchanged slot; `bioSlot` kept | Fingerprint first (DEC-65: the fingerprint unlocks in every mode) when the lock is on, a strong biometric is usable, a live `bioSlot` exists and the 14-day reminder is not due: `AppLockController.slotPrompt(AuthPurpose.RestoreKey)` (a DECRYPT `CryptoObject`), then `KeyVault.unlockWithBiometric(cipher)`; the raw key is the export source and is zeroed as in section 6.4. Otherwise, or after "Use password" (`Ok(null)`) or a slot failure, the database password once: `openKey(slot, passwordBytes)` | The fingerprint path touches neither backoff nor reminder (a source that fails to open with NOTADB is a slot failure, section 3.7.3, and falls back to the password). The password path is a database-password check: counts toward the backoff, is subject to `Throttled` (section 5.3) and, when correct, refreshes the reminder timestamp (section 5.6). A due reminder makes the restore ask the password first, like every other unlock |
+| Restore from `KeyUnavailable` | `PLAIN` slot (the current configuration cannot produce a key) | `ByteArray(0)` | `commit` of the `PLAIN` slot (with `bio = null`) resets the backoff values and `DbMaintenance` deletes the biometric key with `DELETE_BIO_KEY` (section 3.7.5); then `KeyVault.deleteKek()`; the confirmation states that encryption will be off |
 | Start fresh from `Corrupt` or `KeyUnavailable` | Empty `PLAIN` database, `PLAIN` slot | `ByteArray(0)` | As the row above; the encryption-off notice follows (DEC-85) |
 
-Every other setting of section 2 stays unchanged (L-12 in [testing.md](testing.md)).
+Every other setting of section 2 stays unchanged (L-12 in [testing.md](testing.md)). The biometric lock stays on after a switch to `PLAIN`; it then works as the `PLAIN`-mode prompt without a slot (section 7).
+
+### 4.2 Biometric slot across key changes
+- Every key change makes a new DEK (DEC-61), so the biometric slot is never carried over: the commit is called with `bio = null` and `DbMaintenance` deletes its key (`DELETE_BIO_KEY`, section 3.5). No key change re-wraps the new DEK with the old biometric key, because creating a slot always needs a fresh authorization through an ENCRYPT `CryptoObject`.
+- A key change that ends in `PASSWORD` mode with the biometric lock on (`PLAIN` → `PASSWORD`, `DEVICE` → `PASSWORD`, change password, fingerprint reset) finishes with the re-creation prompt of section 7.8 as soon as the gate is back in `Ready`. Until it succeeds, unlocking uses the password (cause `SlotMissing`, public reason `None`, section 5.1).
+- `PASSWORD` → `DEVICE` and `PASSWORD` → `PLAIN` delete the slot and its key with the commit; the lock, if on, continues as the slot-less prompt of `DEVICE`/`PLAIN` mode with the device-credential fallback (Q7).
+- A crash after the commit and before the re-creation prompt leaves `PASSWORD` mode with the lock on and no slot: the next unlock asks the password and then offers the prompt. Nothing extra is persisted for this.
+
+### 4.3 Fingerprint password reset (DEC-63, DEC-61)
+A `PASSWORD` → `PASSWORD` key change authorized by the biometric slot instead of the current password, for a user who has forgotten the password but still has fingerprint unlock.
+- Offered as "Set a new password with your fingerprint" on the "Forgot password?" screen (section 5.7) only while fingerprint unlock is available: `AppLockController.fingerprintUnlockAvailable()` is true, which is `UnlockPolicy.route(...)` evaluated with `reminderDue = false` returning `Slot` (`PASSWORD` mode, lock on, a usable strong biometric, a live `bioSlot`). The option is evaluated when the screen opens and again right before the prompt.
+- Steps:
+  1. The dialog collects the new password twice and the acknowledgement checkbox; `PasswordPolicy.checkNewPassword` (section 6.3) runs first, so a policy violation never wastes a fingerprint. The current password is not asked.
+  2. `AppLockController.slotPrompt(AuthPurpose.ResetPassword)` (section 7.3): `KeyVault.biometricUnlockCipher()`, then the slot prompt with a DECRYPT `CryptoObject`. `Invalidated` or `NoSlot` withdraws the option (the screen keeps Erase, section 5.4); `Unavailable`, a cancel or an error leaves everything unchanged.
+  3. The authorized `SlotCipher` and the new password bytes go to `DbMaintenance.resetPasswordWithBiometric(origin, cipher, newPassword)`, which owns both from then on (section 3.6). Its mechanics, origin states and crash cases are [db-lifecycle.md](db-lifecycle.md#fingerprint-password-reset)'s; this section fixes the security rules:
+     - The authorization is `KeyVault.unlockWithBiometric(cipher)` returning `Key` inside this same operation. Without it, nothing is prepared or exported. A source database that cannot be opened with that key (`SQLiteNotADatabaseException`, section 3.7.3) is a slot failure: the operation ends with `Err(AuthFailed)`, `deleteBiometricKey()` runs, and nothing is written; it does not claim the data is corrupt.
+     - With Room closed (the reset started from the cold-start password screen), that raw key is the export source.
+     - With Room open (the reset started from the password screen on return from background, section 5.5), the export source is the live key; the slot's raw key must equal it (`MessageDigest.isEqual` on the 67-byte encodings) or the operation ends with `Err(AppError.Unexpected)` and changes nothing. A GCM-verified slot DEK that differs from the live DEK breaks the invariant that the slot is armed from the live key of its generation: it is a bug, never a Keystore failure, so it is never `KeyUnavailable`. The slot's raw key is zeroed at once after the comparison.
+     - If `unlockWithBiometric` reported `kekBroken = true`, the `prepare` of this operation replaces the broken KEK (section 3.1): the committed slot's outer layer is already unusable for the password, and the commit replaces that slot.
+     - Then the steps 3–6 of section 4 with target `PASSWORD`: `prepare(PASSWORD, newPassword)`, export, verify, commit with `bio = null`. The commit resets the backoff values and refreshes the reminder timestamp (section 3.6); `DbMaintenance` then deletes `doro_bio_v1` and the share directory is emptied.
+  4. With the lock still on, the re-creation prompt of section 7.8 follows once the gate is `Ready`, so fingerprint unlock works again for the new DEK.
+- The reset is not a password attempt: it neither counts toward nor waits for the backoff, so it stays available during a countdown (section 5.3). Repeated fingerprint failures are limited by the system's own lockout (codes 7 and 9, section 7.4).
+- The erase path (section 5.4) stays available on the same screen in every case.
 
 ## 5. Unlock, errors and erase
 
 ### 5.1 Cold start per mode
-States and transitions: [architecture.md](architecture.md) § SessionGate. All key work happens in `Opening` (DEC-90).
+States and transitions: [architecture.md](architecture.md) § SessionGate. All key work happens in `Opening` (DEC-90). The unlock method is chosen by `UnlockPolicy.route` (below): effect E1 evaluates it for the cold start (through `AppLockController.unlockRoute()`), and `AppLockController` evaluates it again right before every prompt, because availability, enrollment and the clock can change in between.
 
-| Mode | Before `Opening` | In `Opening` |
-|---|---|---|
-| `PLAIN` | `Locked` if the biometric lock is on | Key `ByteArray(0)` |
-| `DEVICE` | `Locked` if the biometric lock is on | Keystore layer → DEK → raw key |
-| `PASSWORD` | `NeedsPassword`; the correct password also satisfies the biometric lock (DEC-65, Q8) | Keystore layer → PBKDF2 → inner GCM → DEK → raw key |
+"Strong biometric usable" means `canAuthenticate(BIOMETRIC_STRONG)` returns `BIOMETRIC_SUCCESS` or `BIOMETRIC_STATUS_UNKNOWN` (section 7.4) and `KeyguardManager.isDeviceSecure()` is true.
+
+| Mode | Lock off | Lock on, strong biometric usable | Lock on, no usable strong biometric |
+|---|---|---|---|
+| `PLAIN` | `Opening` with key `ByteArray(0)` | `Locked`: strong prompt without `CryptoObject`, then `Opening` | `Locked`: device-credential fallback (Q7, section 7.6), then `Opening` |
+| `DEVICE` | `Opening`: Keystore layer → DEK → raw key | As `PLAIN`; the Keystore layer runs in `Opening` | As `PLAIN` |
+| `PASSWORD` | Startup password (`NeedsPassword`), then `Opening`: Keystore layer → PBKDF2 → inner GCM → DEK → raw key | Fingerprint first: `Locked` with the slot prompt (DECRYPT `CryptoObject`, negative button "Use password"); `Opening` unwraps the DEK from the biometric slot (section 3.7.3). The password instead when there is no slot (`SlotMissing`), the slot is dead (`SlotInvalidated`) or unavailable (`SlotUnavailable`), the 14-day reminder is due (`Reminder`, section 5.6), or the user taps "Use password" (`UserChose`) | Startup password alone (`NoBiometric`); never the device credential. This includes a device without a secure lock screen: the password is asked, and the auto-off of section 7.6 runs only after it |
+| Any mode, gate `Locked(KeyUnavailable)` | n/a | The strong prompt without `CryptoObject` (the key cannot be obtained, so no slot or password check can run) | Device-credential fallback (Q7); auto-off without a secure lock screen |
+
+Over `KeyUnavailable` (`Locked(KeyUnavailable)`, and `Locked(Maintenance)` whose origin is `KeyUnavailable`) no key can be obtained and the key-state may be invalid, so the mode is not even known. The route there is the biometric route with the Q7 fallback in every mode, evaluated by `UnlockPolicy.routeOverKeyUnavailable`. `PasswordRequired` is never raised there: a password check cannot run, and without this rule a `PASSWORD`-mode user would be locked out of the screen that offers Restore and Start fresh (the event would be dropped by T35 and every "Unlock" tap would repeat the drop). This is the only `PASSWORD`-mode exception to "never the device credential", and it is safe: the device credential unlocks no data, because none is readable, and the actions behind it (Restore, Start fresh) are the ones DEC-86 offers to anyone who holds the phone and passes the lock.
+
+```kotlin
+// package com.doro.organizer.model: the public route that architecture.md owns (the gate carries it).
+enum class PasswordReason { None, Reminder, FingerprintChanged }    // the one-line reason of the password screen (texts: ui.md § 10.2)
+sealed interface UnlockRoute {
+    data object Biometric : UnlockRoute                              // strongPrompt, no CryptoObject; the device credential is its fallback (Q7)
+    data object Slot : UnlockRoute                                   // PASSWORD: slotPrompt with a DECRYPT CryptoObject (section 3.7.3)
+    data class Password(val reason: PasswordReason, val fingerprintUsable: Boolean) : UnlockRoute
+}
+
+// package com.doro.organizer.security; pure, JVM-tested (UnlockPolicyTest, one case per table cell and cause)
+/** The finer causes behind a Password decision. Internal: tests and the mapping below use them; the gate sees only PasswordReason. */
+enum class PasswordCause { LockOff, NoBiometric, SlotMissing, SlotInvalidated, SlotUnavailable, Reminder, UserChose }
+
+internal sealed interface PolicyDecision {
+    data object None : PolicyDecision                // no lock: a cold start goes to Opening, a return from background shows the content
+    data object AutoOff : PolicyDecision             // PLAIN/DEVICE, lock on without a secure lock screen: section 7.6 turns it off. Never returned for PASSWORD mode
+    data object Biometric : PolicyDecision           // PLAIN/DEVICE: strongPrompt, no CryptoObject
+    data object DeviceCredential : PolicyDecision    // PLAIN/DEVICE fallback (Q7)
+    data object Slot : PolicyDecision                // PASSWORD: slotPrompt with a DECRYPT CryptoObject (section 3.7.3)
+    data class Password(val cause: PasswordCause) : PolicyDecision
+}
+
+object UnlockPolicy {
+    internal fun route(mode: KeyMode, coldStart: Boolean, lockOn: Boolean, deviceSecure: Boolean,
+                       biometric: BiometricAvailability, bio: BioSlotStatus, reminderDue: Boolean): PolicyDecision {
+        val usable = deviceSecure && (biometric == BiometricAvailability.Success || biometric == BiometricAvailability.StatusUnknown)
+        if (mode != KeyMode.PASSWORD) return when {
+            !lockOn -> PolicyDecision.None
+            !deviceSecure -> PolicyDecision.AutoOff
+            usable -> PolicyDecision.Biometric
+            else -> PolicyDecision.DeviceCredential
+        }
+        return when {
+            !lockOn -> if (coldStart) PolicyDecision.Password(PasswordCause.LockOff) else PolicyDecision.None
+            !usable -> PolicyDecision.Password(PasswordCause.NoBiometric)      // includes !deviceSecure: never AutoOff here, see below
+            bio == BioSlotStatus.None -> PolicyDecision.Password(PasswordCause.SlotMissing)
+            bio == BioSlotStatus.Dead -> PolicyDecision.Password(PasswordCause.SlotInvalidated)
+            reminderDue -> PolicyDecision.Password(PasswordCause.Reminder)
+            else -> PolicyDecision.Slot
+        }
+    }
+
+    /** Over Locked(KeyUnavailable): no key, possibly no valid key-state, so no mode. Every mode behaves like PLAIN/DEVICE. */
+    internal fun routeOverKeyUnavailable(lockOn: Boolean, deviceSecure: Boolean, biometric: BiometricAvailability): PolicyDecision =
+        route(KeyMode.PLAIN, coldStart = false, lockOn, deviceSecure, biometric, BioSlotStatus.None, reminderDue = false)
+
+    /** The public route. Everything that is not Slot or Password is the Biometric route (architecture.md: the device credential and the auto-off
+     *  are handled by AppLockController at prompt time, and E1 ignores the route for PLAIN/DEVICE, where it is Biometric by definition). */
+    internal fun toRoute(d: PolicyDecision): UnlockRoute = when (d) {
+        PolicyDecision.Slot -> UnlockRoute.Slot
+        is PolicyDecision.Password -> when (d.cause) {
+            PasswordCause.Reminder -> UnlockRoute.Password(PasswordReason.Reminder, fingerprintUsable = false)
+            PasswordCause.SlotInvalidated -> UnlockRoute.Password(PasswordReason.FingerprintChanged, fingerprintUsable = false)
+            PasswordCause.SlotUnavailable, PasswordCause.UserChose -> UnlockRoute.Password(PasswordReason.None, fingerprintUsable = true)
+            PasswordCause.LockOff, PasswordCause.NoBiometric, PasswordCause.SlotMissing -> UnlockRoute.Password(PasswordReason.None, fingerprintUsable = false)
+        }
+        else -> UnlockRoute.Biometric
+    }
+}
+```
+- Mapping rules (the public route is what the gate and the password screen see):
+
+| Internal cause | Public `PasswordReason` | `fingerprintUsable` | Produced by |
+|---|---|---|---|
+| `LockOff`, `NoBiometric`, `SlotMissing` | `None` | false | `route` |
+| `SlotInvalidated` | `FingerprintChanged` | false | `route` (a dead slot), and the slot path (3.7.4: tag failure, repeated failure, open failure through the slot) |
+| `Reminder` | `Reminder` | false: the route that is not a voluntary choice offers no "Use fingerprint" | `route` |
+| `SlotUnavailable` | `None` | true: the slot is kept and may work on the next try, so "Use fingerprint" returns to the prompt | the slot path (cipher preparation failed once) |
+| `UserChose` | `None` | true | "Use password" (`AppLockController.usePassword()`, the negative button), never `route` |
+
+- `fingerprintUsable` is true only for the two causes the user or a transient failure produced while the slot is still good; it is false for `Reminder` and for every route that `route` returns, so the reminder screen never offers a way around itself.
+- A `PASSWORD`-mode device without a secure lock screen is never `AutoOff`, because that would be a password bypass: someone who knows the phone PIN could remove the screen lock in system Settings while Doro sits in the background with its database open and reopen it without any check. In `PASSWORD` mode `!deviceSecure` is `Password(NoBiometric)` on a cold start and on a return from background alike. The auto-off writes happen only after the password was verified (section 7.6).
+- Gate wiring (requirements on [architecture.md](architecture.md) § SessionGate, which owns the states, events and rows): in `PASSWORD` mode a `Slot` route enters `Locked(Open)` instead of `NeedsPassword`; a successful slot prompt carries the authorized `SlotCipher` into `Opening`, where E2 calls `KeyVault.unlockWithBiometric(cipher)` instead of `unlock(password)`; every `Password` route enters `NeedsPassword` with the reason, which the password screen shows as one line ([ui.md](ui.md) owns the texts). The old rule "the cold-start password also satisfies the biometric lock" no longer exists: in `PASSWORD` mode the password is one of two ways through one gate, never a second gate.
+- The slot path never touches the backoff values or `passwordVerifiedAt`. A transient open failure after the slot path needs a new prompt, because the cipher is single use (the state it returns to is architecture.md's).
+
+Password path (every `Password` route and `PASSWORD` mode with the lock off):
 
 1. On submit, the gate UI copies the field into a `CharArray`, clears the field and dispatches `PasswordSubmitted(chars)` (T7, only while no backoff runs). Effect E2 (package `session`) owns the array: it calls `passwordBytes` (section 6.3), passes the bytes (or `ByteArray(0)` when `passwordBytes` returned null) to `KeyVault.unlock`, and zeroes the chars and the bytes in its `finally`. The screen shows progress.
 2. `Opening` removes the Keystore layer, derives with the stored salt and iterations, and decrypts the inner layer. An `AEADBadTagException` there is WrongPassword: `PasswordRejected` (T21), back to `NeedsPassword` with the error.
-3. On success: encode the raw key, zero the DEK, the password KEK and the password bytes, reset `security.unlock_failures` and `security.unlock_retry_at` to 0 (both done inside `KeyVault`), and open the database with `DatabaseHolder.open(generation, rawKey)`, which takes ownership of the key.
+3. On success: encode the raw key, zero the DEK, the password KEK and the password bytes, reset `security.unlock_failures` and `security.unlock_retry_at` to 0 and set `security.password_verified_at` to `AppTime.nowMillis()` (all inside `KeyVault`, one `SettingsStore` edit, best effort: a failing write never fails a correct password, section 3.6), and open the database with `DatabaseHolder.open(generation, rawKey)`, which takes ownership of the key. If the lock is on, a strong biometric is usable and the slot is not live (`biometricSlotStatus()` is `None` or `Dead`, reasons `SlotMissing` and `SlotInvalidated`), the re-creation prompt of section 7.8 follows in `Ready`.
 4. The inner GCM tag proves the DEK, so no later open failure is reported as a wrong password or counted toward the backoff. A Corrupt classification goes to the Corrupt screen (T17). After a `viaPassword` open (Password mode) a transient failure returns to `NeedsPassword(couldNotOpen)` with the could-not-open message, not the wrong-password message (T18), because E3 zeroed the key and the password bytes are gone, so the password must be typed again; `unlock_failures` stays 0. In `PLAIN` and `DEVICE` mode a transient failure stays on the open-error screen with "Try again" (T19, T20).
 
 ### 5.2 Error classes
 | Class | Raised when | Result |
 |---|---|---|
 | WrongPassword | `AEADBadTagException` on the inner (password) layer. Any other exception on the password layer is KeyUnavailable | `NeedsPassword` with an error; counts for backoff; never Corrupt; never deletes |
+| Slot failure | Any failure of the biometric key or the biometric slot (section 3.7.4): invalidation, a missing alias, a Keystore error, a tag failure on `bioSlot`, a malformed `bioSlot` member, an open through the slot that fails with `SQLiteNotADatabaseException` or a header/HMAC mismatch (3.7.3) | Password route (or the lock with an error); never KeyUnavailable, never Corrupt, never counts for backoff, never deletes; the password slot stays usable (unless its KEK fails, which a fingerprint unlock reports as `kekBroken`, 3.7.3) |
 | KeyUnavailable | The Keystore layer fails: a missing alias; any `java.security.GeneralSecurityException` (`KeyStoreException`, `UnrecoverableKeyException`, `InvalidKeyException` incl. `KeyPermanentlyInvalidatedException`, `IllegalBlockSizeException`, `BadPaddingException` incl. `AEADBadTagException`, `InvalidAlgorithmParameterException`, `NoSuchAlgorithmException`, `NoSuchProviderException`, `CertificateException`), `java.security.ProviderException` (incl. `StrongBoxUnavailableException`) or `java.io.IOException` raised while loading the KeyStore, fetching the alias or running the outer cipher; an outer plaintext that is not 32 bytes (`DEVICE`) or 48 bytes (`PASSWORD`). Also: the key-state file is invalid (section 3.5) or unreadable, or missing next to a database file that is not plaintext ([db-lifecycle.md](db-lifecycle.md#startup-reconciliation)) | KeyUnavailable screen (DEC-86) |
-| Corrupt | Open or `quick_check` fails with a proven key (`PLAIN`: the empty key; otherwise a GCM-verified DEK), or `SQLiteDatabaseCorruptException` at runtime | Corrupt screen (DEC-85) |
+| Corrupt | Open or `quick_check` fails with a proven key (`PLAIN`: the empty key; `DEVICE` and `PASSWORD`: a DEK verified by the outer or inner GCM tag of the main slot), or `SQLiteDatabaseCorruptException` at runtime. A DEK released by the biometric slot is authentic but not proven: an open that fails through it with `SQLiteNotADatabaseException` is a slot failure (row above), and only a failure after a password unlock, or after a successful open, is Corrupt | Corrupt screen (DEC-85) |
 
 - The classification is by exception class, never by message. AndroidKeyStore reports most operation failures from `doFinal` as `IllegalBlockSizeException` (cause `KeyStoreException`) or `BadPaddingException`, so the list is the whole `GeneralSecurityException` family, not a selection: an unlisted exception would crash-loop the app at every cold start, before any recovery screen can show ([architecture.md](architecture.md) § Error model).
 - `KeyVault` retries a Keystore-layer exception once after 1 s (`delay(1000)` on `dispatchers.io`), for every item except `AEADBadTagException` and a wrong plaintext length, which are never retried. A retry is not an attempt: it never touches the backoff.
@@ -325,23 +639,68 @@ States and transitions: [architecture.md](architecture.md) § SessionGate. All k
 Full classification, including `SQLiteNotADatabaseException`, missing files and transient I/O: [db-lifecycle.md](db-lifecycle.md#failure-classification).
 
 ### 5.3 Backoff (DEC-62)
-- Counts consecutive WrongPassword results (`AEADBadTagException` on the inner layer) of every database-password check: the cold-start password, the current-password check of section 4, and the startup-password question of a Restore from the Corrupt screen in `PASSWORD` mode (section 4.1, [ui.md § 8.7](ui.md#87-restore-dec-84)). Malformed or empty input is answered with the wrong-password message but never counted (section 6.1). Backup passwords at restore are not throttled (the file can be attacked offline anyway).
+- Counts consecutive WrongPassword results (`AEADBadTagException` on the inner layer) of every database-password check: the cold-start password, the password asked on return from background (section 5.5, `KeyVault.verifyPassword`), the password asked to turn the lock off without a usable fingerprint (section 7.1), the current-password check of section 4, and the startup-password question of a Restore from the Corrupt screen in `PASSWORD` mode when the fingerprint is not used (section 4.1, [ui.md § 8.7](ui.md#87-restore-dec-84)).
+- Fingerprints never touch the counters: a slot unlock neither counts nor resets them, and the system limits failed fingerprints itself (codes 7 and 9, section 7.4). While a countdown runs, the fingerprint route (section 5.1) and the fingerprint reset (section 4.3) stay available; a completed reset installs a new key slot and so resets both values. Malformed or empty input is answered with the wrong-password message but never counted (section 6.1). Backup passwords at restore are not throttled (the file can be attacked offline anyway).
 - Schedule: after failure n ≥ 5 the delay is min(30 s × 2^(n−5), 300 s): 30, 60, 120, 240, then 300 s. Failures 1–4 have no delay. Pure function `UnlockBackoff.delayMillis(failures)` in package `model`.
 - Time base: `AppTime.elapsedMillis()` (elapsed realtime), so moving the system clock changes nothing (A1). `AppError.Throttled.retryAtElapsedMs`, `UnlockResult.retryAtElapsedMs`, `NeedsPassword.retryAt` and `unlockRetryAtElapsedMs` all carry this base.
 - Persist `unlockFailures` and `unlockRetryAtElapsedMs = AppTime.elapsedMillis() + delayMillis(failures)` (0 when the delay is 0) before the error shows, so killing the app does not reset them.
 - Reboot: elapsed realtime restarts at boot. Within one boot `retryAt − now` never exceeds `delayMillis(failures)`; if it does, the device has rebooted and the value is replaced by `now + delayMillis(failures)`. A reboot therefore re-applies the full delay. `UnlockBackoff.effectiveRetryAt(failures, storedRetryAt, now)` (package `model`, pure) implements this; effects E1 and E2 pass the stored pair through it before they put `retryAt` into the gate state, so the password screen shows the effective value, and `KeyVault` writes it back whenever it reads the pair and the value differs.
 - While `elapsedMillis() < retryAt`: the password field and the submit button are disabled and a countdown shows ([ui.md](ui.md#102-password-screen)); `KeyVault` returns `Throttled` without PBKDF2 to every caller, including the section 4 current-password check and the Restore-from-Corrupt password question; "Forgot password?" stays available. After a restart the password screen reads the pair from `SettingsStore`, so the countdown is shown at once.
-- Both values reset on a correct password, on every `KeyVault.commit` and on Erase. Attempts are never capped and never wipe data.
+- Both values reset on a correct password (best effort when the write fails, section 3.6), on every `KeyVault.commit` that installs a new key configuration and on Erase; a commit that keeps the key slot (every biometric slot commit, a Restore that keeps the slot) leaves them alone. If the counting write itself fails, `KeyVault` returns `Throttled` computed in memory (section 3.6). Attempts are never capped and never wipe data.
 
 ### 5.4 Forgotten password: Erase (DEC-63)
-- "Forgot password?" on `NeedsPassword` opens a screen stating there is no recovery (§8) with the button "Erase all data and start over", which is always enabled ([ui.md](ui.md#103-forgot-password-screen-dec-63)). The button opens a typed-confirmation dialog; the dialog's confirm button enables only while the typed text matches ([ui.md](ui.md#810-erase-all-data-dec-63)). No password or biometric is required: the action equals the system "Clear storage".
+- "Forgot password?" opens the screen of section 5.7. When fingerprint unlock is available it first offers "Set a new password with your fingerprint" (section 4.3); otherwise it states that there is no recovery without a backup (§8). In every case it offers the button "Erase all data and start over", which is always enabled ([ui.md](ui.md#103-forgot-password-screen-dec-63)). The button opens a typed-confirmation dialog; the dialog's confirm button enables only while the typed text matches ([ui.md](ui.md#810-erase-all-data-dec-63)). No password or biometric is required: the action equals the system "Clear storage".
 - The flow runs as `DbMaintenance.erase()` from `NeedsPassword` (T8); mechanics and the crash matrix: [db-lifecycle.md](db-lifecycle.md#erase-forgotten-password).
 1. Delete every generation file set except the committed one `G` (`DELETE_OLD`, [db-lifecycle.md](db-lifecycle.md#erase-forgotten-password) step 2). If any of them remains, the Erase ends with `Err(DatabaseUnavailable)` and outcome `Aborted` and nothing was erased: a leftover plaintext generation would otherwise be adopted at the next start and bring the erased notes back.
-2. `KeyVault.eraseState()`: delete `db-state.json`, which makes the encrypted data unreadable at once, then the KEK.
+2. `KeyVault.eraseState()`: delete `db-state.json`, which makes the encrypted data unreadable at once, then the KEK and the biometric key `doro_bio_v1` (failed deletes are ignored).
 3. Delete every `doro-*` database file, sidecar and staging or share leftover, and the data-reset marker (`DbFiles.deleteEverything()`, [db-lifecycle.md](db-lifecycle.md#files-on-disk)).
 4. `SettingsStore.resetSecurity()` (every key of section 2 to its default, both remembered ids cleared), then `SettingsStore.onDataReplaced()` ([architecture.md](architecture.md) § Data reset), so navigation drops ids of the erased database.
 5. `MaintenanceFinished(Restart)`: `SessionGate` restarts in the first-run state (T30): an empty `PLAIN` database, with Restore available in Settings.
 - Crash points converge. Before step 2 (`db-state.json` still there): the password screen, nothing changed (step 1 deleted only unreferenced generations). Between steps 2 and 3: encrypted files without a key-state file, so the next start shows KeyUnavailable (DEC-86), whose "Start fresh" deletes the files; the settings of step 4 are then not reset except for the two backoff values, which that commit resets (section 3.6). Between steps 3 and 4: startup reconciliation finds a first run and completes the settings reset ([db-lifecycle.md](db-lifecycle.md#startup-reconciliation) step 7).
+- Erase is offered on the cold-start password screen (`NeedsPassword`, T8). Whether it is also offered on the return-from-background password screen of section 5.5, where Room is open, is a mechanics question for [db-lifecycle.md](db-lifecycle.md#erase-forgotten-password) and [architecture.md](architecture.md) § SessionGate; the security rules above apply unchanged wherever it runs.
+
+### 5.5 Return from background
+On process ON_STOP with the lock on, `AppLockController` raises `LockNow` (section 7.7); `Ready` becomes `Locked(Ready)` and Room stays open. The unlock method is `UnlockPolicy.route(..., coldStart = false, ...)`, evaluated right before the prompt:
+
+| Mode | Lock off | Lock on, strong biometric usable | Lock on, no usable strong biometric |
+|---|---|---|---|
+| `PLAIN`, `DEVICE` | Nothing is asked | Strong prompt without `CryptoObject` | Device-credential fallback (Q7, section 7.6) |
+| `PASSWORD` | Nothing is asked (DEC-62) | Slot prompt with a DECRYPT `CryptoObject`; on success `KeyVault.verifyBiometric(cipher)` proves the slot, zeroes the DEK and `Unlocked` follows. The password instead in the cases of section 5.1 (no slot, dead slot, unavailable, reminder due, "Use password") | The startup password alone, checked with `KeyVault.verifyPassword`; this includes a device that has lost its secure lock screen (never auto-off here, 7.6) |
+
+- The slot is used even though the database is already open, so that a fingerprint enrolled while the app was in the background (by someone who knows the device PIN) cannot unlock the running session: enrollment invalidates the key and the password is asked.
+- The password check on return: the screen follows section 6.2; the gate UI hands the `CharArray` to the effect that verifies it (ownership as section 3.6); `KeyVault.verifyPassword` counts toward the backoff, honors `Throttled`, and on success resets the backoff and refreshes the reminder timestamp. The state, event and effect names are [architecture.md](architecture.md) § SessionGate's. The content stays out of composition until `Unlocked` (DEC-66).
+- `KeyFailed` from `verifyPassword` while the database is open (the Keystore layer failed): the data was readable a moment ago, so this path never closes an open database or goes to `KeyUnavailable`. The gate stays `Locked(Ready)` with a generic error and keeps the fingerprint route and the fingerprint reset available (architecture.md T50 must follow; section 3.7.3, `kekBroken`).
+- After a successful password on return with the lock on, a usable biometric and a slot that is not live, the re-creation prompt of section 7.8 follows. After a successful password with the lock on and `PASSWORD`-mode auto-off due (no secure lock screen), the auto-off of 7.6 runs (E5, `reconcileLock()`).
+- "Forgot password?" is shown on this screen too and leads to section 5.7.
+
+### 5.6 Password reminder (DEC-74)
+Keeps a rarely typed startup password remembered while fingerprint unlock is in daily use.
+- Scope: only where the route would otherwise be `Slot` (`PASSWORD` mode, lock on, usable strong biometric, a live `bioSlot`). Everywhere else the password is either asked anyway or does not exist. The same rule applies to the fingerprint-first choice of a Restore from `Corrupt` (section 4.1).
+- Rule: once the startup password has not been entered successfully for 14 days, the next unlock (cold start or return from background) asks for the password instead of the fingerprint, with the reason `Reminder` shown as one line ([ui.md](ui.md) owns the text).
+- Timestamp: `security.password_verified_at` in `SettingsStore`, next to the backoff values, epoch milliseconds from `AppTime.nowMillis()`. Only `KeyVault` writes it. It is not secret and holds no user data.
+```kotlin
+// package com.doro.organizer.model; pure, JVM-tested (PasswordReminderTest)
+object PasswordReminder {
+    const val INTERVAL_MS: Long = 14L * 24 * 60 * 60 * 1000          // 1,209,600,000 ms
+    fun isDue(verifiedAt: Long, now: Long): Boolean =
+        verifiedAt <= 0L ||                                          // lost or never written: due
+        now < verifiedAt ||                                          // clock set backwards: due
+        now - verifiedAt >= INTERVAL_MS
+}
+```
+- `KeyVault.isPasswordReminderDue()` returns `PasswordReminder.isDue(settings.passwordVerifiedAt, appTime.nowMillis())`.
+- Refreshed (set to `nowMillis()`) by every successful entry of the startup password: the cold-start password (section 5.1), the password on return from background (section 5.5), the password that turns the lock off (section 7.1), the current-password check of a key change (section 4 step 2), the database-password question of a Restore from Corrupt when the password path is used (section 4.1), and the commit of a slot built from a newly typed password (set, change and fingerprint reset, section 3.6). The write is best effort (section 3.6): if it fails, the unlock proceeds and the reminder simply stays due; a lost timestamp counts as due.
+- Not refreshed by: a fingerprint unlock (also the fingerprint path of a Restore), a backup, a Restore from `Ready`, a backup password, a biometric slot commit. Erase and a `SettingsStore` reset set it to 0 (due).
+- Clock: the interval must survive reboots, so it uses the wall clock (`AppTime.nowMillis()`), not elapsed realtime. Epoch milliseconds are zone-free, so travel and time-zone changes do not matter. A clock moved forward makes the reminder due earlier; a clock set before the stored time makes it due at once. The reminder is a memory aid, not a barrier against A1: the route it replaces already requires an enrolled fingerprint.
+- During a backoff countdown the reminder screen shows the countdown like every password screen (section 5.3); the fingerprint reset stays available through "Forgot password?".
+- A correct password refreshes the timestamp and opens (or unlocks) as usual. The slot is still valid, so no re-creation prompt follows.
+
+### 5.7 Forgot password
+- "Forgot password?" appears on every startup-password screen: cold start, return from background (section 5.5) and the reminder (section 5.6).
+- It offers, in this order:
+  1. "Set a new password with your fingerprint" (section 4.3), only while fingerprint unlock is available (`AppLockController.fingerprintUnlockAvailable()`, that is `UnlockPolicy.route` with `reminderDue = false` returning `Slot`). On the reminder screen this is always the case, so "Forgot password?" there leads to the fingerprint reset (DEC-74).
+  2. "Erase all data and start over" (section 5.4), always.
+- Without fingerprint unlock the screen states that there is no recovery without a backup (§8, DEC-63); the texts are [ui.md](ui.md#103-forgot-password-screen-dec-63)'s.
 
 ## 6. Passwords and secrets in memory (DEC-64)
 
@@ -420,12 +779,16 @@ Within the database lifecycle the table of [db-lifecycle.md](db-lifecycle.md#key
 | Live raw key (67 bytes) | `DatabaseHolder`, from `open` until the generation it keys is replaced or closed | (a) `close()` (effect E3), after `RoomDatabase.close()`; (b) a failed open or reopen; (c) a committed key change, once the old Room instance and the maintenance connection are closed; (d) `Reopen.StayClosed`. Never earlier: an exclusive-mode close for backup, restore or a key change keeps the array, because `DbMaintenance` exports from it and the rollback reopens with it, and SQLCipher keys WAL reader connections later from the same array. Never while a connection keyed with it is open |
 | New raw key (`PreparedKey.rawKey`) | `DbMaintenance` until `Committed`, then `DatabaseHolder` | On any failure before the commit, after every connection keyed with it is closed |
 | Copy of the live key for a restore | `DbMaintenance` | After target verification of the restored generation, and on every failure or cancellation |
+| DEK unwrapped through the biometric slot (32 bytes) | `KeyVault`, one `unlockWithBiometric` or `verifyBiometric` call | `unlockWithBiometric`: right after the raw-key encoding; `verifyBiometric`: right after the tag check. Always before the call returns. The array that `Cipher.doFinal` returned (provider-allocated) is zeroed in the same `finally` that copies it into the DEK array |
+| Raw key from the biometric slot | Cold start: E2 hands it to `DatabaseHolder.open`, which owns it like any live raw key. Fingerprint reset and Restore from `Corrupt`: the `DbMaintenance` operation (sections 4.3, 4.1) | Cold start: as the live raw key below. Reset or restore with Room closed: after the export source connection has closed, and on every failure; reset with Room open: right after the comparison with the live key |
+| Live-key copy for arming | `DbMaintenance.createBiometricSlot` (section 3.7.2) | In its `finally`, after `KeyVault.wrapForBiometric` returns or throws; the DEK that `KeyVault` decodes from it is zeroed right after `doFinal` |
+| Authorized `SlotCipher` | Whoever received it from the prompt: E2, `AppLockController`, or the reset operation | Single use: dropped after `doFinal`, or unused on cancel or failure. It holds no key bytes (the biometric key stays in the Keystore), but it is a one-time authorization, so it is never stored in a ViewModel, `SavedStateHandle`, Bundle or navigation key; process death simply requires a new prompt |
 | Backup password bytes | `DbMaintenance`, one export or restore operation | After the last connection keyed with them has closed, including the maintenance connection and any temporary Room instance used for migrations ([db-lifecycle.md](db-lifecycle.md#key-custody)); a retry after a wrong backup password uses new bytes |
 
 - DEC-64's "The DEK stays in memory only while the database is open and is zeroed after `close()`" refers to the raw-key encoding held by `DatabaseHolder`; the 32-byte binary DEK exists only inside one `KeyVault` call.
 
 ### 6.5 Known limitations
-- Compose text buffers, IME and accessibility copies and any `String` made by text layout cannot be zeroed; a moving GC can leave stale array copies; `SecretKeySpec`, `Mac` and `Cipher` keep key copies that cannot be cleared; SQLCipher keeps its key schedule in native memory while a connection is open. Zeroing shortens lifetimes; it does not guarantee erasure (live process access is out of scope).
+- Compose text buffers, IME and accessibility copies and any `String` made by text layout cannot be zeroed; a moving GC can leave stale array copies; `SecretKeySpec`, `Mac` and `Cipher` keep key copies that cannot be cleared; SQLCipher keeps its key schedule in native memory while a connection is open; AndroidKeyStore returns unwrapped key bytes (the DEK released by the biometric slot or by the KEK layer) through binder copies that cannot be cleared. Zeroing shortens lifetimes; it does not guarantee erasure (live process access is out of scope).
 - Editor drafts and search text in `SavedStateHandle` (DEC-28, DEC-37) are kept by the system across process death, outside the app's encryption. They are never shown before unlock because `NavDisplay` is composed only in `Ready` and `Maintenance` (DEC-90).
 
 ## 7. Biometric app lock (DEC-65)
@@ -442,14 +805,19 @@ class LockAvailability(val biometric: BiometricAvailability, val deviceSecure: B
 |---|---|---|
 | `BIOMETRIC_SUCCESS` | Toggle shown and enabled | Toggle shown |
 | `BIOMETRIC_STATUS_UNKNOWN` | Toggle shown and enabled; it turns on only after the test prompt succeeds | Toggle shown |
-| `BIOMETRIC_ERROR_NONE_ENROLLED` | Toggle disabled, with an enroll hint and an enroll action (button text: [ui.md § 9.4](ui.md#94-biometric-lock)) | Toggle shown; turning off uses the fallback (7.6) |
-| `ERROR_HW_UNAVAILABLE`, `ERROR_SECURITY_UPDATE_REQUIRED`, `ERROR_NO_HARDWARE`, `ERROR_UNSUPPORTED` | Row hidden | Toggle shown; turning off uses the fallback (7.6) |
+| `BIOMETRIC_ERROR_NONE_ENROLLED` | Toggle disabled, with an enroll hint and an enroll action (button text: [ui.md § 9.4](ui.md#94-biometric-lock)) | Toggle shown; turning off uses the fallback (7.6), in `PASSWORD` mode the startup password |
+| `ERROR_HW_UNAVAILABLE`, `ERROR_SECURITY_UPDATE_REQUIRED`, `ERROR_NO_HARDWARE`, `ERROR_UNSUPPORTED` | Row hidden | Toggle shown; turning off uses the fallback (7.6), in `PASSWORD` mode the startup password |
 
 Screen layout and strings: [ui.md](ui.md#94-biometric-lock).
 - While the lock is on, the row is always shown so that the user can turn it off.
 - Enroll, launched through `ExternalActivities` under the re-lock exemption (7.7): API 30+ `Settings.ACTION_BIOMETRIC_ENROLL` with `EXTRA_BIOMETRIC_AUTHENTICATORS_ALLOWED = BIOMETRIC_STRONG`; API 28–29 `Settings.ACTION_FINGERPRINT_ENROLL`. On `ActivityNotFoundException` (OEMs may not implement the action) `ExternalActivities` launches the request's fallback `Settings.ACTION_SECURITY_SETTINGS`; if that also throws, it ends the exemption and the screen shows only the enroll hint. Never `resolveActivity`: under package visibility its answer depends on the device and can be null although the activity exists.
-- Turning on: one successful `BIOMETRIC_STRONG` prompt (never the fallback), then `security.app_lock = true`. Turning off: one successful authentication on the unlock route (7.4), then `false`. A cancel or an error leaves the value unchanged.
-- The lock never touches the DEK or the Keystore (§11 App Lock, Key Management).
+- Turning on, `PLAIN` or `DEVICE` mode: one successful `strongPrompt` (never the fallback), then `security.app_lock = true`.
+- Turning on, `PASSWORD` mode: one successful slot prompt that arms the biometric slot (section 3.7.2), never the fallback. The order is a crash-safety rule owned by [db-lifecycle.md](db-lifecycle.md#biometric-slot-commits) (CS-29 to CS-32): (1) `KeyVault.biometricArmCipher()`; (2) the slot prompt with the ENCRYPT `CryptoObject` (purpose `EnableLock`); (3) `BiometricSlotWriter.createBiometricSlot(cipher)` (`DbMaintenance.createBiometricSlot`: wrap, commit, read-back); (4) only after it returned `Ok`, write `security.app_lock = true`. If any step fails there is nothing to revert, because the lock setting was not written: the toggle stays off and `confirm` returns `Err(AppError.AuthFailed)` (or the commit's own error). A crash between (3) and (4) leaves a stale slot next to a lock that is off, which is tolerated and removed by `reconcileLock()` (3.7.5); it never leaves a lock that is on without the slot the user just authorized. One touch both confirms and arms.
+- Turning off, `PLAIN` or `DEVICE` mode: one successful authentication on the unlock route (7.4, including the device-credential fallback), then `false`.
+- Turning off, `PASSWORD` mode: one successful authentication on the `PASSWORD` unlock route: the slot prompt with a DECRYPT `CryptoObject` and `KeyVault.verifyBiometric` (purpose `DisableLock`; its negative button "Use password" switches to the password), or, without a usable fingerprint or a live slot, the startup password checked with `KeyVault.verifyPassword` (counts toward the backoff, refreshes the reminder). Then, in this order: `BiometricSlotWriter.removeBiometricSlot()` (`DbMaintenance.removeBiometricSlot`, which deletes `doro_bio_v1` first and then rewrites the key-state without `bioSlot`), and only after it returned `Ok` write `security.app_lock = false`. Deleting the key first makes the fingerprint path to the DEK disappear at once; a crash in between leaves the lock on with a dead slot, so the next unlock asks the password and then offers the re-creation prompt, which the user can decline before turning the lock off again (CS-31, CS-32). A removal that returns `Err` leaves the lock on and shows the error. The device credential never turns the lock off in `PASSWORD` mode.
+- Auto-off (7.6) calls the same removal in any gate state, then writes the setting.
+- A cancel or an error leaves the value unchanged.
+- The lock touches the database key only in `PASSWORD` mode, through the biometric slot (DEC-60, DEC-65; this supersedes §11 "app lock only" and "independent of the encryption key", spec errata). In `PLAIN` and `DEVICE` mode it remains a UI lock that never touches the DEK or the Keystore.
 
 ### 7.2 PromptInfo
 ```kotlin
@@ -459,17 +827,26 @@ val strongPrompt = BiometricPrompt.PromptInfo.Builder()
     .setNegativeButtonText(cancelText)                 // required without DEVICE_CREDENTIAL
     .setConfirmationRequired(false)                    // a hint; passive face unlock needs no extra tap
     .build()
-val credentialPrompt = BiometricPrompt.PromptInfo.Builder()   // API 30+ fallback only
+val slotPrompt = BiometricPrompt.PromptInfo.Builder()         // PASSWORD mode only, always with a CryptoObject
+    .setTitle(title)
+    .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)   // the only class a per-operation key accepts (3.7.1)
+    .setNegativeButtonText(negativeText)               // "Use password" for Unlock, DisableLock and RestoreKey; the cancel text for EnableLock, SetUpSlot, ResetPassword
+    .setConfirmationRequired(false)
+    .build()
+val credentialPrompt = BiometricPrompt.PromptInfo.Builder()   // API 30+ fallback only, PLAIN and DEVICE mode only (and over Locked(KeyUnavailable), section 5.1)
     .setTitle(title)
     .setAllowedAuthenticators(BiometricManager.Authenticators.DEVICE_CREDENTIAL)
     .build()                                           // a negative button is not allowed here
 ```
-`authenticate(promptInfo)` is called without a `CryptoObject`. Titles and negative buttons: [ui.md](ui.md#811-system-authentication-prompts-dec-65).
+- `PLAIN` and `DEVICE` mode: `authenticate(strongPrompt)` without a `CryptoObject`, or the credential fallback (7.6).
+- `PASSWORD` mode: `authenticate(slotPrompt, BiometricPrompt.CryptoObject(slotCipher.cipher))`, always. A `CryptoObject` prompt is never combined with `DEVICE_CREDENTIAL` (androidx.biometric 1.1.0 rejects that pair below API 30, and the per-operation key could not use it anyway), so `PASSWORD` mode has no credential fallback: the password is its fallback (the one exception, the `KeyUnavailable` recovery screen, uses `strongPrompt` without a `CryptoObject`, section 5.1). The cipher is DECRYPT for `Unlock`, `DisableLock`, `ResetPassword` and `RestoreKey` (3.7.3) and ENCRYPT for `EnableLock` and `SetUpSlot` (3.7.2).
+- Titles, explanations and negative-button texts: [ui.md](ui.md#811-system-authentication-prompts-dec-65). The negative button of the unlock prompt reads exactly "Use password" (DEC-65).
 
 ### 7.3 AppLockController and MainActivity
+[architecture.md](architecture.md) § AppLockController and BiometricGateway owns the member list and the per-screen prompt handling; this section shows the contract as the lock logic needs it and owns the rules the members apply. Where a name differs, architecture.md's wins.
 ```kotlin
 // package com.doro.organizer.security (the only importer of androidx.biometric)
-enum class AuthPurpose { Unlock, EnableLock, DisableLock }
+enum class AuthPurpose { Unlock, EnableLock, DisableLock, SetUpSlot, ResetPassword, RestoreKey }   // SetUpSlot, ResetPassword and RestoreKey exist in PASSWORD mode only
 
 /** The platform adapter beneath AppLockController: everything that touches BiometricManager, BiometricPrompt, KeyguardManager and the system intents.
  *  Production: DefaultBiometricGateway. Tests: FakeBiometricGateway (testing.md § 7), so the re-lock rules, the exemption and the auto-prompt run for real. */
@@ -478,37 +855,69 @@ interface BiometricGateway {
     fun isDeviceSecure(): Boolean                                  // KeyguardManager.isDeviceSecure()
     fun attach(activity: FragmentActivity)                         // creates BiometricPrompt(activity, mainExecutor, callback); only the newest instance receives callbacks
     fun detach(activity: FragmentActivity)
-    fun authenticate(request: PromptRequest, onResult: (PromptResult) -> Unit)   // strongPrompt or credentialPrompt (7.2), never a CryptoObject
+    fun authenticate(request: PromptRequest, onResult: (PromptResult) -> Unit)   // strongPrompt, slotPrompt (with request.crypto) or credentialPrompt (7.2)
     fun credentialIntent(title: String): Intent?                   // API 28–29: createConfirmDeviceCredentialIntent(title, null); null without a secure lock screen
     fun enrollIntents(): Pair<Intent, Intent>                      // the API-dependent enrollment intent (7.1) and the ACTION_SECURITY_SETTINGS fallback
 }
-class PromptRequest(val title: String, val credentialOnly: Boolean, val negativeText: String?)   // negativeText only when !credentialOnly
-sealed interface PromptResult { data object Succeeded : PromptResult; class Error(val code: Int, val message: String) : PromptResult }
+class PromptRequest(
+    val title: String,
+    val credentialOnly: Boolean,
+    val negativeText: String?,                                     // only when !credentialOnly
+    val crypto: SlotCipher? = null,                                // PASSWORD mode: always set; never together with credentialOnly
+) { override fun toString() = "PromptRequest(credentialOnly=$credentialOnly, crypto=${crypto != null})" }
+sealed interface PromptResult {
+    class Succeeded(val cryptoMatches: Boolean) : PromptResult     // true when result.cryptoObject?.cipher === request.crypto?.cipher (always true without crypto)
+    class Error(val code: Int, val message: String) : PromptResult
+}
+// On success AppLockController checks cryptoMatches and passes on the SlotCipher that KeyVault returned. It never constructs one:
+// a SlotCipher built from the prompt's cipher would lack the generation and outerIv that KeyVault recorded at init (3.6), which is what makes the
+// state re-check in unlockWithBiometric possible.
 
-// package com.doro.organizer.security. Production class DefaultAppLockController(biometric, externalActivities, settingsStore, appTime, processLifecycle, listener: () -> LockListener)
+/** Implemented by DbMaintenance (data.maintenance), injected by AppContainer as a provider, so security never imports data.maintenance
+ *  (architecture.md § Event wiring; mechanics: db-lifecycle.md § Biometric slot commits). */
+interface BiometricSlotWriter {
+    suspend fun createBiometricSlot(cipher: SlotCipher): AppResult<Unit>      // gate Ready; wrap + commit + read-back
+    suspend fun removeBiometricSlot(): AppResult<Unit>                        // any gate state; deletes the key first
+}
+
+enum class SlotOffer { Missing, Invalidated }                      // BioSlotStatus None / Dead at the moment the offer is made
+
+// package com.doro.organizer.security. Production class DefaultAppLockController(biometric, keyVault, slotWriter: () -> BiometricSlotWriter, externalActivities, settingsStore, appTime, processLifecycle, listener: () -> LockListener)
 interface AppLockController : ExternalCallbacks {                  // ExternalCallbacks: core.external, architecture.md § Result launchers and process death
     fun attach(activity: FragmentActivity)                         // MainActivity.onCreate, every instance
     fun detach(activity: FragmentActivity)                         // MainActivity.onDestroy
     fun availability(): LockAvailability                           // section 7.1
-    fun prompt()                                                   // the lock screen's "Unlock" button
-    suspend fun confirm(purpose: AuthPurpose): AppResult<Boolean>  // EnableLock / DisableLock: Ok(true) success, Ok(false) cancelled, Err(AuthFailed) otherwise
-    fun onGateLockedChanged(locked: Boolean)                       // called by SessionGate when the state enters or leaves Locked (architecture.md § Event wiring)
+    suspend fun unlockRoute(): UnlockRoute                         // UnlockPolicy.toRoute(UnlockPolicy.route(...)) with live inputs (5.1); never prompts; E1 and every prompt
+    val lockRoute: StateFlow<UnlockRoute?>                         // the route of the lock screen currently shown; the lock screen shows "Use password" while it is Slot
+    fun onGateScreenChanged(screen: LockScreen)                    // called by SessionGate; arms the one-shot auto-prompt (below)
+    fun prompt()                                                   // the lock screen's "Unlock" button: evaluates the route again (5.1) and prompts
+    fun usePassword()                                              // the lock screen's "Use password" action: on the Slot route raises onPasswordRequired(None, fingerprintUsable = true, counters), cause UserChose
+    suspend fun confirm(purpose: AuthPurpose): AppResult<Boolean>  // EnableLock / DisableLock in every mode (7.1): Ok(true) success, Ok(false) cancelled, Err(AuthFailed) otherwise
+    suspend fun fingerprintUnlockAvailable(): Boolean              // PASSWORD mode, lock on, usable strong biometric, live slot; the reminder does not affect it (4.3, 5.7)
+    suspend fun slotPrompt(purpose: AuthPurpose): AppResult<SlotCipher?>   // ResetPassword (4.3) and RestoreKey (4.1): an authorized DECRYPT SlotCipher, Ok(null) cancelled / "Use password" / not usable, Err(AuthFailed) otherwise
+    val slotOffer: StateFlow<SlotOffer?>                           // non-null while the re-creation prompt is due (7.8); the shell shows it
+    suspend fun offerSlotSetup()                                   // effect E5: reconcileLock() first (3.7.5), then sets slotOffer when 7.8 holds
+    suspend fun createSlot(): AppResult<Boolean>                   // the re-creation prompt (7.8), purpose SetUpSlot: Ok(true) created, Ok(false) cancelled
+    fun dismissSlotOffer()                                         // "Not now"
+    suspend fun reconcileLock()                                    // removes a stale slot while the lock is off (3.7.5) and performs the PASSWORD-mode auto-off (7.6)
     // from ExternalCallbacks: beforeLaunch(kind) arms the exemption (7.7), afterResult(kind) clears it, onCredentialResult(resultCode) (7.6)
 }
 ```
-- `AppLockController` is application-scoped (`AppContainer`). It holds only the exemption (`exemptUntil`), `promptInFlight`, the auto-prompt flag and `credentialPurpose`. Whether the app is locked is `SessionGate`'s `Locked` state (DEC-90), which is never persisted (no `SavedStateHandle`, no `rememberSaveable`), so every cold start is locked when the lock is on. It observes the process `LifecycleOwner` that `AppContainer` provides (production: `ProcessLifecycleOwner.get()`; tests: the fake of [testing.md](testing.md) § 7) and reads time only from `AppTime`. It raises gate events through `LockListener` ([architecture.md](architecture.md) § Event wiring).
+- In `PASSWORD` mode `AppLockController` additionally raises, through `LockListener`, (a) the cold-start unlock that carries the authorized `SlotCipher` into `Opening` (`onSlotUnlocked`) and (b) the password route with its public `PasswordReason` and `fingerprintUsable` (`onPasswordRequired`, section 5.1). On return from background it calls `KeyVault.verifyBiometric` itself and raises the ordinary `Unlocked`. The event names and rows are [architecture.md](architecture.md) § SessionGate's.
+- `confirm(EnableLock)` in `PASSWORD` mode runs the arming order of section 7.1 through `BiometricSlotWriter`; `confirm(DisableLock)` in `PASSWORD` mode uses the `PASSWORD` unlock route and returns `Ok(false)` when the user picks "Use password", so that the Settings screen can show its password dialog, whose bytes it passes to `KeyVault.verifyPassword` through the ViewModel (the screen and dialog are [ui.md](ui.md#94-biometric-lock)'s). `confirm` and `createSlot` never run the commit themselves: they hand the authorized `SlotCipher` to `BiometricSlotWriter`.
+- `AppLockController` is application-scoped (`AppContainer`). It holds only the exemption (`exemptUntil`), `promptInFlight`, the auto-prompt flag, `credentialPurpose`, the current `LockScreen`, the last resolved route and the `slotOffer` state. Whether the app is locked is `SessionGate`'s `Locked` state (DEC-90), which is never persisted (no `SavedStateHandle`, no `rememberSaveable`), so every cold start is locked when the lock is on. It observes the process `LifecycleOwner` that `AppContainer` provides (production: `ProcessLifecycleOwner.get()`; tests: the fake of [testing.md](testing.md) § 7) and reads time only from `AppTime`. It raises gate events through `LockListener` ([architecture.md](architecture.md) § Event wiring).
 - `MainActivity` (a `FragmentActivity`, DEC-04) calls `appLockController.attach(this)` in every `onCreate`; `attach` calls `biometric.attach(activity)` and starts the auto-prompt collector below. `onDestroy` calls `detach`. The API 28–29 credential intent is an `ExternalRequest` of kind `CredentialConfirm` ([architecture.md](architecture.md) § Result launchers and process death): the launcher is registered by `ExternalActivities.bind` in `onCreate` (before STARTED), `beforeLaunch` arms the exemption, and the result callback calls `afterResult` and then `onCredentialResult(resultCode)` at once, in every gate state, because that result is what unlocks `Locked`; it never waits in the inbox.
 - The prompt survives configuration changes and reports to the new instance: track `promptInFlight` (set by `authenticate`, cleared by every callback) and never call `authenticate` while it is set. `detach(activity)` clears the flag only when `!activity.isChangingConfigurations` (the prompt dies with its activity); across configuration changes the flag is kept, so rotating during the prompt shows one prompt.
-- Auto-prompt: a one-shot flag is set by `onGateLockedChanged(true)` when `SessionGate` enters `Locked`, and at each process ON_START while `Locked`, except an ON_START that occurs while an exemption is active (it ends an app-launched trip, 7.7). `attach` collects the flag with `activity.lifecycleScope.launch { activity.repeatOnLifecycle(Lifecycle.State.RESUMED) { … } }`: whenever the activity is RESUMED and the flag is set, `AppLockController` clears it and prompts, provided the gate is still `Locked` and `promptInFlight` is false. This covers both orders: the flag set before ON_RESUME (return from background) and after it (cold start, where `Locked` is entered after E1 finished while the activity is already RESUMED behind the splash). Never prompt from composition.
+- Auto-prompt: a one-shot flag is set by `onGateScreenChanged(screen)` when `SessionGate` shows a lock screen that prompts (`Prompt`, `PromptToOpen` or `PromptWithoutKey`; `Password`, `Content` and `Other` never prompt), and at each process ON_START while such a screen is shown, except an ON_START that occurs while an exemption is active (it ends an app-launched trip, 7.7). `attach` collects the flag with `activity.lifecycleScope.launch { activity.repeatOnLifecycle(Lifecycle.State.RESUMED) { … } }`: whenever the activity is RESUMED and the flag is set, `AppLockController` clears it and prompts, provided the gate still shows such a screen and `promptInFlight` is false. This covers both orders: the flag set before ON_RESUME (return from background) and after it (cold start, where `Locked` is entered after E1 finished while the activity is already RESUMED behind the splash). Never prompt from composition.
 - After `USER_CANCELED`, `NEGATIVE_BUTTON`, a non-OK credential result or any error that shows the Unlock button, nothing prompts until the next ON_START without an exemption; the lock screen's "Unlock" button prompts on demand ([ui.md](ui.md#104-lock-screen)).
 
 ### 7.4 Unlock route and error mapping
-At prompt time, `canAuthenticate(BIOMETRIC_STRONG)` = SUCCESS or STATUS_UNKNOWN uses `strongPrompt`; anything else uses the fallback (7.6). `onAuthenticationFailed` (one rejected attempt, prompt still open) changes nothing.
+At prompt time `AppLockController` evaluates `UnlockPolicy.route` (section 5.1; over `Locked(KeyUnavailable)`, `routeOverKeyUnavailable`). `PLAIN`/`DEVICE` and `KeyUnavailable`: `canAuthenticate(BIOMETRIC_STRONG)` = SUCCESS or STATUS_UNKNOWN uses `strongPrompt`; anything else uses the fallback (7.6). `PASSWORD`: `Slot` prepares the cipher (`KeyVault.biometricUnlockCipher()`, section 3.7.3) and uses `slotPrompt`; `NoSlot`, `Invalidated` and `Unavailable`, and every `Password` route, raise the password route instead of prompting. `onAuthenticationFailed` (one rejected attempt, prompt still open) changes nothing.
 
 Each prompt carries a purpose (`AuthPurpose`). Only `Unlock` raises gate events; `EnableLock` and `DisableLock` return `AppResult<Boolean>` to `SettingsViewModel`: success is `Ok(true)`, codes 5, 10 and 13 (and a non-OK credential result) are `Ok(false)` (no change, no message), any other error is `Err(AppError.AuthFailed)`.
 
 `AppLockController` raises exactly these gate events ([architecture.md](architecture.md) § SessionGate):
-- `Unlocked`: `onAuthenticationSucceeded`, credential `RESULT_OK`, and auto-off (7.6).
+- `Unlocked`: `onAuthenticationSucceeded`, credential `RESULT_OK`, and auto-off (7.6; never in `PASSWORD` mode, where it follows a verified password).
 - `AuthError(LockError(code, message = null))` (silent): codes 5, 10, 13, 3, and credential results other than OK.
 - `AuthError(LockError(code, message = errString))`: codes 2, 4, 7, 8 and any code not listed below; the lock screen shows `errString`. A `null` message is the only thing that distinguishes the silent case ([architecture.md](architecture.md) § States, events and effects).
 - No event for codes 1, 9, 11, 12, 15: the fallback starts at once. Code 14 (credential prompt only) is auto-off.
@@ -524,18 +933,38 @@ Each prompt carries a purpose (`AuthPurpose`). Only `Unlock` raises gate events;
 | API 28–29 credential intent: `RESULT_OK` | `Unlocked` |
 | API 28–29 credential intent: any other result code | Silent; "Unlock" button; no automatic retry (as 10) |
 
-- Verify at setup: what `canAuthenticate(BIOMETRIC_STRONG)` returns during a temporary LOCKOUT (code 7) and after LOCKOUT_PERMANENT. If it is not SUCCESS during LOCKOUT, use `strongPrompt` for that case so that row 7 applies instead of the fallback.
+- Verify at setup: what `canAuthenticate(BIOMETRIC_STRONG)` returns during a temporary LOCKOUT (code 7) and after LOCKOUT_PERMANENT. If it is not SUCCESS during LOCKOUT, use `strongPrompt` (`slotPrompt` in `PASSWORD` mode) for that case so that row 7 applies instead of the fallback.
+
+`PASSWORD` mode, slot prompt (`Unlock` and `DisableLock`; `RestoreKey` as the last row of the next list). The table above applies with these differences:
+
+| Outcome | `PASSWORD`-mode behavior |
+|---|---|
+| `onAuthenticationSucceeded` with the matching crypto object | Cold start: the authorized `SlotCipher` goes into `Opening` (E2 → `unlockWithBiometric`). Return from background and `DisableLock`: `KeyVault.verifyBiometric`, then `Unlocked` or the `DisableLock` result (a `kekBroken` result adds the notice of 3.7.3). A `SlotFailed` result follows section 3.7.4 |
+| Succeeded without the matching crypto object | As `SlotFailed(invalidated = false)`: stay on the lock with a generic error (counted, 3.7.4) |
+| 13 NEGATIVE_BUTTON ("Use password") | Password route, cause `UserChose` (public `None`, `fingerprintUsable = true`); not silent and no "Unlock"-button state |
+| 10 USER_CANCELED, 5 CANCELED, 3 TIMEOUT | As above (silent, "Unlock" button); the lock screen also offers "Use password" |
+| 7 LOCKOUT | Show `errString`; "Unlock" and "Use password" |
+| 1 HW_UNAVAILABLE, 9 LOCKOUT_PERMANENT, 11 NO_BIOMETRICS, 12 HW_NOT_PRESENT, 15 SECURITY_UPDATE_REQUIRED | Password route at once, cause `NoBiometric`; never the device credential |
+| 2, 4, 8, any other code | Show `errString`; "Unlock" and "Use password" |
+| Cipher preparation: `Invalidated` / `NoSlot` / `Unavailable` | Password route, cause `SlotInvalidated` / `SlotMissing` / `SlotUnavailable` (public reasons: section 5.1); no prompt is shown |
+
+- Over `Locked(KeyUnavailable)` the route is `Biometric` in every mode (section 5.1, `routeOverKeyUnavailable`): the table above applies, with the strong prompt without `CryptoObject` and the device-credential fallback, and `PasswordRequired` is never raised.
+- `EnableLock`, `SetUpSlot`, `ResetPassword` and `RestoreKey` prompts map success to their own result (sections 7.1, 7.8, 4.3, 4.1), codes 5, 10, 13 and 3 to "cancelled" (`Ok(false)` / `Ok(null)`) and every other code to `Err(AppError.AuthFailed)`; they never raise gate events. The negative button of `EnableLock`, `SetUpSlot` and `ResetPassword` is the cancel text; that of `RestoreKey` is "Use password", which answers `Ok(null)` so that the restore continues with the database-password question.
 
 ### 7.5 Password mode (Q8)
-- Cold start: `NeedsPassword` only; the correct password also clears the lock.
-- Return from background with the lock on: `Locked`, biometric only; the database stays open and no password is asked.
-- Without the lock, `PASSWORD` mode never prompts on return from background (DEC-62).
+Fingerprint first (DEC-65, Q8). The cold-start password no longer satisfies the lock: it is one of the two ways through a single gate, and which one is offered follows `UnlockPolicy.route`.
+- Cold start, lock on, usable strong biometric, live slot, reminder not due: the slot prompt; the fingerprint alone opens the database (section 5.1). "Use password" leads to the startup password.
+- Cold start otherwise: the startup password alone (with the reason line when the lock is on).
+- Return from background, lock on: the slot prompt under the same conditions, otherwise the startup password alone; the database stays open either way (section 5.5). Without a secure lock screen the password is asked too: the auto-off of 7.6 never raises `Unlocked` in `PASSWORD` mode.
+- Lock off: the startup password at every cold start, nothing on return from background (DEC-62).
+- The device credential never unlocks a `PASSWORD`-mode database: without a usable fingerprint the password is the only way in (Q7 applies to the modes without a startup password). The single exception is the `KeyUnavailable` recovery screen (section 5.1), where no data is readable and the credential only gates access to Restore and Start fresh.
+- After a password unlock with the lock on, a usable biometric and a slot that is not live: the re-creation prompt (7.8).
 
 ### 7.6 Device-credential fallback (Q7)
-- Used when strong biometrics are unavailable or permanently locked out (7.4), for unlocking and for turning the lock off.
+- `PLAIN` and `DEVICE` mode only (Q7), and over the `KeyUnavailable` recovery screen in every mode (section 5.1). Used when strong biometrics are unavailable or permanently locked out (7.4), for unlocking and for turning the lock off. In `PASSWORD` mode the startup password takes this role (7.5).
 - API 30+: `credentialPrompt` on the same `BiometricPrompt`.
 - API 28–29: `BiometricGateway.credentialIntent(title)` (`KeyguardManager.createConfirmDeviceCredentialIntent(title, null)`) posted as an `ExternalRequest` of kind `CredentialConfirm`, under the re-lock exemption (it starts a system activity, so `MainActivity` stops); `credentialPurpose` records `Unlock` or `DisableLock`. `RESULT_OK` unlocks (`Unlock`) or sets `security.app_lock = false` (`DisableLock`); any other result code is handled like USER_CANCELED (7.4). Returning from the credential screen produces a process ON_START, which does not set the auto-prompt flag because the exemption is still active (the result callback clears it afterwards); this is what prevents a loop after Back. Below API 30, BiometricPrompt supports neither `BIOMETRIC_STRONG or DEVICE_CREDENTIAL` nor `DEVICE_CREDENTIAL` alone.
-- Auto-off: if `KeyguardManager.isDeviceSecure()` is false (or the intent is null), set `security.app_lock = false` and `security.lock_auto_off_notice = true`, raise `Unlocked`, and continue as with the lock off. The notice shows once and clears the flag ([ui.md](ui.md#94-biometric-lock)).
+- Auto-off: if `KeyguardManager.isDeviceSecure()` is false (or the intent is null), set `security.app_lock = false` and `security.lock_auto_off_notice = true`, raise `Unlocked`, and continue as with the lock off. The notice shows once and clears the flag ([ui.md](ui.md#94-biometric-lock)). This applies to `PLAIN` and `DEVICE` mode (and to the `KeyUnavailable` recovery screen, where no data is readable). In `PASSWORD` mode auto-off never raises `Unlocked` and never replaces a password check: the device credential is excluded there, so someone who knows the phone PIN could otherwise remove the screen lock in system Settings while Doro sits in the background with its database open, reopen it and pass without a password or fingerprint (the policy returns `Password(NoBiometric)`, section 5.1). Instead, on a cold start the gate asks the startup password (`NeedsPassword`), and on return from background it shows the startup-password screen (`Locked(Ready)` with a `PasswordEntry`, T46). The auto-off writes run afterwards, after the password was verified (T48) or after the cold-start open: `AppLockController.reconcileLock()` (called by `offerSlotSetup()` in effect E5, 3.7.5) sees the lock on without a secure lock screen, calls `BiometricSlotWriter.removeBiometricSlot()` (the platform has invalidated the key anyway), then writes `security.app_lock = false` and `security.lock_auto_off_notice = true` in the order of 7.1.
 - Verify at setup: the deprecated `createConfirmDeviceCredentialIntent` works on the API 28 and 29 emulators.
 
 ### 7.7 Re-lock rules
@@ -548,6 +977,13 @@ Each prompt carries a purpose (`AuthPurpose`). Only `Unlock` raises gate events;
 - Results that arrive while `Locked`: `CredentialConfirm` is delivered at once, in every gate state (7.3). `Backup` and `Restore` results wait in the `ExternalActivities` inbox and are processed after unlock (DEC-90). `Share` and `Enroll` results are discarded after `afterResult`. A process killed in background restarts locked.
 - Verify at setup: with the real `ProcessLifecycleOwner` on api28 and api35, the `CreateDocument` result callback runs after the process ON_START and before `MainActivity.onResume`; the whole exemption rule depends on that order.
 
+### 7.8 Slot re-creation prompt (DEC-65)
+After a password unlock, one fingerprint touch re-arms fingerprint unlock for the current DEK.
+- Due when all hold: mode `PASSWORD`; lock on; a strong biometric is usable; `biometricSlotStatus()` is `None` or `Dead` (no slot, or one whose key is gone); and the gate has just reached `Ready` (or `Unlocked` from `Locked(Ready)`) through a successful startup-password entry (sections 5.1, 5.5) or through a committed key change that ends in `PASSWORD` mode (section 4.2, including the fingerprint reset).
+- Effect E5 calls `AppLockController.offerSlotSetup()`, which runs `reconcileLock()` first (3.7.5) and then sets `slotOffer` to `Missing` (status `None`) or `Invalidated` (status `Dead`); the shell shows the prompt ([ui.md](ui.md) owns whether a short explanation precedes it and its texts). `createSlot()` runs section 3.7.2 with purpose `SetUpSlot`: `biometricArmCipher`, the slot prompt with the ENCRYPT `CryptoObject`, `BiometricSlotWriter.createBiometricSlot` (`DbMaintenance`, [db-lifecycle.md](db-lifecycle.md#biometric-slot-commits)). It clears the offer in every outcome.
+- Cancelled, failed or dismissed: nothing is persisted. It is offered again after the next successful password unlock, because the same conditions hold then. It is never offered after a fingerprint unlock (a live slot exists) or a reminder unlock (the slot is still live).
+- Not offered while the gate is not `Ready`, during maintenance, or when the user turns the lock off meanwhile; a `LockNow` while it is due keeps it due for the next `Ready`.
+
 ## 8. Screen protection (DEC-66, DEC-67)
 
 - In `MainActivity.onCreate`, before `setContent`: `window.addFlags(FLAG_SECURE)` and, on API 33+, `setRecentsScreenshotEnabled(false)`. Starting closed guarantees protection before the first frame. Then collect the window policy ([architecture.md](architecture.md#mainactivity-startup-order) § MainActivity startup order) and apply it live, without recreation:
@@ -555,7 +991,7 @@ Each prompt carries a purpose (`AuthPurpose`). Only `Unlock` raises gate events;
   - `FLAG_SECURE` ⇔ `security.screenshot_protection` (`addFlags`/`clearFlags`), or the policy is closed.
   - API 33+: `setRecentsScreenshotEnabled(!(biometricLock || keyMode != PLAIN))`.
   - API 31+: `setHideOverlayWindows(hideOverlays)` (section 9.4).
-  - `LocalKeyboardPrivacy` (section 11) is provided from the same policy.
+  - The window policy no longer carries keyboard privacy: the no-learning flag is unconditional (section 11, DEC-71).
 - The flag covers the whole window: lists, calendar, editor, pickers, Settings and gate screens (spec errata, DEC-67).
 - Compose `Dialog`, `Popup`, `ModalBottomSheet`, `DropdownMenu`, `AlertDialog` and `DatePickerDialog` keep `securePolicy = SecureFlagPolicy.Inherit` (the default). `SecureFlagPolicy.SecureOff` is banned (`ArchitectureTest`, [architecture.md § Boundary test](architecture.md#boundary-test)).
 - No View-based windows (`android.app.Dialog`, `PopupWindow`, framework pickers). If one becomes unavoidable, it sets `window.setFlags(FLAG_SECURE, FLAG_SECURE)` itself while protection is on. The toggle sits on the Settings screen with no dialog open, so no window keeps a stale flag.
@@ -648,7 +1084,7 @@ Each prompt carries a purpose (`AuthPurpose`). Only `Unlock` raises gate events;
     <exclude domain="device_sharedpref" path="." />
 </full-backup-content>
 ```
-- DEC-69 is Owner Q9. If the owner allows device-to-device transfer, only the `<device-transfer>` section changes, and only `PLAIN` databases would arrive usable: `noBackupFilesDir` (the key-state file) and Keystore keys never transfer, so `DEVICE` and `PASSWORD` databases would arrive as KeyUnavailable (Verify at setup).
+- DEC-69: the owner answered Q9 (transfer stays blocked; a new phone imports a backup). If this is ever revisited and device-to-device transfer is allowed, only the `<device-transfer>` section changes, and only `PLAIN` databases would arrive usable: `noBackupFilesDir` (the key-state file) and Keystore keys never transfer, so `DEVICE` and `PASSWORD` databases would arrive as KeyUnavailable (Verify at setup).
 - There is no `<cross-platform-transfer>` section: it requires `<platform-specific-params>` naming an iOS counterpart app, and none exists. Verify at setup on an API 36.1 image that nothing is offered for cross-platform transfer.
 
 ### 9.3 CI checks
@@ -686,7 +1122,7 @@ internal object SqlcipherLogging { fun configure() = Unit }      // keeps the de
 ```
 - Native SQLite and SQLCipher log lines (result codes, the app's own file paths) bypass R8 and the Java logger; they carry no user data.
 - Verify at setup: R8 accepts `-maximumremovedandroidloglevel`; the `Logger`/`NoopTarget` package names; whether SQLCipher's native cipher log reaches logcat, and if so add `PRAGMA cipher_log_level = NONE` to the release `SqlcipherLogging.configure()` on its own throwaway connection (the one allowed exception of section 3.4).
-- `toString()` redaction is required on every data class, and on every class with a property of type `String`, `CharSequence`, `CharArray`, `ByteArray`, `Uri` or `File` (or a collection of them), in any package under `com.doro.organizer`. It prints the class name, ids, enum values and booleans only; never text, lengths, bytes, URIs or file names. Known members: `NoteEntity`, `PersonEntity`, `ProjectEntity`, `NoteRow`, `NoteRowRaw`, `EntityRef`, `NoteDraft`, `NewEntity`, `NoteDetail`, `EntityOption`, `NoteFilter`, `NoteQuery`, the editor, settings and gate UI states, `GateState`, `GateEvent` (incl. `PasswordSubmitted`), `SaveResult`, `GateEffect`, `LockError`, `AppError`, `ExternalRequest`, `ExternalResult`, `MaintenanceResult.BackupShared`, `UserMessage`, `Kdf`, `KeySlot`, `KeyState`, `PreparedKey`, `UnlockResult`:
+- `toString()` redaction is required on every data class, and on every class with a property of type `String`, `CharSequence`, `CharArray`, `ByteArray`, `Uri` or `File` (or a collection of them), in any package under `com.doro.organizer`. It prints the class name, ids, enum values and booleans only; never text, lengths, bytes, URIs or file names. Known members: `NoteEntity`, `PersonEntity`, `ProjectEntity`, `NoteRow`, `NoteRowRaw`, `EntityRef`, `NoteDraft`, `NewEntity`, `NoteDetail`, `EntityOption`, `NoteFilter`, `NoteQuery`, the editor, settings and gate UI states, `GateState`, `GateEvent` (incl. `PasswordSubmitted`), `SaveResult`, `GateEffect`, `LockError`, `AppError`, `ExternalRequest`, `ExternalResult`, `MaintenanceResult.BackupShared`, `UserMessage`, `Kdf`, `KeySlot`, `BioSlot`, `KeyState`, `PreparedKey`, `UnlockResult`, `SlotCipher`, `PromptRequest`:
 ```kotlin
 class KeySlot(val mode: KeyMode, val outerIv: ByteArray?, val wrappedDek: ByteArray? /* , … */) {
     override fun toString() = "KeySlot(mode=$mode)"
@@ -697,7 +1133,7 @@ class KeySlot(val mode: KeyMode, val outerIv: ByteArray?, val wrappedDek: ByteAr
 
 ## 11. Keyboard and autofill (DEC-71, Q11)
 
-Per DEC-71 the search fields are covered too, and autofill is excluded for every window of the app, password fields included, so password managers cannot fill or save the database or backup password (accepted for v1).
+Per DEC-71 (Q11: the keyboard must never learn) the covered fields always ask for no personalized learning, whatever the screenshot setting or the window policy, and autofill is excluded for every window of the app, password fields included, so password managers cannot fill or save the database or backup password (accepted for v1).
 - Password fields: section 6.2.
 - Fields covered below: note content, person name, project name, and every search field (perspective search and `EntityPicker` search, which carry the same words; person and project names are typed in the picker's search field).
 - Autofill: always excluded. Compose has no per-field exclusion (`ContentType` has no "not important" value, and fields without one are still offered to service heuristics), so `MainActivity` sets `window.decorView.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS` after `setContent`. Compose `Dialog`, `AlertDialog` and `ModalBottomSheet` create their own windows with their own decor view, which that flag does not reach, so every one of them wraps its content in `SecureDialogWindow` (`ui/common`):
@@ -715,13 +1151,12 @@ fun SecureDialogWindow(hideOverlays: Boolean = false, content: @Composable () ->
 }
 ```
   Verify at setup: `view.parent` is the `DialogWindowProvider` for `AlertDialog`, `Dialog` and `ModalBottomSheet` in the pinned Compose BOM; with a test autofill service enabled, typing in the editor, an `EntityPicker` search field, the change-password dialog and the backup-password dialog produces no fill request containing app text and no save request.
-- Keyboard learning: the covered fields always sit inside `NoPersonalizedLearning(enabled = LocalKeyboardPrivacy.current)` (`ui/common`, Compose UI 1.7+). `LocalKeyboardPrivacy` is a `CompositionLocal<Boolean>` that `MainActivity` provides with `windowPolicy.secure` ([architecture.md](architecture.md) § Dependency injection), which equals `security.screenshot_protection` once the policy is open (DEC-71), so composables never read `SettingsStore`. A changed value replaces the interceptor, which restarts the input session; wrapping conditionally would move the field in the composition and lose its state:
+- Keyboard learning: every covered field sits inside `NoPersonalizedLearning` (`ui/common`, Compose UI 1.7+), always. There is no `enabled` parameter, no `CompositionLocal` and no dependency on `SettingsStore` or the window policy: the flag is set on every input session of these fields from their first frame. Password fields need no wrapper (the password input type already stops learning):
 ```kotlin
 @Composable
-fun NoPersonalizedLearning(enabled: Boolean, content: @Composable () -> Unit) {
-    val interceptor = remember(enabled) {
+fun NoPersonalizedLearning(content: @Composable () -> Unit) {
+    val interceptor = remember {
         PlatformTextInputInterceptor { request, next ->
-            if (!enabled) next.startInputMethod(request)
             next.startInputMethod(object : PlatformTextInputMethodRequest {
                 override fun createInputConnection(outAttributes: EditorInfo): InputConnection =
                     request.createInputConnection(outAttributes).also {
@@ -735,6 +1170,7 @@ fun NoPersonalizedLearning(enabled: Boolean, content: @Composable () -> Unit) {
 }
 ```
   Verify at setup: whether `InterceptPlatformTextInput` and `PlatformTextInputInterceptor` still need `@OptIn(ExperimentalComposeUiApi::class)`, and the members of `PlatformTextInputMethodRequest`, in the pinned Compose BOM.
+- `LocalKeyboardPrivacy` no longer exists; `MainActivity` provides no keyboard-related `CompositionLocal` ([architecture.md](architecture.md#mainactivity-startup-order)). The input-privacy test of [testing.md](testing.md) asserts `IME_FLAG_NO_PERSONALIZED_LEARNING` on each covered field with screenshot protection both off and on.
 - The flag is a request that keyboards may ignore; it does not limit what a malicious keyboard sees (section 1.3).
 
 ## 12. Residual risks and documented limitations
@@ -743,14 +1179,19 @@ fun NoPersonalizedLearning(enabled: Boolean, content: @Composable () -> Unit) {
 |---|---|---|
 | Unencrypted backups | `PLAIN` mode with "Encrypt backups" off exports plaintext SQLite; share copies stay in `cacheDir/share/` until the next backup, the next cold start or the in-app one-hour sweep, and while the process is dead until the next launch (DEC-83) | Warning before every plaintext export (DEC-83, [ui.md](ui.md#85-unencrypted-backup-warning-dec-83)) |
 | Flash remnants after turning encryption on | The old plaintext `doro-<n>.db` is deleted, but flash blocks can survive until reused; so can plaintext staging copies (a restore of a plain backup into an encrypted database, an export to `PLAIN`); earlier backups are unchanged | Relies on file-based encryption (§11 Device Assumptions); the confirmation says earlier backups are unchanged (section 4) |
-| Keystore loss → KeyUnavailable | OS or OEM defects can lose the KEK; the wrapped DEK is then useless, by design without recovery | KeyUnavailable screen (DEC-86); backups are the only recovery |
+| Keystore loss → KeyUnavailable | OS or OEM defects can lose the KEK; the wrapped DEK is then useless, by design without recovery | KeyUnavailable screen (DEC-86); backups are the only recovery. In `PASSWORD` mode with a live biometric slot the loss is noticed early: a fingerprint unlock still works but reports `kekBroken` (section 3.7.3), the app offers a backup and the fingerprint password reset, which replaces the KEK |
 | Newer key-state format after an app downgrade | A key-state with a larger `formatVersion` reads as invalid, so an older app shows KeyUnavailable, whose "Start fresh" would delete data the newer app could open | Install the newer version before choosing Start fresh |
 | Recents thumbnail on API 28–32 | No public API hides only the thumbnail; with the lock or encryption on and screenshot protection off, Recents shows the last screen, and in `PASSWORD` mode after process death while the password is asked; the system keeps that snapshot outside the app's encryption | The lock's help text recommends screenshot protection (`biometric_recents_hint`, [ui.md](ui.md#94-biometric-lock)), and so does the encryption row when encryption is on and the lock is off (`encryption_recents_hint`, [ui.md](ui.md#93-database-encryption-and-startup-password)); API 33+ is covered (DEC-66) |
 | Device without a screen lock | No biometric can be enrolled, storage keys are not bound to a user secret, and `PLAIN`/`DEVICE` open for anyone holding the phone | DEC-72 hint; `PASSWORD` mode still requires the password |
 | Offline brute force of exported encrypted backups | No backoff off the device; each guess costs one SQLCipher 4 PBKDF2-HMAC-SHA512 at 256,000 iterations | Minimum 8 characters (DEC-64); the export dialog recommends a long passphrase (`backup_password_body`) |
 | Same password for database and backups | An offline attack on a backup (A2) then yields the database password | Backup passwords are independent by design (DEC-83); the export dialog does not forbid reuse |
 | Guessing on a held phone | Attempts are unlimited (DEC-62) | Backoff up to 5 min plus the PBKDF2 cost per guess; the delay uses elapsed realtime, so a changed system clock does not skip it, and a reboot re-applies it |
-| The biometric lock is UI-only | In `PLAIN`/`DEVICE` mode the data opens without it (§11 App Lock, v1) | `PASSWORD` mode gives cryptographic protection |
+| The biometric lock is UI-only in `PLAIN`/`DEVICE` mode | The data opens without it (§11 App Lock); a fingerprint enrolled later, by anyone who knows the device PIN, also passes it | `PASSWORD` mode gives cryptographic protection, and there the biometric slot is invalidated by enrollment changes (section 3.7.1) |
+| A fingerprint opens an encrypted database (`PASSWORD` mode with the lock on) | By the owner's choice (Q8), the password is no longer needed day to day: the protection equals that of the device's Class 3 biometric plus the Keystore. Anyone whose finger is enrolled on the device (for example a family member the owner enrolled) can open the app and use the fingerprint reset (section 4.3), and so can lock the owner out by replacing the password and declining the re-creation prompt: the owner then has no slot and does not know the new password, so only Erase and a backup remain; a backup is the recovery | Off by default; Settings explains it ([ui.md](ui.md#94-biometric-lock)); enrollment changes invalidate the slot; the startup password remains for every other path |
+| Coercion | A person holding the owner can force a finger onto the sensor, which is easier than forcing out a password | Not prevented. The system lockdown option only protects while the phone stays locked; once it is unlocked, the fingerprint opens Doro again. The remedy is turning the lock off (then the password is asked at every cold start) |
+| Enrollment changes | Adding or removing fingerprints invalidates the biometric key, so the next unlock asks the password once | Re-creation prompt after the password (section 7.8); the 14-day reminder keeps the password known |
+| Forgotten password despite the reminder | If fingerprint unlock is lost (enrollment change, sensor failure) and the password is forgotten, only Erase and a backup remain | Reminder every 14 days (DEC-74), fingerprint reset while fingerprint unlock works (DEC-63), backup offer before setting a password (DEC-73) |
+| Reminder timestamp and the clock | The reminder uses the wall clock; moving the clock can make it due early, and a user who sets the clock to just after the last password entry can postpone it | It is a memory aid, not a barrier: postponing it needs the fingerprint anyway; a clock set before the stored time makes it due at once (section 5.6) |
 | `PASSWORD` mode without the biometric lock | The password is asked only at cold start (DEC-62); the open session stays readable on every return from background | Accepted; the lock is the remedy |
 | Re-lock exemption window | Up to 10 min without a lock after an app-launched SAF, share, enrollment or credential trip (DEC-65) | One exemption at a time, cleared on result, on the next resume and on a failed launch |
 | `SettingsStore` reset by corruption | A corrupt preferences file is replaced with defaults through `ReplaceFileCorruptionHandler` ([architecture.md](architecture.md) § SettingsStore), which turns the biometric lock and screenshot protection off and resets the backoff; pinned by [testing.md](testing.md) I-44 | Accepted; a fail-closed handler needs a new decision first |

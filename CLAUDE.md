@@ -23,10 +23,11 @@ Precedence: [docs/decisions.md](docs/decisions.md) > [spec](stakeholder-notepad-
 
 ```
 ./gradlew :app:assembleDebug
+./gradlew :app:installDebug                # install the debug app (com.doro.organizer.debug) on the phone
 ./gradlew :app:testDebugUnitTest           # JVM tests, pure Kotlin only
-./gradlew :app:ciGroupDebugAndroidTest     # instrumented, managed devices API 28 + 35
-./gradlew :app:connectedDebugAndroidTest   # instrumented, connected device
+./gradlew :app:connectedDebugAndroidTest   # instrumented, on the phone over USB; wipes only the debug app's data
 ./gradlew :app:lintRelease
+adb logcat --pid=$(adb shell pidof com.doro.organizer.debug)   # app logs
 ```
 
 ## Rules that must never break
@@ -50,6 +51,6 @@ Precedence: [docs/decisions.md](docs/decisions.md) > [spec](stakeholder-notepad-
 
 - One `:app` module, package root `com.doro.organizer`. `ui` never imports `data.db`, `DatabaseHolder` or `KeyVault`. Manual DI through `AppContainer`; no Hilt or Koin.
 - Use the component names listed in decisions.md (`SessionGate`, `DatabaseHolder`, `DbMaintenance`, `KeyVault`, `NoteRepository`, …).
-- Anything that touches SQLCipher is tested with instrumented tests, never on the JVM or Robolectric. No mocking library; write fakes.
+- Anything that touches SQLCipher is tested with instrumented tests on the owner's phone, never on the JVM or Robolectric; no emulator, no Android Studio needed (DEC-15). No mocking library; write fakes.
 - A test that pins the default of an open owner question ends its name with the question id (`…_Qn`).
 - Every change ships with its tests; a bug fix ships with a test that fails without the fix.
