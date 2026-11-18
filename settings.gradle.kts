@@ -1,4 +1,5 @@
 pluginManagement {
+    includeBuild("build-logic") // local verification gates (testing.md § 9)
     repositories {
         google()
         mavenCentral()

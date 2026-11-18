@@ -1,0 +1,47 @@
+# Modules banned from releaseRuntimeClasspath, debugRuntimeClasspath, debugUnitTestRuntimeClasspath and
+# debugAndroidTestRuntimeClasspath (testing.md § 9 `dependencies`), checked by :app:checkBannedDependencies.
+# One Maven group or group:artifact per line. A module g:a matches a line L when g == L, g starts with "L.", or g:a == L.
+
+# Network, telemetry, crash reporting, ads and banned libraries: security.md § 9.3, copied verbatim (DEC-68).
+com.google.firebase
+com.google.android.gms
+com.google.android.play
+com.google.android.datatransport
+com.crashlytics
+io.sentry
+com.bugsnag
+com.squareup.okhttp3
+com.squareup.retrofit2
+io.ktor
+com.facebook.android
+com.appsflyer
+com.adjust.sdk
+com.amplitude
+com.mixpanel.android
+com.segment.analytics.kotlin
+com.datadoghq
+com.newrelic.agent.android
+io.embrace
+com.instabug.library
+com.onesignal
+com.applovin
+com.unity3d.ads
+com.ironsource.sdk
+io.branch.sdk.android
+com.huawei.hms
+com.jakewharton.timber
+androidx.security:security-crypto
+net.zetetic:android-database-sqlcipher
+
+# Architecture: DEC-06, DEC-07, DEC-08, DEC-05, DEC-10.
+com.google.dagger
+io.insert-koin
+androidx.room3
+androidx.sqlite:sqlite-bundled
+androidx.navigation:navigation-compose
+androidx.paging
+
+# Tests: DEC-12.
+org.mockito
+io.mockk
+org.robolectric

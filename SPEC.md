@@ -78,7 +78,7 @@ V36: data-clearing tests only on `.debug` | `.qa` | `.benchmark` ids (DEC-15)
 
 id|status|task|cites
 T1|x|Gradle skeleton: wrapper (copy from local project, Gradle 9.9.0), version catalog (verify DEC-02 vs known-good local catalogs), `:app` SDK levels, build types debug `.debug` / release R8 `proguard-android-optimize.txt` / `qa` / `benchmark`, manifest hardening + `data_extraction_rules.xml` + `backup_rules.xml`, `.gitattributes` LF, `.gitignore`, `local.properties` uncommitted, empty `MainActivity : FragmentActivity` Compose shell w/ edge-to-edge, base `strings.xml`, SQLCipher dep + `System.loadLibrary`; assembleDebug + lintRelease + testDebugUnitTest green (architecture.md §Stack and versions, security.md §9)|V28,V29,V34,V35,V36,I.cmd,I.perm
-T2|.|verification gates as local Gradle tasks/scripts: merged-manifest permission allowlist, 16 KB check, banned dependencies, release log-stripping check, schema JSON gate w/ `config/released-schema-versions.txt` (testing.md §9)|V15,V28,V34,V35
+T2|x|verification gates as local Gradle tasks/scripts: merged-manifest permission allowlist, 16 KB check, banned dependencies, release log-stripping check, schema JSON gate w/ `config/released-schema-versions.txt` (testing.md §9)|V15,V28,V34,V35
 T3|.|test infra: `src/sharedTest`, `FakeAppTime`, `TestDatabases`, `assertDbInvariants`, `ArchitectureTest` (I-41), `MigrationCoverageTest` + `SchemaJsonTest` (I-48), `DoroAppRule` (testing.md §3 item 1, §7)|V4,V15,V33
 T4|.|`AppTime` + `EpochDays` + date math + overdue rule, JVM tests across zones & DST (architecture.md §Time)|V10,V13
 T5|.|entities + `AppDatabase` v1: schema export, `application_id` callback, explicit index names, redacted `toString()`, `SchemaTest` (data-layer.md §Entities)|V1,V3,V7,V11,V14,V15,I.pragma

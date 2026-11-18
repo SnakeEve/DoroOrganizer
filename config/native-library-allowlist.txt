@@ -1,0 +1,5 @@
+# Native libraries the release APK may ship (architecture.md § ABI and 16 KB pages), checked by :app:checkReleasePageSize.
+# Each LOAD segment of every lib/*/*.so must be aligned to 0x4000; a library not listed here fails until it is reviewed and added.
+libsqlcipher.so
+libandroidx.graphics.path.so
+libdatastore_shared_counter.so

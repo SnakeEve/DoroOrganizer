@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application) // Kotlin is built into AGP 9: no org.jetbrains.kotlin.android (DEC-02)
     alias(libs.plugins.kotlin.compose)
+    id("doro.verification-gates") // build-logic: local verification gates (testing.md § 9)
 }
 
 android {
@@ -80,4 +81,9 @@ dependencies {
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+}
+
+// The gates are only as strong as their rules, so the aggregate also runs the build-logic unit tests that pin them.
+tasks.named("verificationGates") {
+    dependsOn(gradle.includedBuild("build-logic").task(":test"))
 }
