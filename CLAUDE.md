@@ -18,6 +18,7 @@ Precedence: [docs/decisions.md](docs/decisions.md) > [spec](stakeholder-notepad-
 | [docs/security.md](docs/security.md) | Keys, passwords, biometric lock, screenshot protection, manifest, logging |
 | [docs/db-lifecycle.md](docs/db-lifecycle.md) | Database files, open/verify, backup, restore, encryption changes, corruption |
 | [docs/testing.md](docs/testing.md) | Test layers, invariant catalog, CI gates, release checklist |
+| [SPEC.md](SPEC.md) | Build contract: invariants §V, ordered tasks §T with status (format: [FORMAT.md](FORMAT.md)) |
 
 ## Commands (planned)
 
