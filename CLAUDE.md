@@ -28,6 +28,8 @@ Precedence: [docs/decisions.md](docs/decisions.md) > [spec](stakeholder-notepad-
 ./gradlew :app:testDebugUnitTest           # JVM tests, pure Kotlin only
 ./gradlew :app:connectedDebugAndroidTest   # instrumented, on the phone over USB; wipes only the debug app's data
 ./gradlew :app:lintRelease
+./gradlew :app:verificationGates           # manifest, 16 KB pages, release logs, banned deps (+ build-logic tests)
+sh config/check-schemas.sh                 # Room schema JSON gate
 adb logcat --pid=$(adb shell pidof com.doro.organizer.debug)   # app logs
 ```
 
@@ -50,7 +52,7 @@ adb logcat --pid=$(adb shell pidof com.doro.organizer.debug)   # app logs
 
 ## Conventions
 
-- One `:app` module, package root `com.doro.organizer`. `ui` never imports `data.db`, `DatabaseHolder` or `KeyVault`. Manual DI through `AppContainer`; no Hilt or Koin.
+- One `:app` module (plus the build-only `build-logic` included build), package root `com.doro.organizer`. `ui` never imports `data.db`, `DatabaseHolder` or `KeyVault`. Manual DI through `AppContainer`; no Hilt or Koin.
 - Use the component names listed in decisions.md (`SessionGate`, `DatabaseHolder`, `DbMaintenance`, `KeyVault`, `NoteRepository`, …).
 - Anything that touches SQLCipher is tested with instrumented tests on the owner's phone, never on the JVM or Robolectric; no emulator, no Android Studio needed (DEC-15). No mocking library; write fakes.
 - A test that pins the default of an open owner question ends its name with the question id (`…_Qn`).
