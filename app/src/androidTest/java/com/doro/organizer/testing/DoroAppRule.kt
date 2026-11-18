@@ -7,7 +7,8 @@ import org.junit.rules.ExternalResource
 
 /**
  * Installs a [TestAppContainer] into the running [DoroApplication] before the test, on the main thread, after
- * [configure] has set the overrides; afterwards cancels the container's application scope (testing.md § 7, Wiring).
+ * [configure] has set the overrides, and connects its process observers; afterwards cancels the container's
+ * application scope (testing.md § 7, Wiring).
  * Declare it as `@get:Rule(order = 0)`, ahead of any rule that launches `MainActivity`.
  */
 class DoroAppRule(private val configure: TestOverrides.() -> Unit = {}) : ExternalResource() {
@@ -21,6 +22,7 @@ class DoroAppRule(private val configure: TestOverrides.() -> Unit = {}) : Extern
         instrumentation.runOnMainSync {
             container = TestAppContainer(app, overrides)
             app.container = container
+            container.installProcessObservers()
         }
     }
 

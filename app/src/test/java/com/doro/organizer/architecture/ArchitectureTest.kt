@@ -103,6 +103,13 @@ class ArchitectureTest {
     }
 
     @Test
+    fun rule2_clocks_methodReferences_planted() {
+        val references = "val a = Instant::now\nval b = ZoneId :: systemDefault\nval c = Clock::systemUTC"
+        assertEquals(listOf(3, 4, 5), TokenGroup.CLOCKS.check(planted("model/A.kt", references)).map { it.line })
+        assertNoneReported(planted("core/time/T.kt", references), TokenGroup.CLOCKS::check)
+    }
+
+    @Test
     fun rule2_logging() = assertClean(TokenGroup.LOGGING::check)
 
     @Test

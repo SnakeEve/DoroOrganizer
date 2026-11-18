@@ -16,6 +16,7 @@ open class DoroApplication : Application() {
     /** The test application overrides this with an empty body, so no container exists before a test sets one. */
     protected open fun startApp() {
         container = createContainer()
+        container.installProcessObservers()
     }
 
     protected open fun createContainer(): AppContainer = AppContainer(this)

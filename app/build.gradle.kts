@@ -129,13 +129,16 @@ dependencies {
     implementation(libs.sqlcipher.android) // DEC-08: the only SQLite engine
     implementation(libs.androidx.sqlite) // SupportSQLiteDatabase, a supertype of the SQLCipher classes; SQLCipher declares it runtime-only
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.lifecycle.process) // ProcessLifecycleOwner: AppTime refresh (architecture.md § Time)
 
     testImplementation(libs.junit)
     testImplementation(libs.org.json) // Android's org.json is a stub on the JVM
+    testImplementation(libs.kotlinx.coroutines.test) // virtual time for DefaultAppTime (testing.md I-30)
 
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.kotlinx.coroutines.test) // virtual time for the AppTime wiring
     androidTestUtil(libs.androidx.test.orchestrator)
 }
 

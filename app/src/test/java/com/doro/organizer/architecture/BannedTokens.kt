@@ -15,11 +15,11 @@ enum class TokenGroup(val tokens: List<BannedToken>) {
     ),
     CLOCKS(
         listOf(
-            "System.currentTimeMillis", "System.nanoTime", "SystemClock", "Instant.now", "LocalDate.now",
-            "LocalDateTime.now", "ZonedDateTime.now", "ZoneId.systemDefault", "TimeZone.getDefault",
-            "Calendar.getInstance",
-        ).map { BannedToken(it, """\b${Regex.escape(it)}\b""", allowedPackage = "core.time") } +
-            BannedToken("Clock.system", """\bClock\.system""", allowedPackage = "core.time") +
+            "System.currentTimeMillis", "System.nanoTime", "Instant.now", "LocalDate.now", "LocalDateTime.now",
+            "ZonedDateTime.now", "ZoneId.systemDefault", "TimeZone.getDefault", "Calendar.getInstance",
+        ).map { BannedToken(it, """${memberPattern(it)}\b""", allowedPackage = "core.time") } +
+            BannedToken("SystemClock", """\bSystemClock\b""", allowedPackage = "core.time") +
+            BannedToken("Clock.system", memberPattern("Clock.system"), allowedPackage = "core.time") +
             BannedToken("Date()", """\bDate\(\)""", allowedPackage = "core.time"),
     ),
     LOGGING(
@@ -68,6 +68,12 @@ enum class TokenGroup(val tokens: List<BannedToken>) {
             token.pattern.findAll(source.code).map { source.violation(it.range.first, "banned: ${token.display}") }
         }
         .sortedBy { it.line }
+}
+
+/** `Owner.member` called, or passed as a method reference (`Owner::member`), which hands out the clock just the same. */
+private fun memberPattern(token: String): String {
+    val (owner, member) = token.split('.')
+    return """\b${Regex.escape(owner)}\s*(?:\.|::)\s*${Regex.escape(member)}"""
 }
 
 /**
