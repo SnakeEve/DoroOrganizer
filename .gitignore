@@ -1,0 +1,25 @@
+# Gradle and Kotlin
+.gradle/
+.kotlin/
+build/
+
+# Machine-specific SDK path, never committed
+local.properties
+
+# IDE files (the project is built from the command line, DEC-15)
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Release signing material and heap dumps (they hold decrypted note text, DEC-70) never enter history.
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+*.hprof
+
+# Per-user agent state
+.claude/settings.local.json
+.claude/*.lock

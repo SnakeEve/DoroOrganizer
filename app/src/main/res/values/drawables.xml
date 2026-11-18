@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Themed icons (API 33+) use only the alpha of this layer, so the foreground glyph serves as is. -->
+    <drawable name="ic_launcher_monochrome">@drawable/ic_launcher_foreground</drawable>
+</resources>
