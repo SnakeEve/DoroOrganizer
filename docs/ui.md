@@ -1394,7 +1394,7 @@ In `PASSWORD` mode with the lock on, a usable fingerprint and a valid slot, the 
 | Reason line | By `reason` (section 10.1), directly below the body, one line in `bodyMedium` and `onSurfaceVariant` (it wraps at large font sizes): `None` shows nothing; `Reminder` shows "Your regular password check: enter it so you keep remembering it." (`gate_password_reminder`, DEC-74); `FingerprintChanged` shows "The fingerprints on this phone changed, so your password is needed." (`gate_password_fingerprint_changed`, DEC-65) |
 | Field | `PasswordField` (section 8.1) labelled "Password" (`password_label`), with show/hide; focused with the keyboard open when the screen appears; `ImeAction.Done` submits |
 | Primary button | Filled `Button` "Unlock" (`action_unlock`), full width, enabled while the field is not empty and no backoff runs |
-| Secondary | `TextButton` "Use fingerprint" (`action_use_fingerprint`), shown only while `fingerprintUsable` (never in the reminder variant, DEC-74); then `TextButton` "Forgot password?" (`gate_forgot`), always shown; "Forgot password?" is hidden while the resume is a `Maintenance` |
+| Secondary | `TextButton` "Use fingerprint" (`action_use_fingerprint`), shown only while `fingerprintUsable` (never in the reminder variant, DEC-74); then `TextButton` "Forgot password?" (`gate_forgot`), shown on every password screen except while the resume is a `Maintenance` (then hidden) |
 
 | State (from `NeedsPassword(failures, retryAt, couldNotOpen)` or `PasswordEntry(failures, retryAt, checking, checkFailed)`) | Shows |
 |---|---|
