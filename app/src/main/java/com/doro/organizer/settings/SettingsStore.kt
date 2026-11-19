@@ -28,7 +28,11 @@ interface SettingsStore {
 
     suspend fun setBackoff(failures: Int, retryAtElapsedMs: Long)
 
-    suspend fun setPasswordVerifiedAt(epochMillis: Long)
+    /**
+     * A correct startup password (security.md § 3.6, § 5.6), in one edit: the backoff reset to 0 and
+     * `security.password_verified_at = epochMillis`. Called only by `KeyVault` (DEC-74).
+     */
+    suspend fun recordPasswordVerified(epochMillis: Long)
 
     /** The selections of the Individual and Project perspectives (DEC-28); null forgets one. */
     suspend fun setRemembered(personId: Long?, projectId: Long?)

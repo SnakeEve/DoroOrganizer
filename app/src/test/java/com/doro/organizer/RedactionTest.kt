@@ -18,6 +18,7 @@ import com.doro.organizer.model.BatchResult
 import com.doro.organizer.model.DateFilter
 import com.doro.organizer.model.DeleteImpact
 import com.doro.organizer.model.DraftInsert
+import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.EntityDeleteResult
 import com.doro.organizer.model.EntityOption
 import com.doro.organizer.model.EntityRef
@@ -29,6 +30,14 @@ import com.doro.organizer.model.NoteQuery
 import com.doro.organizer.model.NoteRow
 import com.doro.organizer.model.Perspective
 import com.doro.organizer.model.SaveResult
+import com.doro.organizer.security.BioSlot
+import com.doro.organizer.security.Kdf
+import com.doro.organizer.security.KeyFailure
+import com.doro.organizer.security.KeySlot
+import com.doro.organizer.security.KeyState
+import com.doro.organizer.security.KeyVaultException
+import com.doro.organizer.security.PreparedKey
+import com.doro.organizer.security.UnlockResult
 import com.doro.organizer.testing.SENTINEL
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -276,5 +285,34 @@ class RedactionTest {
 
         assertEquals("ExclusiveScope(generation=3)", ExclusiveScope(3, key).toString())
         assertEquals("Generation(generation=4, newData=true)", Reopen.Generation(4, key, newData = true).toString())
+    }
+
+    @Test
+    fun keyStateTypes_printTheModeOnly() {
+        val secret = SENTINEL.toByteArray()
+        val slot = KeySlot(KeyMode.PASSWORD, secret, secret, secret, Kdf(600_000, secret))
+        val printed = listOf(
+            slot,
+            slot.kdf,
+            BioSlot(secret, secret),
+            KeyState(4, slot, BioSlot(secret, secret)),
+            PreparedKey(slot, secret),
+            UnlockResult.Key(secret),
+        ).map { it.toString() }
+
+        assertEquals(
+            listOf("KeySlot(mode=PASSWORD)", "Kdf", "BioSlot", "KeyState(mode=PASSWORD)", "PreparedKey(mode=PASSWORD)",
+                "Key(kekBroken=false)"),
+            printed,
+        )
+    }
+
+    @Test
+    fun keyVaultException_hasAConstantMessageAndNoCause() {
+        val e = KeyVaultException(KeyFailure.InvalidState)
+
+        assertEquals("InvalidState", e.message)
+        assertEquals(null, e.cause)
+        assertFalse(e.toString().contains(SENTINEL))
     }
 }

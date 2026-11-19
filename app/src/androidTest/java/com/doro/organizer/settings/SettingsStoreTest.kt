@@ -65,8 +65,8 @@ class SettingsStoreTest {
         store.setScreenshotProtection(true)
         store.setBiometricLock(true)
         store.setEncryptBackups(true)
+        store.recordPasswordVerified(1_700_000_000_000)
         store.setBackoff(failures = 6, retryAtElapsedMs = 90_000)
-        store.setPasswordVerifiedAt(1_700_000_000_000)
         store.setRemembered(personId = 5, projectId = 6)
 
         val expected = Settings(
@@ -101,8 +101,8 @@ class SettingsStoreTest {
     fun valuesSurviveANewStoreOnTheSameFile() = runBlocking {
         val file = File(directory, "settings.preferences_pb")
         val first = store(file)
+        first.recordPasswordVerified(42)
         first.setBackoff(failures = 5, retryAtElapsedMs = 30_000)
-        first.setPasswordVerifiedAt(42)
         closeAll()
 
         val reopened = store(file).snapshot()
@@ -127,14 +127,29 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun recordPasswordVerified_resetsTheBackoffAndSetsTheTimestamp_inOneEdit() = runBlocking {
+        val scope = newScope()
+        val dataStore = CountingDataStore(DefaultSettingsStore.dataStoreOn(defaultFile(), scope))
+        val store = DefaultSettingsStore(dataStore, scope)
+        store.setBiometricLock(true)
+        store.setBackoff(failures = 7, retryAtElapsedMs = 120_000)
+        val editsBefore = dataStore.edits.get()
+
+        store.recordPasswordVerified(1_700_000_000_000)
+
+        assertEquals("a reader can never see the reset without the timestamp", 1, dataStore.edits.get() - editsBefore)
+        assertEquals(Settings(biometricLock = true, passwordVerifiedAt = 1_700_000_000_000), store.snapshot())
+    }
+
+    @Test
     fun resetSecurity_resetsTheSevenSecurityKeysAndBothIds_only() = runBlocking {
         val store = store()
         store.setScreenshotProtection(true)
         store.setBiometricLock(true)
         store.setEncryptBackups(true)
         store.setLockAutoOff()
+        store.recordPasswordVerified(7)
         store.setBackoff(failures = 6, retryAtElapsedMs = 90_000)
-        store.setPasswordVerifiedAt(7)
         store.setRemembered(personId = 5, projectId = 6)
         store.onDataReplaced()
         val draft = DraftInsert(3, mapOf("p" to 4L), emptyMap())
@@ -171,7 +186,7 @@ class SettingsStoreTest {
         val file = File(directory, "settings.preferences_pb")
         val first = store(file)
         first.setBiometricLock(true)
-        first.setPasswordVerifiedAt(1_700_000_000_000)
+        first.recordPasswordVerified(1_700_000_000_000)
         closeAll()
         file.writeBytes(byteArrayOf(0x7F, 0x00, 0x13, 0x37, 0x55))
 

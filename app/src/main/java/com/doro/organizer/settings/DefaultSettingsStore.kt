@@ -58,7 +58,11 @@ class DefaultSettingsStore internal constructor(
         it[UNLOCK_RETRY_AT] = retryAtElapsedMs
     }
 
-    override suspend fun setPasswordVerifiedAt(epochMillis: Long) = edit { it[PASSWORD_VERIFIED_AT] = epochMillis }
+    override suspend fun recordPasswordVerified(epochMillis: Long) = edit {
+        it[UNLOCK_FAILURES] = 0
+        it[UNLOCK_RETRY_AT] = 0
+        it[PASSWORD_VERIFIED_AT] = epochMillis
+    }
 
     override suspend fun setRemembered(personId: Long?, projectId: Long?) = edit {
         it.putOrRemove(REMEMBERED_PERSON, personId)
