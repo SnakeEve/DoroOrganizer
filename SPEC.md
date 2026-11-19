@@ -71,7 +71,7 @@ V31: hard deletes only; ⊥ history, undo, dedup (spec §1)
 V32: ∀ UI text ∈ `strings.xml`; §4 content descriptions verbatim (DEC-55)
 V33: `ui` ⊥ import `data.db`, `DatabaseHolder`, `KeyVault` (DEC-03)
 V34: release R8 strips ∀ `android.util.Log`; ⊥ `println`, ⊥ `printStackTrace`; SQLCipher logger off (DEC-70)
-V35: release APK passes `zipalign -c -P 16 -v 4` & `readelf` LOAD align `0x4000` (DEC-14)
+V35: release APK passes `zipalign -c -P 16 -v 4` & every LOAD segment align ≥ `0x4000` via `:app:checkReleasePageSize` (Kotlin ELF reader; `readelf` ⊥ installed) (DEC-14)
 V36: data-clearing tests only on `.debug` | `.qa` | `.benchmark` ids (DEC-15)
 
 ## §T
@@ -82,10 +82,10 @@ T2|x|verification gates as local Gradle tasks/scripts: merged-manifest permissio
 T3|x|test infra: `src/sharedTest`, `FakeAppTime`, `TestDatabases`, `assertDbInvariants`, `ArchitectureTest` (I-41), `MigrationCoverageTest` + `SchemaJsonTest` (I-48), `DoroAppRule` (testing.md §3 item 1, §7)|V4,V15,V33
 T4|x|`AppTime` + `EpochDays` + date math + overdue rule, JVM tests across zones & DST (architecture.md §Time)|V10,V13
 T5|x|entities + `AppDatabase` v1: schema export, `application_id` callback, explicit index names, redacted `toString()`, `SchemaTest` (data-layer.md §Entities)|V1,V3,V7,V11,V14,V15,I.pragma
-T6|.|DAOs: perspective query, canonical order, filters, search escaping, calendar marks, select-all ids, picker queries + I-01–I-04, I-10–I-16, I-24–I-27, I-43, I-47 (data-layer.md §Read model, §Search)|V2,V6,V7,V12,V14
-T7|.|`NoteRepository` writes: save insert/update + link diff, guarded check/uncheck, `updated_at` matrix, content cap, note delete + I-05–I-09, I-28–I-30, I-42 (a)–(c) (data-layer.md §Write rules, §Deletes)|V5,V8,V9,V10,V11
-T8|.|`EntityRepository` + links + batch ops + delete impact counts + I-17–I-20, I-21/I-23 repo parts, I-42 (d) (data-layer.md §Deletes, §Batch operations)|V5,V7,V31
-T9|.|`SettingsStore` + `DatabaseHolder` open/verify/observe/exclusive + failure classification + L-04, L-13, L-17, holder parts of L-03/L-05/L-12 (db-lifecycle.md §DatabaseHolder, §Failure classification)|V3,V4,V26
+T6|.|DAOs: perspective query, canonical order, filters, search escaping, calendar marks, select-all ids, picker queries + I-01–I-04, I-10–I-16, I-24–I-27, I-43, I-47; deferred parts: I-13 via production toggles & I-25 `content_fold` on edit → T7, I-43 impact-count & delete plans → T8, I-03 20 holder close/reopen cycles → T9 (data-layer.md §Read model, §Search)|V2,V6,V7,V12,V14
+T7|.|`NoteRepository` writes: save insert/update + link diff, guarded check/uncheck, `updated_at` matrix, content cap, note delete + I-05–I-09, I-28–I-30, I-42 (a)–(c), I-13 via production `NoteDao` check/uncheck, I-25 edit updates `content_fold` (data-layer.md §Write rules, §Deletes)|V5,V8,V9,V10,V11
+T8|.|`EntityRepository` + links + batch ops + delete impact counts + I-17–I-20, I-21/I-23 repo parts, I-42 (d), I-43 impact-count & note/junction delete plans (data-layer.md §Deletes, §Batch operations)|V5,V7,V31
+T9|.|`SettingsStore` + `DatabaseHolder` open/verify/observe/exclusive + failure classification + L-04, L-13, L-17, holder parts of L-03/L-05/L-12, I-03 20 close/reopen cycles (db-lifecycle.md §DatabaseHolder, §Failure classification)|V3,V4,V26
 T10|.|`KeyVault`: key-state file + parser, KEK, PBKDF2, raw key, unlock/verify, backoff, reminder timestamp + L-27, L-28, `KeyVaultTest` (security.md §3, §5)|V16,V17,V22,V23,I.file
 T11|.|biometric slot in `KeyVault` + `UnlockPolicy` + `BiometricKeySpecTest`, `UnlockPolicyTest`, `PasswordReminderTest` (security.md §3.7, §5)|V19,V20,V21,V22
 T12|.|`DbMaintenance`: export pipeline, backup SAF + share, key changes, slot-only commits, startup reconciliation, crash safety + L-06–L-11, L-14–L-16, L-47 (db-lifecycle.md)|V18,V24,V26,I.file,I.intent
@@ -98,7 +98,7 @@ T18|.|note editor, `EntityPicker`, dialogs (ui.md §6–§8)|V9,V11,V12
 T19|.|Settings: backup, restore, encryption & password, biometric lock, screenshot protection, backup offer (ui.md §8, §9)|V24,V25,V27
 T20|.|keyboard/autofill + window policy wiring + strings audit (security.md §8, §11; ui.md §11)|V27,V30,V32
 T21|.|release hardening: all verification gates green, perf tests in place (testing.md §8, §9)|V34,V35
-T22|.|phone: installDebug + full connectedDebugAndroidTest on Poco F7, fix failures (needs phone)|V36,I.cmd
+T22|.|phone: installDebug + full connectedDebugAndroidTest on Poco F7, fix failures; record device outcomes of open "Verify at setup" items (TEMP_STORE, 600 KB cursor value, ART vs JVM whitespace incl. U+180E, M-27 native cipher log) (needs phone)|V36,V34,I.cmd
 T23|.|manual QA checklist on Poco F7 (testing.md §10) (needs phone)|V20,V27
 
 ## §B
