@@ -20,6 +20,7 @@ import com.doro.organizer.testing.longOf
 import com.doro.organizer.testing.longsOf
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.ok
+import com.doro.organizer.testing.openDatabase
 import java.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.runTest
@@ -45,6 +46,7 @@ class EntityDeleteTest {
 
     private val time = FakeAppTime()
     private val t0 = time.nowMillis()
+    private lateinit var holder: DatabaseHolder
     private lateinit var db: AppDatabase
     private lateinit var rows: TestRows
     private lateinit var entities: EntityRepository
@@ -58,10 +60,11 @@ class EntityDeleteTest {
 
     @Before
     fun createDatabase() {
-        db = databases.create()
+        holder = databases.holder()
+        db = holder.openDatabase()
         rows = TestRows(sql)
-        entities = entityRepository(db, time, applicationScope)
-        notes = noteRepository(db, time, applicationScope)
+        entities = entityRepository(holder, time, applicationScope)
+        notes = noteRepository(holder, time, applicationScope)
         p = rows.person("P", t0)
         q = rows.person("Q", t0)
         x = rows.project("X", t0)

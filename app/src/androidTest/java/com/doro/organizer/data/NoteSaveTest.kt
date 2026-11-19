@@ -12,6 +12,7 @@ import com.doro.organizer.testing.assertDbInvariants
 import com.doro.organizer.testing.canonicalDump
 import com.doro.organizer.testing.draft
 import com.doro.organizer.testing.noteRepository
+import com.doro.organizer.testing.openDatabase
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -31,12 +32,14 @@ class NoteSaveTest {
     @get:Rule
     val applicationScope = ApplicationScopeRule()
 
+    private lateinit var holder: DatabaseHolder
     private lateinit var db: AppDatabase
     private val sql: SupportSQLiteDatabase get() = db.openHelper.writableDatabase
 
     @Before
     fun createDatabase() {
-        db = databases.create()
+        holder = databases.holder()
+        db = holder.openDatabase()
     }
 
     @After
@@ -44,7 +47,7 @@ class NoteSaveTest {
 
     @Test
     fun rollback() = runTest(timeout = 10.seconds) {
-        val repository = noteRepository(db, FakeAppTime(), applicationScope)
+        val repository = noteRepository(holder, FakeAppTime(), applicationScope)
         // Aborts the second link insert of a note, after the note, both persons and the first link are written.
         sql.execSQL(
             "CREATE TRIGGER t_fail BEFORE INSERT ON note_persons " +

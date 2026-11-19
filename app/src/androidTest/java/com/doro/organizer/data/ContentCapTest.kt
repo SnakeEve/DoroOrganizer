@@ -10,6 +10,7 @@ import com.doro.organizer.testing.assertDbInvariants
 import com.doro.organizer.testing.draft
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.ok
+import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.testing.rows
 import com.doro.organizer.testing.saved
 import kotlin.time.Duration.Companion.seconds
@@ -34,13 +35,15 @@ class ContentCapTest {
     @get:Rule
     val applicationScope = ApplicationScopeRule()
 
+    private lateinit var holder: DatabaseHolder
     private lateinit var db: AppDatabase
     private lateinit var repository: NoteRepository
 
     @Before
     fun createDatabase() {
-        db = databases.create()
-        repository = noteRepository(db, FakeAppTime(), applicationScope)
+        holder = databases.holder()
+        db = holder.openDatabase()
+        repository = noteRepository(holder, FakeAppTime(), applicationScope)
     }
 
     @After

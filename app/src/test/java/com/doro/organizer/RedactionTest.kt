@@ -3,6 +3,8 @@ package com.doro.organizer
 import com.doro.organizer.core.result.AppError
 import com.doro.organizer.core.result.InputRule
 import com.doro.organizer.data.CreatedIds
+import com.doro.organizer.data.ExclusiveScope
+import com.doro.organizer.data.Reopen
 import com.doro.organizer.data.db.EntityOptionRow
 import com.doro.organizer.data.db.NoteDetailRow
 import com.doro.organizer.data.db.NoteEntity
@@ -15,6 +17,7 @@ import com.doro.organizer.data.db.SaveProbe
 import com.doro.organizer.model.BatchResult
 import com.doro.organizer.model.DateFilter
 import com.doro.organizer.model.DeleteImpact
+import com.doro.organizer.model.DraftInsert
 import com.doro.organizer.model.EntityDeleteResult
 import com.doro.organizer.model.EntityOption
 import com.doro.organizer.model.EntityRef
@@ -257,5 +260,21 @@ class RedactionTest {
     @Test
     fun entityDeleteResult_printsCounts() {
         assertEquals("EntityDeleteResult(deleted=true, n=3, m=1)", EntityDeleteResult(true, 3, 1).toString())
+    }
+
+    @Test
+    fun draftInsert_printsNoteIdOnly() {
+        val record =
+            DraftInsert(noteId = 4, createdPersons = mapOf(SENTINEL to 5L), createdProjects = mapOf(SENTINEL to 6L))
+
+        assertEquals("DraftInsert(noteId=4)", record.toString())
+    }
+
+    @Test
+    fun holderTypes_neverPrintAKey() {
+        val key = SENTINEL.toByteArray()
+
+        assertEquals("ExclusiveScope(generation=3)", ExclusiveScope(3, key).toString())
+        assertEquals("Generation(generation=4, newData=true)", Reopen.Generation(4, key, newData = true).toString())
     }
 }

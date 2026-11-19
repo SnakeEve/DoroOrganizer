@@ -139,6 +139,7 @@ dependencies {
     implementation(libs.androidx.sqlite) // SupportSQLiteDatabase, a supertype of the SQLCipher classes; SQLCipher declares it runtime-only
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.lifecycle.process) // ProcessLifecycleOwner: AppTime refresh (architecture.md § Time)
+    implementation(libs.androidx.datastore.preferences) // SettingsStore, the only DataStore user (DEC-09)
 
     testImplementation(libs.junit)
     testImplementation(libs.org.json) // Android's org.json is a stub on the JVM

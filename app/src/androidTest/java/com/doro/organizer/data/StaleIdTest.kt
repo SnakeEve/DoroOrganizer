@@ -11,8 +11,8 @@ import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.SaveResult
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.FakeAppTime
-import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TEST_DAY
+import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestRows
 import com.doro.organizer.testing.assertDbInvariants
 import com.doro.organizer.testing.canonicalDump
@@ -22,6 +22,7 @@ import com.doro.organizer.testing.longOf
 import com.doro.organizer.testing.longsOf
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.ok
+import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.testing.saved
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.runTest
@@ -49,6 +50,7 @@ class StaleIdTest {
 
     private val time = FakeAppTime()
     private val now = time.nowMillis()
+    private lateinit var holder: DatabaseHolder
     private lateinit var db: AppDatabase
     private lateinit var rows: TestRows
     private lateinit var repository: NoteRepository
@@ -56,9 +58,10 @@ class StaleIdTest {
 
     @Before
     fun createDatabase() {
-        db = databases.create()
+        holder = databases.holder()
+        db = holder.openDatabase()
         rows = TestRows(sql)
-        repository = noteRepository(db, time, applicationScope)
+        repository = noteRepository(holder, time, applicationScope)
     }
 
     @After
@@ -153,7 +156,7 @@ class StaleIdTest {
 
     @Test
     fun deletedEntity_existenceProbeEmitsNull() = runTest(timeout = 10.seconds) {
-        val entities = entityRepository(db, time, applicationScope)
+        val entities = entityRepository(holder, time, applicationScope)
         val person = rows.person("P", now)
         val project = rows.project("X", now)
 

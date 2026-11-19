@@ -1,31 +1,40 @@
 package com.doro.organizer.testing
 
-import android.database.sqlite.SQLiteException
 import androidx.test.platform.app.InstrumentationRegistry
+import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.data.CipherCompatibilityHook
+import com.doro.organizer.data.DbFiles
+import com.doro.organizer.data.DefaultDatabaseHolder
+import com.doro.organizer.data.NoDeleteErrorHandler
+import com.doro.organizer.data.OpenResult
 import com.doro.organizer.data.SqlcipherEngine
 import com.doro.organizer.data.buildRoom
 import com.doro.organizer.data.db.AppDatabase
 import java.io.File
 import java.nio.file.Files
-import net.zetetic.database.DatabaseErrorHandler
+import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import org.junit.rules.ExternalResource
 
 /**
  * Test databases on real SQLCipher files (testing.md § 7). Each instance gets its own fresh directory, so two rules in
- * one process never touch each other's files; the rule closes every connection it opened, zeroes its key and deletes
- * its directory afterwards. Declare it as a `@get:Rule`. [keyBytes] turns a [TestKey] into the array SQLCipher
- * receives; a test replaces it only to watch those arrays.
+ * one process never touch each other's files; the rule closes every holder and connection it opened, zeroes its keys
+ * and deletes its directory afterwards. Declare it as a `@get:Rule`. [keyBytes] turns a [TestKey] into the array
+ * SQLCipher receives; a test replaces it only to watch those arrays.
  */
 class TestDatabases(private val keyBytes: (TestKey) -> ByteArray = TestKey::bytes) : ExternalResource() {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private val connections = mutableListOf<Pair<SQLiteDatabase, ByteArray>>()
     private val rooms = mutableListOf<Pair<AppDatabase, ByteArray>>()
+    private val holders = mutableListOf<DefaultDatabaseHolder>()
     private var created = 0
 
     /** This instance's own directory, empty when the test starts. */
     lateinit var directory: File
+        private set
+
+    /** The live-generation files of this instance's holders, in `<directory>/databases`. */
+    lateinit var files: DbFiles
         private set
 
     override fun before() {
@@ -33,13 +42,20 @@ class TestDatabases(private val keyBytes: (TestKey) -> ByteArray = TestKey::byte
         val root = File(context.noBackupFilesDir, "test-databases")
         check(root.isDirectory || root.mkdirs()) { "cannot create the test database root" }
         directory = Files.createTempDirectory(root.toPath(), "db").toFile()
+        files = DbFiles(File(directory, "databases").apply { check(mkdir()) { "cannot create databases/" } })
     }
 
-    /** Closes and zeroes everything even when one close fails, deletes [directory], then rethrows the first failure. */
+    /**
+     * Closes every holder (which zeroes its key), then closes and zeroes everything else even when one close fails,
+     * deletes [directory], then rethrows the first failure.
+     */
     override fun after() {
+        val holderFailures = holders.map { holder -> runCatching { runBlocking { holder.close() } }.exceptionOrNull() }
         // RoomDatabase.close() is idempotent and also releases an instance that was built but never opened.
-        val failures = rooms.map { (db, key) -> closeThenZero(key, db::close) } +
+        val failures = holderFailures +
+            rooms.map { (db, key) -> closeThenZero(key, db::close) } +
             connections.map { (db, key) -> closeThenZero(key) { if (db.isOpen) db.close() } }
+        holders.clear()
         rooms.clear()
         connections.clear()
         directory.deleteRecursively()
@@ -70,6 +86,42 @@ class TestDatabases(private val keyBytes: (TestKey) -> ByteArray = TestKey::byte
     }
 
     /**
+     * A valid, empty database of [key]'s mode at `files.live(generation)`, created by the production Room builder
+     * and closed again, so that only a holder opens it afterwards.
+     */
+    fun createLive(generation: Long = GENERATION, key: TestKey = TestKey.Plain): File {
+        val file = files.live(generation)
+        check(!file.exists()) { "generation $generation exists" }
+        room(file, key).run {
+            openHelper.writableDatabase
+            close()
+        }
+        return file
+    }
+
+    /**
+     * The production `DatabaseHolder` over [files], still Closed, reporting to [events]; it opens Room on the IO
+     * dispatcher of [dispatchers]. The rule closes it after the test.
+     */
+    fun newHolder(
+        events: HolderEvents = HolderEvents(),
+        dispatchers: AppDispatchers = AppDispatchers.production(),
+    ): DefaultDatabaseHolder =
+        DefaultDatabaseHolder(context, files, dispatchers, { events }, events).also { holders += it }
+
+    /**
+     * testing.md § 7 `holder(key)`: a database of [key]'s mode at `doro-1.db`, opened by the production holder
+     * through its normal open and verify path. Repository tests use it, so they reach DAOs only through the holder.
+     */
+    fun holder(key: TestKey = TestKey.Plain, events: HolderEvents = HolderEvents()): DefaultDatabaseHolder {
+        createLive(GENERATION, key)
+        return newHolder(events).also { holder ->
+            val result = runBlocking { holder.open(GENERATION, keyBytes(key)) }
+            check(result == OpenResult.Opened) { "holder did not open: $result" }
+        }
+    }
+
+    /**
      * A SQLCipher connection on the existing [file], opened as production's raw connections are (db-lifecycle.md
      * § Open sequence, `RawConnections.open`): never creating the file, never writing `android_metadata`, never
      * deleting on corruption. For pragmas, header reads and mutations; the rule closes it after the test.
@@ -87,7 +139,7 @@ class TestDatabases(private val keyBytes: (TestKey) -> ByteArray = TestKey::byte
         val flags = SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS or
             (if (create) SQLiteDatabase.CREATE_IF_NECESSARY else 0)
         val hook = if (bytes.isEmpty()) null else CipherCompatibilityHook
-        return runCatching { SQLiteDatabase.openDatabase(file.path, bytes, null, flags, NoDeleteHandler, hook) }
+        return runCatching { SQLiteDatabase.openDatabase(file.path, bytes, null, flags, NoDeleteErrorHandler, hook) }
             .onFailure { bytes.fill(0) }
             .getOrThrow()
             .also { connections += it to bytes }
@@ -97,9 +149,8 @@ class TestDatabases(private val keyBytes: (TestKey) -> ByteArray = TestKey::byte
     private fun closeThenZero(key: ByteArray, close: () -> Unit): Throwable? =
         runCatching(close).exceptionOrNull().also { key.fill(0) }
 
-    // The production NoDeleteErrorHandler arrives with RawConnections (T9); until then this copy matches
-    // db-lifecycle.md § Open sequence.
-    private object NoDeleteHandler : DatabaseErrorHandler {
-        override fun onCorruption(dbObj: SQLiteDatabase, exception: SQLiteException) = Unit
+    companion object {
+        /** The generation [holder] creates and opens. */
+        const val GENERATION = 1L
     }
 }

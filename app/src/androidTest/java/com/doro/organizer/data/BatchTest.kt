@@ -27,6 +27,7 @@ import com.doro.organizer.testing.entityRepository
 import com.doro.organizer.testing.longOf
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.ok
+import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.testing.seed
 import java.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -54,6 +55,7 @@ class BatchTest {
     val applicationScope = ApplicationScopeRule()
 
     private val time = FakeAppTime()
+    private lateinit var holder: DatabaseHolder
     private lateinit var db: AppDatabase
     private lateinit var rows: TestRows
     private lateinit var notes: NoteRepository
@@ -62,10 +64,11 @@ class BatchTest {
 
     @Before
     fun createDatabase() {
-        db = databases.create()
+        holder = databases.holder()
+        db = holder.openDatabase()
         rows = TestRows(sql)
-        notes = noteRepository(db, time, applicationScope)
-        entities = entityRepository(db, time, applicationScope)
+        notes = noteRepository(holder, time, applicationScope)
+        entities = entityRepository(holder, time, applicationScope)
     }
 
     @After

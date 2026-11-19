@@ -17,6 +17,12 @@ sealed interface AppResult<out T> {
 sealed interface AppError {
     /** Input the UI should have prevented; [rule] names which (data-layer.md INV-9). */
     data class InvalidInput(val rule: InputRule) : AppError
+
+    /** `SQLiteFullException`, `ENOSPC` or `EDQUOT`; the transaction rolled back (db-lifecycle.md § Classes). */
+    data object StorageFull : AppError
+
+    /** The database is closed or was replaced, or a transient I/O failure occurred; the caller keeps its input. */
+    data object DatabaseUnavailable : AppError
 }
 
 enum class InputRule {

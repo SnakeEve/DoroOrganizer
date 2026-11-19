@@ -14,8 +14,8 @@ import com.doro.organizer.model.MAX_NAME_CHARS
 import com.doro.organizer.model.NewEntity
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.FakeAppTime
-import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TEST_DAY
+import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestRows
 import com.doro.organizer.testing.assertDbInvariants
 import com.doro.organizer.testing.canonicalDump
@@ -24,6 +24,7 @@ import com.doro.organizer.testing.longOf
 import com.doro.organizer.testing.longsOf
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.ok
+import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.testing.saved
 import com.doro.organizer.testing.stringsOf
 import java.time.Duration
@@ -56,6 +57,7 @@ class NoteWriteRulesTest {
     private val time = FakeAppTime()
     private val t0 = time.nowMillis()
     private val t1 = t0 + MINUTE
+    private lateinit var holder: DatabaseHolder
     private lateinit var db: AppDatabase
     private lateinit var rows: TestRows
     private lateinit var repository: NoteRepository
@@ -63,9 +65,10 @@ class NoteWriteRulesTest {
 
     @Before
     fun createDatabase() {
-        db = databases.create()
+        holder = databases.holder()
+        db = holder.openDatabase()
         rows = TestRows(sql)
-        repository = noteRepository(db, time, applicationScope)
+        repository = noteRepository(holder, time, applicationScope)
     }
 
     @After

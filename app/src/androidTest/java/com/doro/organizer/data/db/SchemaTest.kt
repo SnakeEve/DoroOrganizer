@@ -5,12 +5,14 @@ import androidx.core.content.contentValuesOf
 import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.doro.organizer.data.OpenResult
 import com.doro.organizer.testing.FakeAppTime
 import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestKey
 import com.doro.organizer.testing.assertDbInvariants
 import com.doro.organizer.testing.longOf
 import com.doro.organizer.testing.longsOf
+import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.testing.stringsOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
@@ -101,14 +103,13 @@ class SchemaTest {
     }
 
     @Test
-    fun foreignKeys_enforcedAfterTwentyCloseReopenCycles() = runTest {
-        val file = databases.file("reopened.db")
+    fun foreignKeys_enforcedAfterTwentyHolderCloseReopenCycles() = runTest {
+        val holder = databases.holder()
         repeat(20) {
-            db = databases.room(file, TestKey.Plain)
-            assertEquals(1L, sql.longOf("PRAGMA user_version")) // the first access opens the database
-            db.close()
+            holder.close()
+            assertEquals(OpenResult.Opened, holder.open(TestDatabases.GENERATION, TestKey.Plain.bytes()))
         }
-        db = databases.room(file, TestKey.Plain)
+        db = holder.openDatabase()
 
         val note = insertNote()
         val person = insertPerson()

@@ -10,6 +10,7 @@ import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestRows
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.ok
+import com.doro.organizer.testing.openDatabase
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -40,9 +41,10 @@ class NoteLoadTest {
 
     @Before
     fun createDatabase() {
-        val db: AppDatabase = databases.create()
+        val holder = databases.holder()
+        val db: AppDatabase = holder.openDatabase()
         rows = TestRows(db.openHelper.writableDatabase)
-        repository = noteRepository(db, time, applicationScope)
+        repository = noteRepository(holder, time, applicationScope)
     }
 
     @Test

@@ -19,6 +19,7 @@ import com.doro.organizer.testing.canonicalDump
 import com.doro.organizer.testing.entityRepository
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.ok
+import com.doro.organizer.testing.openDatabase
 import java.util.Locale
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.flow.first
@@ -47,6 +48,7 @@ class EntityPickerTest {
     private val time = FakeAppTime()
     private val now = time.nowMillis()
     private lateinit var defaultLocale: Locale
+    private lateinit var holder: DatabaseHolder
     private lateinit var db: AppDatabase
     private lateinit var rows: TestRows
     private lateinit var entities: EntityRepository
@@ -57,10 +59,11 @@ class EntityPickerTest {
     fun createDatabase() {
         defaultLocale = Locale.getDefault()
         Locale.setDefault(Locale.US) // the Collator follows the default locale
-        db = databases.create()
+        holder = databases.holder()
+        db = holder.openDatabase()
         rows = TestRows(sql)
-        entities = entityRepository(db, time, applicationScope)
-        notes = noteRepository(db, time, applicationScope)
+        entities = entityRepository(holder, time, applicationScope)
+        notes = noteRepository(holder, time, applicationScope)
     }
 
     @After

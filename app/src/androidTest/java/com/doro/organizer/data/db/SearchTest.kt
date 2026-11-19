@@ -1,6 +1,7 @@
 package com.doro.organizer.data.db
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.doro.organizer.data.DatabaseHolder
 import com.doro.organizer.model.SearchText
 import com.doro.organizer.testing.ALL_NOTES
 import com.doro.organizer.testing.ApplicationScopeRule
@@ -11,6 +12,7 @@ import com.doro.organizer.testing.assertDbInvariants
 import com.doro.organizer.testing.draft
 import com.doro.organizer.testing.listedIds
 import com.doro.organizer.testing.noteRepository
+import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.testing.saved
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.runTest
@@ -36,12 +38,14 @@ class SearchTest {
     val applicationScope = ApplicationScopeRule()
 
     private val now = FakeAppTime().nowMillis()
+    private lateinit var holder: DatabaseHolder
     private lateinit var db: AppDatabase
     private lateinit var rows: TestRows
 
     @Before
     fun createDatabase() {
-        db = databases.create()
+        holder = databases.holder()
+        db = holder.openDatabase()
         rows = TestRows(db.openHelper.writableDatabase)
     }
 
@@ -107,7 +111,7 @@ class SearchTest {
 
     @Test
     fun unicode_editUpdatesTheFold() = runTest(timeout = 10.seconds) {
-        val repository = noteRepository(db, FakeAppTime(), applicationScope)
+        val repository = noteRepository(holder, FakeAppTime(), applicationScope)
         val id = repository.save(draft(content = "ÄRGER")).saved().noteId
         assertEquals(listOf(id), found("ärger"))
 
