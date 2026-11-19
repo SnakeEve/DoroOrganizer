@@ -83,22 +83,22 @@ T3|x|test infra: `src/sharedTest`, `FakeAppTime`, `TestDatabases`, `assertDbInva
 T4|x|`AppTime` + `EpochDays` + date math + overdue rule, JVM tests across zones & DST (architecture.md §Time)|V10,V13
 T5|x|entities + `AppDatabase` v1: schema export, `application_id` callback, explicit index names, redacted `toString()`, `SchemaTest` (data-layer.md §Entities)|V1,V3,V7,V11,V14,V15,I.pragma
 T6|x|DAOs: perspective query, canonical order, filters, search escaping, calendar marks, select-all ids, picker queries + I-01–I-04, I-10–I-16, I-24–I-27, I-43, I-47; deferred parts: I-13 via production toggles & I-25 `content_fold` on edit → T7, I-43 impact-count & delete plans → T8, I-03 20 holder close/reopen cycles → T9 (data-layer.md §Read model, §Search)|V2,V6,V7,V12,V14
-T7|x|`NoteRepository` writes: save insert/update + link diff, guarded check/uncheck, `updated_at` matrix, content cap, note delete + I-05–I-09, I-28–I-30, I-42 (a)–(c), I-13 via production `NoteDao` check/uncheck, I-25 edit updates `content_fold` (data-layer.md §Write rules, §Deletes)|V5,V8,V9,V10,V11
-T8|x|`EntityRepository` + links + batch ops + delete impact counts + I-17–I-20, I-21/I-23 repo parts, I-42 (d), I-43 impact-count & note/junction delete plans (data-layer.md §Deletes, §Batch operations)|V5,V7,V31
-T9|.|`SettingsStore` + `DatabaseHolder` open/verify/observe/exclusive + failure classification + L-04, L-13, L-17, holder parts of L-03/L-05/L-12, I-03 20 close/reopen cycles (db-lifecycle.md §DatabaseHolder, §Failure classification)|V3,V4,V26
-T10|.|`KeyVault`: key-state file + parser, KEK, PBKDF2, raw key, unlock/verify, backoff, reminder timestamp + L-27, L-28, `KeyVaultTest` (security.md §3, §5)|V16,V17,V22,V23,I.file
+T7|x|`NoteRepository` writes: save insert/update + link diff, guarded check/uncheck, `updated_at` matrix, content cap, note delete + I-05–I-09, I-28–I-30, I-42 (a)–(c), I-13 via production `NoteDao` check/uncheck, I-25 edit updates `content_fold`; also delivered `loadNote`, `hasAnyData` and batch associate/setDate/deleteNotes (data-layer.md §Write rules, §Deletes)|V5,V8,V9,V10,V11
+T8|x|`EntityRepository` + links + batch ops (ops landed in T7; T8 adds their tests and `NoteRepository.selectIds`/`observeRows`) + delete impact counts + I-17–I-20, I-21/I-23 repo parts, I-42 (d), I-43 impact-count & note/junction delete plans (data-layer.md §Deletes, §Batch operations)|V5,V7,V31
+T9|.|`SettingsStore` + `DatabaseHolder` open/verify/observe/exclusive + failure classification + L-13, L-17, holder parts of L-03/L-05/L-12, I-03 20 close/reopen cycles; L-04 → T10; L-05 KeyUnavailable cases (a)–(n) → T10/T14; gate halves of L-05/L-12 → T14 (db-lifecycle.md §DatabaseHolder, §Failure classification)|V3,V4,V26
+T10|.|`KeyVault`: key-state file + parser, KEK, PBKDF2, raw key, unlock/verify, backoff, reminder timestamp + L-04, L-27, L-28, `KeyVaultTest`, KeyVault-side KeyUnavailable cases of L-05 (security.md §3, §5)|V16,V17,V22,V23,I.file
 T11|.|biometric slot in `KeyVault` + `UnlockPolicy` + `BiometricKeySpecTest`, `UnlockPolicyTest`, `PasswordReminderTest` (security.md §3.7, §5)|V19,V20,V21,V22
 T12|.|`DbMaintenance`: export pipeline, backup SAF + share, key changes, slot-only commits, startup reconciliation, crash safety + L-06–L-11, L-14–L-16, L-47 (db-lifecycle.md)|V18,V24,V26,I.file,I.intent
 T13|.|restore pipeline + validation + staged migrations + recovery origins (db-lifecycle.md §Restore, §Corruption and KeyUnavailable recovery)|V25,V26
-T14|.|`SessionGate` + `AppLockController` + `BiometricGateway` + `ExternalActivities` + `WindowPolicy` + L-02, L-18, L-19, L-29, L-31, L-32, L-38–L-40, L-42, L-44, L-46, L-48 (architecture.md §SessionGate, security.md §7, §8)|V4,V20,V21,V22,V27
+T14|.|`SessionGate` + `AppLockController` + `BiometricGateway` + `ExternalActivities` + `WindowPolicy` + L-02, L-18, L-19, L-29, L-31, L-32, L-38–L-40, L-42, L-44, L-46, L-48, gate halves of L-05/L-12 & gate-side KeyUnavailable cases; wire `AppContainer.databaseHolder` (`DefaultDatabaseHolder` + SessionGate corruption listener + AppMessages flow-problem listener) & production `DbFiles.forApp(context)` (architecture.md §SessionGate, security.md §7, §8)|V4,V20,V21,V22,V27
 T15|.|UI shell: theme, `NavigationSuiteScaffold`, Navigation 3 stacks, gate screens (ui.md §1, §2, §10)|V12,V27,V32,V33
 T16|.|note list, five perspectives, filters, search, `MonthGrid` (ui.md §3, §4)|V6,V12,V13
 T17|.|selection mode + batch actions (ui.md §5)|V5,V31
-T18|.|note editor, `EntityPicker`, dialogs (ui.md §6–§8)|V9,V11,V12
+T18|.|note editor, `EntityPicker`, dialogs + I-08 JVM part (`ContentCap` truncation at 200,000 / 199,999 on a high surrogate, notice, truncation on load) (ui.md §6–§8)|V9,V11,V12
 T19|.|Settings: backup, restore, encryption & password, biometric lock, screenshot protection, backup offer (ui.md §8, §9)|V24,V25,V27
 T20|.|keyboard/autofill + window policy wiring + strings audit (security.md §8, §11; ui.md §11)|V27,V30,V32
 T21|.|release hardening: all verification gates green, perf tests in place (testing.md §8, §9)|V34,V35
-T22|.|phone: installDebug + full connectedDebugAndroidTest on Poco F7, fix failures; record device outcomes of open "Verify at setup" items (TEMP_STORE, 600 KB cursor value, ART vs JVM whitespace incl. U+180E, M-27 native cipher log) (needs phone)|V36,V34,I.cmd
+T22|.|phone: installDebug + full connectedDebugAndroidTest on Poco F7, fix failures; record device outcomes of open "Verify at setup" items (TEMP_STORE, 600 KB cursor value, ART vs JVM whitespace incl. U+180E, M-27 native cipher log, CorruptionTest tampered-page expectations, Room 2.8.5 close() vs running query, Room absolute-path name, db-lifecycle.md § Open sequence items (1)–(5), L-17 flow-drain log line) (needs phone)|V36,V34,I.cmd
 T23|.|manual QA checklist on Poco F7 (testing.md §10) (needs phone)|V20,V27
 
 ## §B
