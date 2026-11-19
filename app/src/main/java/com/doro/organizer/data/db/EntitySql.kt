@@ -27,3 +27,9 @@ const val PERSON_REF_SQL = "SELECT id, name FROM persons WHERE id = :id"
 
 /** The existence probe of a project. */
 const val PROJECT_REF_SQL = "SELECT id, name FROM projects WHERE id = :id"
+
+/** The ids of `:ids` that are still persons (data-layer.md § Note save, step 4). */
+const val EXISTING_PERSON_IDS_SQL = "SELECT id FROM persons WHERE id IN (:ids)"
+
+/** The ids of `:ids` that are still projects. */
+const val EXISTING_PROJECT_IDS_SQL = "SELECT id FROM projects WHERE id IN (:ids)"

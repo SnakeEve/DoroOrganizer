@@ -1,5 +1,8 @@
 package com.doro.organizer
 
+import com.doro.organizer.core.result.AppError
+import com.doro.organizer.core.result.InputRule
+import com.doro.organizer.data.CreatedIds
 import com.doro.organizer.data.db.EntityOptionRow
 import com.doro.organizer.data.db.NoteDetailRow
 import com.doro.organizer.data.db.NoteEntity
@@ -8,12 +11,18 @@ import com.doro.organizer.data.db.NoteProjectCrossRef
 import com.doro.organizer.data.db.PersonEntity
 import com.doro.organizer.data.db.NoteRowRaw
 import com.doro.organizer.data.db.ProjectEntity
+import com.doro.organizer.data.db.SaveProbe
+import com.doro.organizer.model.BatchResult
 import com.doro.organizer.model.DateFilter
 import com.doro.organizer.model.EntityRef
+import com.doro.organizer.model.NewEntity
+import com.doro.organizer.model.NoteDetail
+import com.doro.organizer.model.NoteDraft
 import com.doro.organizer.model.NoteFilter
 import com.doro.organizer.model.NoteQuery
 import com.doro.organizer.model.NoteRow
 import com.doro.organizer.model.Perspective
+import com.doro.organizer.model.SaveResult
 import com.doro.organizer.testing.SENTINEL
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -162,5 +171,73 @@ class RedactionTest {
                 "searchPattern=<${SENTINEL.length} chars>)",
             text,
         )
+    }
+
+    @Test
+    fun noteDraft_printsNoteIdOnly() {
+        val entities = listOf(NewEntity("k1", SENTINEL))
+        val draft = NoteDraft(
+            draftKey = SENTINEL,
+            noteId = 15,
+            content = SENTINEL,
+            date = null,
+            checked = false,
+            personIds = setOf(1),
+            projectIds = setOf(2),
+            newPersons = entities,
+            newProjects = entities,
+        )
+
+        assertEquals("NoteDraft(noteId=15)", draft.toString())
+    }
+
+    @Test
+    fun newEntity_printsKeyOnly() {
+        assertEquals("NewEntity(key=k1)", NewEntity("k1", SENTINEL).toString())
+    }
+
+    @Test
+    fun saved_printsIdsAndCountsOnly() {
+        val saved = SaveResult.Saved(16, wrote = true, mapOf(SENTINEL to 1L), mapOf(SENTINEL to 2L, "b" to 3L))
+
+        assertEquals("Saved(noteId=16, wrote=true, createdPersons=1, createdProjects=2)", saved.toString())
+    }
+
+    @Test
+    fun createdIds_printsCountsOnly() {
+        assertEquals("CreatedIds(persons=1, projects=0)", CreatedIds(mapOf(SENTINEL to 1L), emptyMap()).toString())
+    }
+
+    @Test
+    fun saveProbe_printsClassNameOnly() {
+        assertEquals("SaveProbe", SaveProbe(SENTINEL, 20_000).toString())
+    }
+
+    @Test
+    fun noteDetail_printsIdOnly() {
+        val links = listOf(EntityRef(1, SENTINEL))
+        val detail = NoteDetail(
+            id = 17,
+            content = SENTINEL,
+            date = 20_000,
+            checked = true,
+            checkedAt = 3,
+            createdAt = 1,
+            updatedAt = 2,
+            persons = links,
+            projects = links,
+        )
+
+        assertEquals("NoteDetail(id=17)", detail.toString())
+    }
+
+    @Test
+    fun appError_printsTheCaseOnly() {
+        assertEquals("InvalidInput(rule=BlankName)", AppError.InvalidInput(InputRule.BlankName).toString())
+    }
+
+    @Test
+    fun batchResult_printsCounts() {
+        assertEquals("BatchResult(selected=3, changed=2)", BatchResult(3, 2).toString())
     }
 }

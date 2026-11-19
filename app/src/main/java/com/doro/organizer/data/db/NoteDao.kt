@@ -1,6 +1,8 @@
 package com.doro.organizer.data.db
 
 import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.doro.organizer.model.EntityRef
 import kotlinx.coroutines.flow.Flow
@@ -62,4 +64,61 @@ interface NoteDao {
     /** True when the database holds at least one note, person or project (DEC-73). */
     @Query(HAS_ANY_DATA_SQL)
     suspend fun hasAnyData(): Boolean
+
+    /** A new note; returns its id. */
+    @Insert
+    suspend fun insertNote(note: NoteEntity): Long
+
+    /** What a save compares, or null when the note is gone. */
+    @Query(SAVE_PROBE_SQL)
+    suspend fun saveProbe(id: Long): SaveProbe?
+
+    @Query(PERSON_IDS_OF_SQL)
+    suspend fun personIdsOf(noteId: Long): List<Long>
+
+    @Query(PROJECT_IDS_OF_SQL)
+    suspend fun projectIdsOf(noteId: Long): List<Long>
+
+    @Query(UPDATE_NOTE_SQL)
+    suspend fun updateNote(id: Long, content: String, fold: String, date: Long?, now: Long): Int
+
+    /** Returns one rowid per link, aligned with [links]: `-1` for a link that already existed (DEC-36). */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertPersonLinks(links: List<NotePersonCrossRef>): List<Long>
+
+    /** As [insertPersonLinks]. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertProjectLinks(links: List<NoteProjectCrossRef>): List<Long>
+
+    @Query(UNLINK_PERSONS_SQL)
+    suspend fun unlinkPersons(noteId: Long, personIds: List<Long>): Int
+
+    @Query(UNLINK_PROJECTS_SQL)
+    suspend fun unlinkProjects(noteId: Long, projectIds: List<Long>): Int
+
+    /** 1 when the note was unchecked and is now checked, else 0 (DEC-22). */
+    @Query(CHECK_SQL)
+    suspend fun check(id: Long, now: Long): Int
+
+    /** 1 when the note was checked and is now unchecked, else 0 (DEC-22). */
+    @Query(UNCHECK_SQL)
+    suspend fun uncheck(id: Long, now: Long): Int
+
+    @Query(EXISTING_NOTE_IDS_SQL)
+    suspend fun existingNoteIds(ids: List<Long>): List<Long>
+
+    @Query(BUMP_SQL)
+    suspend fun bump(ids: List<Long>, now: Long): Int
+
+    @Query(SET_DATE_SQL)
+    suspend fun setDate(ids: List<Long>, date: Long?, now: Long): Int
+
+    @Query(DELETE_PERSON_LINKS_OF_NOTES_SQL)
+    suspend fun deletePersonLinksOfNotes(ids: List<Long>): Int
+
+    @Query(DELETE_PROJECT_LINKS_OF_NOTES_SQL)
+    suspend fun deleteProjectLinksOfNotes(ids: List<Long>): Int
+
+    @Query(DELETE_NOTES_SQL)
+    suspend fun deleteNotes(ids: List<Long>): Int
 }

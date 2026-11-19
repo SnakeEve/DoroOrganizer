@@ -46,16 +46,6 @@ class TestRows(private val db: SupportSQLiteDatabase) {
         insert("note_projects", "note_id" to noteId, "project_id" to projectId)
     }
 
-    /** The guarded check of DEC-22: `updated_at` stays. */
-    fun check(noteId: Long, now: Long) =
-        db.execSQL("UPDATE notes SET checked = 1, checked_at = ? WHERE id = ? AND checked = 0", arrayOf(now, noteId))
-
-    /** The guarded uncheck of DEC-22: it bumps `updated_at`. */
-    fun uncheck(noteId: Long, now: Long) = db.execSQL(
-        "UPDATE notes SET checked = 0, checked_at = NULL, updated_at = ? WHERE id = ? AND checked = 1",
-        arrayOf(now, noteId),
-    )
-
     fun deletePerson(id: Long) {
         db.execSQL("DELETE FROM note_persons WHERE person_id = ?", arrayOf(id))
         db.execSQL("DELETE FROM persons WHERE id = ?", arrayOf(id))

@@ -19,8 +19,8 @@ import org.junit.runner.RunWith
 
 /**
  * The canonical order of DEC-23 in `NoteDao.observeRows`: testing.md I-10 to I-13 (the I-11 visual order is a
- * Compose test). Timestamps come from [FakeAppTime]; T0 < T1 < T2 < … are its instants one minute apart. Until
- * `NoteDao` has the guarded check and uncheck (T7), I-13 toggles through the DEC-22 statements in [TestRows].
+ * Compose test). Timestamps come from [FakeAppTime]; T0 < T1 < T2 < … are its instants one minute apart. Notes are
+ * checked and unchecked through the production guarded statements of `NoteDao` (DEC-22).
  */
 @RunWith(AndroidJUnit4::class)
 class NoteOrderTest {
@@ -59,9 +59,9 @@ class NoteOrderTest {
         val b = rows.note(createdAt = t0)
         val c = rows.note(createdAt = t0)
         val unchecked = rows.note(createdAt = t0)
-        rows.check(a, t1)
-        rows.check(b, t2)
-        rows.check(c, t3)
+        notes.check(a, t1)
+        notes.check(b, t2)
+        notes.check(c, t3)
 
         assertEquals(listOf(unchecked, a, b, c), listed())
     }
@@ -109,17 +109,19 @@ class NoteOrderTest {
         val c = rows.note(createdAt = t0, checkedAt = t1)
         assertEquals(listOf(u3, u2, u1, c), listed())
 
-        rows.uncheck(c, now = next())
+        notes.uncheck(c, now = next())
         assertEquals("uncheck moves to the top", listOf(c, u3, u2, u1), listed())
 
-        rows.check(u2, now = next())
+        notes.check(u2, now = next())
         assertEquals("check moves to the very bottom", listOf(c, u3, u1, u2), listed())
 
-        rows.check(u3, now = next())
+        notes.check(u3, now = next())
         assertEquals("the newest check is last", listOf(c, u1, u2, u3), listed())
     }
 
-    private suspend fun listed(): List<Long> = db.noteDao().listedIds()
+    private val notes: NoteDao get() = db.noteDao()
+
+    private suspend fun listed(): List<Long> = notes.listedIds()
 
     /** [count] instants one minute apart, starting now; the clock ends one minute after the last. */
     private fun instants(count: Int): List<Long> = List(count) { next() }

@@ -3,11 +3,15 @@ package com.doro.organizer.data.db
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.model.SearchText
 import com.doro.organizer.testing.ALL_NOTES
+import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.FakeAppTime
 import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestRows
 import com.doro.organizer.testing.assertDbInvariants
+import com.doro.organizer.testing.draft
 import com.doro.organizer.testing.listedIds
+import com.doro.organizer.testing.noteRepository
+import com.doro.organizer.testing.saved
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -20,12 +24,16 @@ import org.junit.runner.RunWith
 /**
  * Search on SQLCipher's SQLite (DEC-29): testing.md I-24 (escaping), I-25 (Unicode folding), I-26 (the placeholder
  * is not content) and I-27 (long queries). Queries go through the production `SearchText.toLikeTerm`, as
- * `NoteFilter.toQuery` binds them; content and `content_fold` are written by [TestRows].
+ * `NoteFilter.toQuery` binds them; content and `content_fold` are written by [TestRows], and by `NoteRepository` for
+ * the edit case.
  */
 @RunWith(AndroidJUnit4::class)
 class SearchTest {
     @get:Rule
     val databases = TestDatabases()
+
+    @get:Rule
+    val applicationScope = ApplicationScopeRule()
 
     private val now = FakeAppTime().nowMillis()
     private lateinit var db: AppDatabase
@@ -95,6 +103,18 @@ class SearchTest {
         note("ΟΔΟΣΑ") // Σ inside a word folds to σ, at its end to ς (Final_Sigma)
 
         assertEquals(listOf(word), found("ΟΔΟΣ"))
+    }
+
+    @Test
+    fun unicode_editUpdatesTheFold() = runTest(timeout = 10.seconds) {
+        val repository = noteRepository(db, FakeAppTime(), applicationScope)
+        val id = repository.save(draft(content = "ÄRGER")).saved().noteId
+        assertEquals(listOf(id), found("ärger"))
+
+        repository.save(draft(noteId = id, content = "ŁÓDŹ")).saved()
+
+        assertEquals(emptyList<Long>(), found("ärger"))
+        assertEquals(listOf(id), found("łódź"))
     }
 
     @Test

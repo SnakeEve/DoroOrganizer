@@ -3,19 +3,15 @@ package com.doro.organizer.data
 import com.doro.organizer.data.db.NoteRowRaw
 import com.doro.organizer.model.EntityRef
 import com.doro.organizer.model.NoteRow
-import java.text.Collator
 import org.json.JSONArray
 import org.json.JSONException
 
 /**
  * Maps one emission of `NoteDao.observeRows` (data-layer.md § Rows): parses the link arrays and sorts each by
- * `Collator` on the name, then id, the picker order of DEC-32. SQLite cannot sort that way (no ICU, DEC-08). One
- * `Collator` per pass: instances are not thread-safe, and the default locale is read again on each pass. Runs on the
- * background dispatcher (architecture.md § Threading).
+ * [linkOrder]. Runs on the background dispatcher (architecture.md § Threading).
  */
 internal fun List<NoteRowRaw>.toNoteRows(): List<NoteRow> {
-    val collator = Collator.getInstance()
-    val order = Comparator<EntityRef> { a, b -> collator.compare(a.name, b.name) }.thenBy { it.id }
+    val order = linkOrder()
     return map { raw ->
         NoteRow(
             id = raw.id,
