@@ -3,6 +3,7 @@ package com.doro.organizer.testing
 import com.doro.organizer.model.DateFilter
 import com.doro.organizer.model.NoteFilter
 import com.doro.organizer.model.Perspective
+import com.doro.organizer.model.TextWhitespace
 import java.util.Locale
 
 /**
@@ -66,7 +67,7 @@ object NoteOracle {
     }
 
     private fun searchMatches(note: SeedNote, search: String): Boolean {
-        val term = search.trim().lowercase(Locale.ROOT)
+        val term = TextWhitespace.trim(search).lowercase(Locale.ROOT)
         return term.isEmpty() || note.foldedContent.contains(term)
     }
 }

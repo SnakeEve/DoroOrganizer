@@ -17,12 +17,14 @@ import com.doro.organizer.data.HolderState
 import com.doro.organizer.data.maintenance.MaintenanceFaultHook
 import com.doro.organizer.data.maintenance.MaintenanceOrigin
 import com.doro.organizer.data.maintenance.PipelineStep
+import com.doro.organizer.debug.CRASH_FAILURE_MARKER
 import com.doro.organizer.debug.CRASH_RESTORE_INPUT
 import com.doro.organizer.debug.CRASH_RUN_MARKER
 import com.doro.organizer.debug.CrashOp
 import com.doro.organizer.debug.CrashRequest
 import com.doro.organizer.debug.CrashTestContainer
 import com.doro.organizer.debug.CrashTestService
+import com.doro.organizer.debug.awaitBackupInputs
 import com.doro.organizer.debug.runCrashRequest
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.PasswordReason
@@ -47,6 +49,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 
 // L-15 (testing.md § 5, "Process death"; db-lifecycle.md § Crash-safety matrix): the scenes the crash test plants on
 // the production locations of the debug app, the expectation table keyed by the matrix rows CS-nn, and the check of
@@ -123,9 +126,18 @@ object CrashMatrix {
                 s(PipelineStep.CLEANUP, if (flow.target == KeyMode.PLAIN) "CS-13" else "CS-33", after),
             )
 
+    /** The first schema version: `checkIdentity` rejects a `user_version` below it as Incompatible. */
+    const val FIRST_SCHEMA_VERSION = 1
+
+    /**
+     * The checks a restore of the planted input passes. That input is a backup this build made, at
+     * `AppDatabase.VERSION`, and `MIGRATE_INPUT` runs only for an older `user_version` (db-lifecycle.md § Restore,
+     * step 7): while the schema is at [FIRST_SCHEMA_VERSION] no input can reach it. From the next version on,
+     * `CrashSafetyCoverageTest` fails until every restore flow plants an older input and expects the step.
+     */
     private val restoreChecks = listOf(
         PipelineStep.PRECHECK, PipelineStep.COPY_INPUT, PipelineStep.OPEN_INPUT, PipelineStep.VALIDATE_INPUT,
-        PipelineStep.MIGRATE_INPUT, PipelineStep.CHECK_SCHEMA,
+        PipelineStep.CHECK_SCHEMA,
     )
 
     private fun backup(last: PipelineStep, lastRow: String) = listOf(
@@ -318,6 +330,7 @@ class CrashScene {
             val backupDump = dump(c)
             val input = File(app.noBackupFilesDir, CRASH_RESTORE_INPUT).apply { parentFile?.mkdirs() }
             val backupPassword = if (flow.encryptedBackup) BACKUP_PASSWORD.toCharArray() else null
+            awaitBackupInputs(c)
             check(maintenance.backupToDocument(Uri.fromFile(input), backupPassword) is AppResult.Ok) { "the planted backup" }
             insertNote(c, "B")
             when (plant) {
@@ -349,6 +362,7 @@ class CrashScene {
     /** Binds the service with [request] and waits for its process to die at the requested step. */
     fun runUntilKilled(request: CrashRequest) {
         File(app.noBackupFilesDir, CRASH_RUN_MARKER).delete()
+        val failure = File(app.noBackupFilesDir, CRASH_FAILURE_MARKER).apply { delete() }
         val died = CountDownLatch(1)
         val connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -364,7 +378,9 @@ class CrashScene {
         val intent = request.into(Intent(app, CrashTestService::class.java))
         check(app.bindService(intent, connection, Context.BIND_AUTO_CREATE)) { "cannot bind the crash-test service" }
         try {
-            assertTrue("$request: the step was never reached", died.await(KILL_TIMEOUT_S, TimeUnit.SECONDS))
+            val dead = died.await(KILL_TIMEOUT_S, TimeUnit.SECONDS)
+            if (failure.exists()) fail("$request: the run failed before its step: ${failure.readText()}")
+            assertTrue("$request: the step was never reached", dead)
         } finally {
             app.unbindService(connection)
         }

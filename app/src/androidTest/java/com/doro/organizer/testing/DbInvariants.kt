@@ -1,6 +1,7 @@
 package com.doro.organizer.testing
 
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.doro.organizer.model.TextWhitespace
 import java.util.Locale
 
 /**
@@ -61,13 +62,13 @@ private fun SupportSQLiteDatabase.contentViolations(): List<String> =
         }
     }
 
-// Kotlin, not SQL: SQLite trim() strips spaces only, Kotlin trim() every Char.isWhitespace (INV-9).
+// Kotlin, not SQL: SQLite trim() strips spaces only, TextWhitespace every code point of the app's rule (INV-9).
 private fun SupportSQLiteDatabase.nameViolations(table: String): List<String> =
     query("SELECT id, name FROM $table").use { cursor ->
         buildList {
             while (cursor.moveToNext()) {
                 val name = cursor.getString(1)
-                if (name.isEmpty() || name != name.trim() || name.length > MAX_NAME_CHARS) {
+                if (name.isEmpty() || name != TextWhitespace.trim(name) || name.length > MAX_NAME_CHARS) {
                     add("$table.name blank, untrimmed or over $MAX_NAME_CHARS chars (INV-9): id ${cursor.getLong(0)}")
                 }
             }

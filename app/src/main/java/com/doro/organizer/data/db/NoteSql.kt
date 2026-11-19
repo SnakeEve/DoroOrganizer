@@ -37,8 +37,8 @@ const val CANONICAL_ORDER = """ORDER BY n.checked ASC,
     n.id DESC"""
 
 /**
- * The code points for which Kotlin's `Char.isWhitespace()` is true (WhitespaceCharsTest), so a preview is blank
- * exactly when the content is blank (DEC-24, DEC-25).
+ * The code points of `TextWhitespace`, the app's whitespace rule (WhitespaceCharsTest), so a preview is blank exactly
+ * when the content is blank (DEC-24, DEC-25). A literal, because Room's `@Query` needs a constant.
  */
 const val WHITESPACE_CHARS = """char(9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 160, 5760, 8192, 8193, 8194, 8195,
     8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288)"""

@@ -441,10 +441,14 @@ class KeyVaultTest {
         settings.failEdits = true
         val first = vault.unlock(wrongPassword) as UnlockResult.Throttled
         val derivations = kdf.derivations().size
+        // DEC-75: the first answer carries the count before the attempt; the floor holds that attempt, failures + 1,
+        // and binds every later attempt with the same wait.
+        val floor = UnlockResult.Throttled(first.failures + 1, first.retryAtElapsedMs)
 
-        assertEquals(first, vault.unlock(password))
-        assertEquals(first, vault.openKey(slot, password))
-        assertEquals(first, vault.verifyPassword(password))
+        assertEquals(UnlockResult.Throttled(2, time.elapsedMillis() + 30_000), first)
+        assertEquals(floor, vault.unlock(password))
+        assertEquals(floor, vault.openKey(slot, password))
+        assertEquals(floor, vault.verifyPassword(password))
         assertEquals("no free extra guess", derivations, kdf.derivations().size)
 
         time.setElapsed(first.retryAtElapsedMs)

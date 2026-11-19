@@ -66,14 +66,19 @@ class ReturnRouteMatrixTest : GateTest() {
         scene.gateway.succeed()
         scene.coldStart()
         scene.awaitGate(GateState.Ready)
+        assertEquals("a slot open runs no E5 (T16 with viaSlot)", 0, scene.offerSetups)
         scene.gateway.deviceSecure = false
         scene.backgroundTrip()
         scene.awaitGate { it is GateState.Locked && it.password != null }
         scene.submit(PASSWORD)
         scene.awaitGate(GateState.Ready)
-        scene.awaitOfferSetups(2) // after the cold start's and the password's
+        scene.awaitOfferSetups(1) // the password's
         assertFalse(scene.settings.snapshot().biometricLock)
+        assertEquals(true, scene.settings.snapshot().lockAutoOffNotice)
+        assertEquals(BioSlotStatus.None, app.container.keyVault.biometricSlotStatus())
+        assertEquals(null, offer.value)
         assertEquals(1, scene.gateway.prompts.size)
+        assertEquals("the password's E5 only", 1, scene.offerSetups)
     }
 
     @Test

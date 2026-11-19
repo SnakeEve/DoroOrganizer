@@ -330,6 +330,60 @@ class ArchitectureTest {
         assertNoneReported(planted("data/A.kt", "const val A = \"SELECT * FROM notes\""), SqlTextRule::check)
     }
 
+    @Test
+    fun transactionsOnlyThroughTheFrame() = assertClean(TransactionRule::check)
+
+    @Test
+    fun transactionsOnlyThroughTheFrame_planted() {
+        val source = planted(
+            "data/DefaultNoteRepository.kt",
+            """
+            suspend fun f(db: AppDatabase) = db.withTransaction { }
+            fun g(db: AppDatabase) = db.runInTransaction { }
+            fun h(s: SupportSQLiteDatabase) = s.beginTransactionNonExclusive()
+            const val OPEN = " begin immediate"
+            suspend fun k(db: AppDatabase) = db.transaction { } // withTransaction in a comment
+            """,
+        )
+        assertEquals(listOf(3, 4, 5, 6), TransactionRule.check(source).map { it.line })
+        assertNoneReported(planted("data/WriteTransaction.kt", "suspend fun f(db: AppDatabase) = db.withTransaction { }"), TransactionRule::check)
+        // The frame is the main source set's file: the same name elsewhere is no exemption.
+        assertReported(planted("data/WriteTransaction.kt", "fun f(db: AppDatabase) = db.withTransaction { }", sourceSet = "debug"), 3, TransactionRule::check)
+    }
+
+    @Test
+    fun whitespaceOnlyThroughTheRule() = assertClean(WhitespaceRule::check)
+
+    @Test
+    fun whitespaceOnlyThroughTheRule_planted() {
+        val source = planted(
+            "data/NewEntities.kt",
+            """
+            fun a(name: String) = name.trim()
+            fun b(text: String) = text.isBlank() || text.isNotBlank()
+            fun c(c: Char) = c.isWhitespace()
+            fun d(lines: List<String>) = lines.first(String::isNotBlank)
+            fun e(name: String?) = name.isNullOrBlank() || name.orEmpty().trimEnd().ifBlank { "x" }.isEmpty()
+            fun f(name: String) = with(name) { trimStart() }
+            fun g(name: String) = TextWhitespace.trim(name) + name.trim(TextWhitespace::isWhitespace) // name.trim()
+            """,
+        )
+        assertEquals(listOf(3, 4, 4, 5, 6, 7, 7, 7, 8), WhitespaceRule.check(source).map { it.line })
+        val allowlist = mapOf(source.path to mapOf("name.trim()" to "planted"))
+        assertEquals(listOf(4, 4, 5, 6, 7, 7, 7, 8), WhitespaceRule.check(source, allowlist).map { it.line })
+        val rule = planted("model/TextWhitespace.kt", "fun isBlank(text: CharSequence) = text.all(::isWhitespace)")
+        assertNoneReported(rule, WhitespaceRule::check) // the rule's own function, with a predicate
+    }
+
+    /** Every allowlisted snippet still exists, so a removed one cannot leave a stale exemption behind. */
+    @Test
+    fun whitespaceAllowlist_namesExistingSnippets() {
+        WhitespaceRule.ALLOWED.forEach { (path, snippets) ->
+            val source = checkNotNull(sources.find { it.path == path }) { path }
+            snippets.keys.forEach { assertTrue("$path: $it", it in source.code) }
+        }
+    }
+
     private fun assertClean(rule: (KotlinSource) -> List<Violation>) {
         val violations = sources.flatMap(rule)
         assertTrue(violations.joinToString("\n", prefix = "Boundary test (architecture.md):\n"), violations.isEmpty())

@@ -18,7 +18,8 @@ import kotlinx.coroutines.launch
  * step. `DoroApplication` starts nothing in this process, so the container built here is the only one. The test binds,
  * waits for the binder to die and then starts the app in its own process to check the crash-safety matrix row.
  * Reaching the end of an operation means the step was never hit; the process then stays alive and the test fails on
- * its timeout. A request whose fault the vault injects has no step to die at: a failed read-back
+ * its timeout. A failure of the run is written to [CRASH_FAILURE_MARKER] before it kills the process, so the test
+ * reports it instead of taking the death for the kill at the step. A request whose fault the vault injects has no step to die at: a failed read-back
  * (`CommitOutcome.Unknown`) lets its operation end on its own, and the process is killed then; a kill after the slot
  * commit dies inside the vault.
  */
@@ -33,7 +34,13 @@ class CrashTestService : Service() {
         scope.launch {
             val hook = if (request.faultInVault) MaintenanceFaultHook.None else KillingFaultHook(request.op.hookOp, request.step)
             val container = CrashTestContainer(application, hook, request.readBackFails, request.killAfterSlotCommit)
-            runCrashRequest(applicationContext, container, request, scope)
+            try {
+                runCrashRequest(applicationContext, container, request, scope)
+            } catch (t: Throwable) {
+                // The uncaught failure kills this process, which the test would take for the kill at the step.
+                File(noBackupFilesDir, CRASH_FAILURE_MARKER).writeText(t.toString())
+                throw t
+            }
             if (request.readBackFails) Process.killProcess(Process.myPid())
         }
         return Binder()

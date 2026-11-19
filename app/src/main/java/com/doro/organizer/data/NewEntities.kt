@@ -7,12 +7,14 @@ import com.doro.organizer.data.db.PersonEntity
 import com.doro.organizer.data.db.ProjectEntity
 import com.doro.organizer.model.MAX_NAME_CHARS
 import com.doro.organizer.model.NewEntity
+import com.doro.organizer.model.TextWhitespace
 
 /**
  * The INV-9 check that runs before any write (data-layer.md § Note save, step 1): [InputRule.BlankName] for a name
- * that is blank after `trim()`, null when every name is valid. A name longer than [MAX_NAME_CHARS] is a programming
- * error, because the pickers cut their input there; so is a key used twice within [persons] or [projects], because
- * [CreatedIds] maps each key to one new id and the entity behind the other would be created but never linked (DEC-33).
+ * that is blank after the trim of [TextWhitespace], null when every name is valid. A name longer than
+ * [MAX_NAME_CHARS] is a programming error, because the pickers cut their input there; so is a key used twice within
+ * [persons] or [projects], because [CreatedIds] maps each key to one new id and the entity behind the other would be
+ * created but never linked (DEC-33).
  */
 internal fun newEntityError(persons: List<NewEntity>, projects: List<NewEntity>): AppError? {
     require(persons.hasDistinctKeys() && projects.hasDistinctKeys()) { "new-entity key used twice" }
@@ -22,7 +24,8 @@ internal fun newEntityError(persons: List<NewEntity>, projects: List<NewEntity>)
 
 /**
  * Inserts the entities a save or a batch confirm created (DEC-33) with `created_at = updated_at = now`, inside the
- * caller's transaction (data-layer.md § Transactions and results). Names are stored trimmed (INV-9).
+ * caller's transaction (data-layer.md § Transactions and results). Names are stored trimmed by [TextWhitespace]
+ * (INV-9).
  */
 internal suspend fun EntityRepository.Companion.insertNew(
     db: AppDatabase,
@@ -48,7 +51,7 @@ private fun List<NewEntity>.hasDistinctKeys(): Boolean = mapTo(HashSet()) { it.k
 
 /** The trimmed name, or null when it is blank. */
 private fun NewEntity.storedName(): String? {
-    val trimmed = name.trim()
+    val trimmed = TextWhitespace.trim(name)
     require(trimmed.length <= MAX_NAME_CHARS) { "name longer than $MAX_NAME_CHARS chars" }
     return trimmed.ifEmpty { null }
 }

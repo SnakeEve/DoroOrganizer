@@ -1,5 +1,6 @@
 package com.doro.organizer.data.maintenance
 
+import android.database.sqlite.SQLiteDatabaseCorruptException
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.core.result.AppError
@@ -187,10 +188,29 @@ class RestoreValidationTest {
     @Test
     fun anIntegrityCheckFailure_isDamaged() = runValidationTest {
         val backup = setup.backupTo(context, "integrity.db")
-        corruptPage(backup.file, pageCount(backup.file))
-        // Only check 12 can see it: the schema still reads.
+        val clean = databases.raw(backup.file, TestKey.Plain).use { it.answersBeforeCheck12() }
+        // A page whose damage only check 12 sees: everything the restore reads before it (the open's checks 6-7,
+        // checks 8-9, check 11's identity hash) still reads as in the clean backup, and integrity_check reports the
+        // damage as rows. Not every page qualifies: damage that breaks those reads, or the table scans integrity_check
+        // runs after its b-tree walk, throws SQLITE_CORRUPT, which is the generic SQLiteException row of the table
+        // (or a garbled hash, Incompatible) and never reaches check 12's comparison.
+        val probe = databases.file("integrity-probe.db")
+        val page = (pageCount(backup.file) downTo 2).firstOrNull { page ->
+            backup.file.copyTo(probe, overwrite = true)
+            corruptPage(probe, page)
+            try {
+                databases.raw(probe, TestKey.Plain).use { raw ->
+                    raw.answersBeforeCheck12() == clean && raw.stringsOf("PRAGMA integrity_check") != listOf("ok")
+                }
+            } catch (_: SQLiteDatabaseCorruptException) {
+                false
+            }
+        }
+        probe.delete()
+        corruptPage(backup.file, checkNotNull(page) { "no page whose damage only integrity_check reports" })
+        // Only check 12 can see it.
         databases.raw(backup.file, TestKey.Plain).use { raw ->
-            assertTrue(raw.longOf("SELECT count(*) FROM sqlite_master") > 0)
+            assertEquals(clean, raw.answersBeforeCheck12())
             assertNotEquals(listOf("ok"), raw.stringsOf("PRAGMA integrity_check"))
         }
 
@@ -285,6 +305,7 @@ class RestoreValidationTest {
     @Test
     fun aReportedSizeBeyondThreeTimesTheFreeSpace_isStorageFull_beforeAnythingIsCopied() = runValidationTest {
         val backup = setup.backupTo(context, "huge.db")
+        synchronized(RecordingDocumentsProvider.modes) { RecordingDocumentsProvider.modes.clear() } // the backup's write
         RecordingDocumentsProvider.reportedSize = setup.files.noBackupDir.usableSpace / 3 + 1
 
         val result = setup.maintenance.restoreAnswering(backup.uri, MaintenanceOrigin.Ready)
@@ -435,6 +456,21 @@ class RestoreValidationTest {
         execSQL("INSERT INTO persons_new SELECT id, name, role, notes, created_at, updated_at FROM persons")
         execSQL("DROP TABLE persons") // raw connections run with foreign keys off: the junction rows stay
         execSQL("ALTER TABLE persons_new RENAME TO persons")
+    }
+
+    /**
+     * What the restore reads from a candidate before check 12, on a connection set up as its open sets one up: the
+     * schema count of checks 6-7, `application_id` and `user_version` (checks 8-9) and the identity hash (check 11).
+     */
+    private fun SQLiteDatabase.answersBeforeCheck12(): List<Any?> {
+        execSQL("PRAGMA cell_size_check = ON")
+        execSQL("PRAGMA trusted_schema = OFF")
+        return listOf(
+            longOf("SELECT count(*) FROM sqlite_master WHERE name <> 'android_metadata'"),
+            longOf("PRAGMA application_id"),
+            longOf("PRAGMA user_version"),
+            stringsOf("SELECT identity_hash FROM room_master_table WHERE id = 42 LIMIT 1"),
+        )
     }
 
     private companion object {

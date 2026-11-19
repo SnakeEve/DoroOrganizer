@@ -38,7 +38,7 @@ class CorruptionTest : GateTest() {
     }
 
     @Test
-    fun runtimeCorruption_behindTheLock_locksCorrupt() = runBlocking {
+    fun runtimeCorruption_behindTheLock_locksCorrupt() = runBlocking<Unit> {
         scene.plant(KeyMode.PLAIN, lock = true)
         scene.gateway.succeed()
         scene.coldStart()

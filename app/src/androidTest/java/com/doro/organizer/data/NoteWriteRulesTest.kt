@@ -12,6 +12,7 @@ import com.doro.organizer.model.EpochDays
 import com.doro.organizer.model.MAX_CONTENT_CHARS
 import com.doro.organizer.model.MAX_NAME_CHARS
 import com.doro.organizer.model.NewEntity
+import com.doro.organizer.model.TextWhitespace
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.FakeAppTime
 import com.doro.organizer.testing.TEST_DAY
@@ -24,6 +25,7 @@ import com.doro.organizer.testing.longOf
 import com.doro.organizer.testing.longsOf
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.ok
+import com.doro.organizer.testing.runtimeWhitespaceDifferences
 import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.testing.saved
 import com.doro.organizer.testing.stringsOf
@@ -300,6 +302,30 @@ class NoteWriteRulesTest {
 
         assertEquals(listOf("Anna"), sql.stringsOf("SELECT name FROM persons"))
         assertEquals(listOf("Q4"), sql.stringsOf("SELECT name FROM projects"))
+    }
+
+    /**
+     * New names are trimmed and blank by the app's rule ([TextWhitespace], DEC-32, INV-9) on every runtime, also at the
+     * code points where this runtime's `Char.isWhitespace()` disagrees with it: on ART U+180E (always included), which
+     * a plain `trim()` would strip, turning a name of U+180E alone into `BlankName`.
+     */
+    @Test
+    fun save_trimsNewNamesByTheAppsRule_whereTheRuntimeDiffers() = runTest(timeout = 10.seconds) {
+        runtimeWhitespaceDifferences().map(Int::toChar).forEach { c ->
+            val label = "U+%04X".format(c.code)
+
+            repository.save(draft(newPersons = listOf(NewEntity("p", " ${c}y$c\t")))).saved()
+            val alone = repository.save(draft(newPersons = listOf(NewEntity("p", "$c"))))
+
+            val newest = sql.stringsOf("SELECT name FROM persons ORDER BY id DESC")
+            if (TextWhitespace.isWhitespace(c)) {
+                assertEquals(label, AppResult.Err(AppError.InvalidInput(InputRule.BlankName)), alone)
+                assertEquals(label, "y", newest.first())
+            } else {
+                alone.saved()
+                assertEquals(label, listOf("$c", "${c}y$c"), newest.take(2))
+            }
+        }
     }
 
     @Test

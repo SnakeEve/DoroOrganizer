@@ -21,7 +21,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class SlotOpenRejectTest : GateTest() {
     @Test
-    fun keyRejectedThroughTheSlot_asksThePassword_deletesTheAlias_andCountsNothing() = runBlocking {
+    fun keyRejectedThroughTheSlot_asksThePassword_deletesTheAlias_andCountsNothing() = runBlocking<Unit> {
         scene.plant(KeyMode.PASSWORD, PASSWORD, lock = true, slot = true)
         scene.wrapVault = { real ->
             ScriptedVault(real).apply { nextBiometricUnlock = UnlockResult.Key(sqlcipherRawKey(ByteArray(32) { 7 }, ::ByteArray)) }

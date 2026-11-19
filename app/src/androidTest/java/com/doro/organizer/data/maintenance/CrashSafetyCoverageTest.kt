@@ -1,6 +1,7 @@
 package com.doro.organizer.data.maintenance
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.doro.organizer.data.db.AppDatabase
 import com.doro.organizer.debug.CrashOp
 import com.doro.organizer.testing.CrashMatrix
 import com.doro.organizer.testing.Plant
@@ -55,6 +56,13 @@ class CrashSafetyCoverageTest {
         assertTrue(CrashMatrix.flows.any { it.op == CrashOp.CreateBioSlot && it.plant == Plant.PasswordWithDeadSlot })
         for (op in listOf(CrashOp.BackupToDocument, CrashOp.BackupForShare, CrashOp.Restore)) {
             assertTrue("$op encrypted", CrashMatrix.flows.any { it.op == op && it.encryptedBackup })
+        }
+        // MIGRATE_INPUT needs a restore input older than the schema: none exists at the first version; from the next
+        // one on, every restore flow must plant one (an L-10 fixture) and expect the step (L-15: every operation, step).
+        if (AppDatabase.VERSION != CrashMatrix.FIRST_SCHEMA_VERSION) {
+            CrashMatrix.killedAtAStep.filter { it.op == CrashOp.Restore }.forEach { flow ->
+                assertTrue("MIGRATE_INPUT: $flow", CrashMatrix.cases.any { it.flow == flow && it.step == PipelineStep.MIGRATE_INPUT })
+            }
         }
     }
 }

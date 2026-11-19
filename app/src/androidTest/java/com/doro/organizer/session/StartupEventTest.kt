@@ -33,14 +33,14 @@ class StartupEventTest : GateTest() {
     }
 
     @Test
-    fun proceed_loadsTheCommittedMode() = runBlocking {
+    fun proceed_loadsTheCommittedMode() = runBlocking<Unit> {
         scene.plant(KeyMode.PASSWORD, "correct horse")
         scene.coldStart()
         scene.awaitGate { it is GateState.NeedsPassword } // T2: only a PASSWORD load gives the password screen
     }
 
     @Test
-    fun keyUnavailable_isStartupKeyFailed() = runBlocking {
+    fun keyUnavailable_isStartupKeyFailed() = runBlocking<Unit> {
         scene.plant(KeyMode.DEVICE)
         vaults.stateFile.writeText("not json")
         scene.coldStart()

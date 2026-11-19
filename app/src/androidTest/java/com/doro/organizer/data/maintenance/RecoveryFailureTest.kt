@@ -366,12 +366,16 @@ class RecoveryFailureTest {
         }
     }
 
-    /** Seeded data in [mode] and a plain backup of it at the current schema version; Room stays open. */
+    /**
+     * Seeded data in [mode] and a plain backup of it at the current schema version; Room stays open. The backup is
+     * made while the database is still `PLAIN`: from `DEVICE` or `PASSWORD` every backup needs a password (DEC-83).
+     */
     private suspend fun seededBackup(mode: KeyMode = KeyMode.PLAIN): TestDocument {
         setup.start()
-        if (mode != KeyMode.PLAIN) setup.changeKey(mode)
         setup.holder.openDatabase().seed(SeedGenerator(seed = 51, notes = 20).generate())
-        return setup.backupTo(context, "failure.db")
+        val backup = setup.backupTo(context, "failure.db")
+        if (mode != KeyMode.PLAIN) setup.changeKey(mode)
+        return backup
     }
 
     /** A change that a restore must undo. */

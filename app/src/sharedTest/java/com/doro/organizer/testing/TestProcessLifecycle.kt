@@ -10,8 +10,6 @@ class TestProcessLifecycle : LifecycleOwner {
 
     override val lifecycle: Lifecycle get() = registry
 
-    val observerCount: Int get() = registry.observerCount
-
     /** Dispatches every event between the current state and [state] to the observers. */
     fun moveTo(state: Lifecycle.State) {
         registry.currentState = state

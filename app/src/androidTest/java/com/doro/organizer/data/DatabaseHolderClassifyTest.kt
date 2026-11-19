@@ -15,18 +15,26 @@ import android.database.sqlite.SQLiteReadOnlyDatabaseException
 import android.database.sqlite.SQLiteTableLockedException
 import android.system.ErrnoException
 import android.system.OsConstants
-import androidx.room.withTransaction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.core.result.AppError
 import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.data.db.AppDatabase
+import com.doro.organizer.model.MAX_CONTENT_CHARS
+import com.doro.organizer.model.NewEntity
+import com.doro.organizer.testing.ApplicationScopeRule
+import com.doro.organizer.testing.FakeAppTime
 import com.doro.organizer.testing.HolderEvents
 import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestDatabases.Companion.GENERATION
 import com.doro.organizer.testing.TestKey
 import com.doro.organizer.testing.TestRows
+import com.doro.organizer.testing.canonicalDump
+import com.doro.organizer.testing.draft
 import com.doro.organizer.testing.longOf
+import com.doro.organizer.testing.noteRepository
+import com.doro.organizer.testing.ok
 import com.doro.organizer.testing.openDatabase
+import com.doro.organizer.testing.saved
 import java.io.File
 import java.io.IOException
 import kotlin.random.Random
@@ -70,6 +78,9 @@ import org.junit.runner.RunWith
 class DatabaseHolderClassifyTest {
     @get:Rule
     val databases = TestDatabases()
+
+    @get:Rule
+    val applicationScope = ApplicationScopeRule()
 
     private val deviceKey = TestKey.Raw(ByteArray(32) { (it * 7).toByte() })
 
@@ -236,15 +247,21 @@ class DatabaseHolderClassifyTest {
 
     // Context Runtime, withDb.
 
+    /**
+     * A real `SQLITE_FULL` inside the transaction every repository opens ([transaction]). SQLite may roll the whole
+     * transaction back by itself on it; the full disk must still reach the classification, not the failed `ROLLBACK`.
+     */
     @Test
     fun classifyRuntime_storageFull_isStorageFull_andRollsBack() = runBlocking(Dispatchers.IO) {
         val holder = databases.holder()
         val db = holder.openDatabase()
+        var pageLimit = 0L
 
         val result = holder.withDb {
-            it.withTransaction {
+            it.transaction {
                 val sql = it.openHelper.writableDatabase
                 TestRows(sql).person("Ann", 1)
+                pageLimit = sql.longOf("PRAGMA max_page_count")
                 sql.query("PRAGMA max_page_count = ${sql.longOf("PRAGMA page_count")}").use { c -> c.moveToFirst() }
                 TestRows(sql).note("x".repeat(200_000), createdAt = 1)
             }
@@ -252,7 +269,48 @@ class DatabaseHolderClassifyTest {
 
         assertEquals(AppResult.Err(AppError.StorageFull), result)
         assertEquals(0L, db.openHelper.writableDatabase.longOf("SELECT count(*) FROM persons"))
+        // The transaction ended: the next one on the same writer connection begins and commits.
+        val next = holder.withDb {
+            it.transaction {
+                val sql = it.openHelper.writableDatabase
+                sql.query("PRAGMA max_page_count = $pageLimit").use { c -> c.moveToFirst() }
+                TestRows(sql).person("Bea", 2)
+            }
+        }
+        assertTrue("$next", next is AppResult.Ok)
+        assertEquals(1L, db.openHelper.writableDatabase.longOf("SELECT count(*) FROM persons"))
     }
+
+    /**
+     * The same full disk in a real repository write, through `writeTransaction` and the repository's own frame: a
+     * write that fills the disk is `Err(StorageFull)` and leaves nothing behind, not a crash. The page limit sits on
+     * the writer connection, which only a transaction reaches, and outlives it; every write transaction runs there.
+     */
+    @Test
+    fun classifyRuntime_storageFull_inARepositoryWrite_isStorageFull_andWritesNothing() = runBlocking(Dispatchers.IO) {
+        val holder = databases.holder()
+        val db = holder.openDatabase()
+        val repository = noteRepository(holder, FakeAppTime(), applicationScope)
+        val full = draft(content = "x".repeat(MAX_CONTENT_CHARS), newPersons = listOf(NewEntity("p", "Ann")))
+        val before = canonicalDump(db.openHelper.writableDatabase)
+        val pageLimit = holder.setWriterPageLimit(null)
+
+        assertEquals(AppResult.Err(AppError.StorageFull), repository.save(full))
+        assertEquals(before, canonicalDump(db.openHelper.writableDatabase))
+        holder.setWriterPageLimit(pageLimit)
+        assertTrue(repository.save(full).saved().wrote)
+        assertEquals(1L, db.openHelper.writableDatabase.longOf("SELECT count(*) FROM notes"))
+    }
+
+    /** Sets the writer connection's `max_page_count` to [limit], or to its current page count; returns the old one. */
+    private suspend fun DatabaseHolder.setWriterPageLimit(limit: Long?): Long = withDb {
+        it.transaction {
+            val sql = it.openHelper.writableDatabase
+            val old = sql.longOf("PRAGMA max_page_count")
+            sql.query("PRAGMA max_page_count = ${limit ?: sql.longOf("PRAGMA page_count")}").use { c -> c.moveToFirst() }
+            old
+        }
+    }.ok()
 
     @Test
     fun classifyRuntime_transientClasses_areDatabaseUnavailable() = runBlocking {

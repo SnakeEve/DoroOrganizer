@@ -15,11 +15,11 @@ object SearchText {
     fun fold(text: String): String = text.lowercase()
 
     /**
-     * The bind value for `:searchPattern`: the trimmed, folded [input], cut to [MAX_TERM_CHARS] without splitting a
+     * The bind value for `:searchPattern`: the folded [input] trimmed by [TextWhitespace], cut to [MAX_TERM_CHARS] without splitting a
      * surrogate pair, with `\`, `%` and `_` escaped for `LIKE … ESCAPE '\'`. Null for blank input: no search filter.
      */
     fun toLikeTerm(input: String): String? {
-        val folded = fold(input.trim())
+        val folded = fold(TextWhitespace.trim(input))
         var end = minOf(folded.length, MAX_TERM_CHARS)
         if (end < folded.length && folded[end - 1].isHighSurrogate()) end--
         if (end == 0) return null

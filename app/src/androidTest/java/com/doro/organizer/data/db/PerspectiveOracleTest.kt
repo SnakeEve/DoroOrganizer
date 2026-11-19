@@ -5,6 +5,7 @@ import com.doro.organizer.model.DateFilter
 import com.doro.organizer.model.NoteFilter
 import com.doro.organizer.model.NoteQuery
 import com.doro.organizer.model.Perspective
+import com.doro.organizer.model.TextWhitespace
 import com.doro.organizer.model.toQuery
 import com.doro.organizer.testing.NoteOracle
 import com.doro.organizer.testing.SeedGenerator
@@ -122,7 +123,7 @@ class PerspectiveOracleTest {
 
     /** 2 to 8 characters of a random note's content, never splitting a surrogate pair. */
     private fun contentSlice(random: Random): String {
-        val content = model.notes.filter { it.content.isNotBlank() }.pick(random).content
+        val content = model.notes.filter { !TextWhitespace.isBlank(it.content) }.pick(random).content
         var start = random.nextInt(content.length - 1)
         if (Character.isLowSurrogate(content[start])) start--
         var end = minOf(content.length, start + 2 + random.nextInt(7))

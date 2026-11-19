@@ -72,7 +72,8 @@ class RestoreTest {
         writable.execSQL("DELETE FROM notes WHERE id = $highest") // the sequence stays above every remaining id
         val atBackup = setup.dump()
         val backup = setup.backupTo(context, "plain.db")
-        writable.execSQL("DELETE FROM notes") // the data the restore replaces
+        // The backup closed Room and reopened it (exclusive mode): the instance read above is retired.
+        setup.holder.openDatabase().openHelper.writableDatabase.execSQL("DELETE FROM notes") // the data the restore replaces
         setup.settings.setRemembered(personId = 1, projectId = 2)
         val epoch = setup.settings.snapshot().dataEpoch
         val before = setup.state()

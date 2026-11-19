@@ -1,6 +1,5 @@
 package com.doro.organizer.data
 
-import androidx.room.withTransaction
 import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.core.time.AppTime
@@ -64,7 +63,7 @@ class DefaultNoteRepository(
 
     override suspend fun loadNote(id: Long): AppResult<NoteDetail?> = databaseHolder.withDb { db ->
         val notes = db.noteDao()
-        db.withTransaction {
+        db.transaction {
             notes.noteDetail(id)?.let { row ->
                 val order = linkOrder()
                 NoteDetail(

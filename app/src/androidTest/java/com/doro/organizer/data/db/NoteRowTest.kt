@@ -3,13 +3,14 @@ package com.doro.organizer.data.db
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.data.toNoteRows
 import com.doro.organizer.model.EntityRef
+import com.doro.organizer.model.TextWhitespace
 import com.doro.organizer.testing.FakeAppTime
 import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestRows
 import com.doro.organizer.testing.WHITESPACE_CODE_POINTS
 import com.doro.organizer.testing.assertDbInvariants
-import com.doro.organizer.testing.kotlinWhitespaceCodePoints
 import com.doro.organizer.testing.rows
+import com.doro.organizer.testing.runtimeWhitespaceDifferences
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -23,7 +24,8 @@ import org.junit.runner.RunWith
 
 /**
  * The row columns of the list query on SQLCipher (data-layer.md § Rows): the preview of DEC-24 and DEC-25
- * (testing.md I-09, with [WHITESPACE_CHARS] checked against ART's `Char.isWhitespace()`) and the links' JSON, which
+ * (testing.md I-09: [WHITESPACE_CHARS] cuts what [TextWhitespace] calls whitespace, checked on ART where
+ * `Char.isWhitespace()` differs) and the links' JSON, which
  * `json_group_array` writes and [toNoteRows] reads back (I-47). The JSON round trip also proves that the shipped
  * SQLCipher build has the JSON functions (data-layer.md § Rows).
  */
@@ -64,11 +66,6 @@ class NoteRowTest {
     }
 
     @Test
-    fun whitespaceChars_listExactlyKotlinWhitespaceOnThisRuntime() {
-        assertEquals(kotlinWhitespaceCodePoints(), WHITESPACE_CODE_POINTS)
-    }
-
-    @Test
     fun preview_isBlankExactlyWhenContentIsBlank() = runTest(timeout = 10.seconds) {
         val whitespace = WHITESPACE_CODE_POINTS.joinToString("") { it.toChar().toString() }
         val empty = rows.note("", createdAt = now)
@@ -80,6 +77,24 @@ class NoteRowTest {
         assertEquals("x", preview(text))
     }
 
+    /**
+     * The SQL preview cuts exactly the app's whitespace, also at the code points where this runtime's
+     * `Char.isWhitespace()` disagrees with it (on ART U+180E, always included): a preview starts at the first character
+     * that [TextWhitespace] calls text and is blank exactly when its content is (DEC-24, DEC-25).
+     */
+    @Test
+    fun preview_followsTheAppsRule_whereTheRuntimeDiffers() = runTest(timeout = 10.seconds) {
+        runtimeWhitespaceDifferences().map(Int::toChar).forEach { c ->
+            val label = "U+%04X".format(c.code)
+            listOf("$c", " $c ", "$c".repeat(300) + "Title").forEach { content ->
+                val preview = preview(rows.note(content, createdAt = now))
+
+                assertEquals(label, !TextWhitespace.isWhitespace(c), preview.startsWith("$c"))
+                assertEquals(label, TextWhitespace.isBlank(content), TextWhitespace.isBlank(preview))
+            }
+        }
+    }
+
     @Test
     fun preview_startsAtTheFirstNonWhitespaceCharacter() = runTest(timeout = 10.seconds) {
         val id = rows.note("\n".repeat(400) + "Title\nsecond line " + "b".repeat(500), createdAt = now)
@@ -88,7 +103,7 @@ class NoteRowTest {
 
         assertTrue(preview, preview.startsWith("Title\nsecond line "))
         assertEquals(300, preview.codePointCount(0, preview.length))
-        assertEquals("Title", preview.lines().first { it.isNotBlank() }) // the row title of DEC-39
+        assertEquals("Title", preview.lines().first { !TextWhitespace.isBlank(it) }) // the row title of DEC-39
     }
 
     @Test

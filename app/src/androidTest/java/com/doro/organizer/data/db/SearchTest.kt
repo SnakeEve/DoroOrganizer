@@ -3,6 +3,7 @@ package com.doro.organizer.data.db
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.data.DatabaseHolder
 import com.doro.organizer.model.SearchText
+import com.doro.organizer.model.TextWhitespace
 import com.doro.organizer.testing.ALL_NOTES
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.FakeAppTime
@@ -13,6 +14,7 @@ import com.doro.organizer.testing.draft
 import com.doro.organizer.testing.listedIds
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.openDatabase
+import com.doro.organizer.testing.runtimeWhitespaceDifferences
 import com.doro.organizer.testing.saved
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.runTest
@@ -175,6 +177,29 @@ class SearchTest {
 
         assertEquals(SearchText.MAX_TERM_CHARS - 1, SearchText.toLikeTerm(query)!!.length)
         assertEquals(listOf(match), found(query))
+    }
+
+    /**
+     * The query is trimmed by the app's rule (DEC-29) on every runtime, also at the code points where this runtime's
+     * `Char.isWhitespace()` disagrees with it: on ART a query of U+180E (always included) is a term, which a plain
+     * `trim()` would drop, turning the search into no filter at all.
+     */
+    @Test
+    fun trim_followsTheAppsRule_whereTheRuntimeDiffers() = runTest(timeout = 10.seconds) {
+        runtimeWhitespaceDifferences().map(Int::toChar).forEach { c ->
+            val label = "U+%04X".format(c.code)
+            clear()
+            val containing = note("a${c}b")
+            val other = note("ab")
+
+            if (TextWhitespace.isWhitespace(c)) {
+                assertEquals(label, null, SearchText.toLikeTerm(" $c "))
+                assertEquals(label, listOf(other, containing), found(" $c "))
+            } else {
+                assertEquals(label, "$c", SearchText.toLikeTerm(" $c "))
+                assertEquals(label, listOf(containing), found(" $c "))
+            }
+        }
     }
 
     private fun note(content: String): Long = rows.note(content, createdAt = now)

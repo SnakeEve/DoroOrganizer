@@ -24,7 +24,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ExternalActivitiesTest : GateTest() {
     @Test
-    fun aLaunchWithoutHandler_isAFailure_andLeavesNoExemption() = runBlocking {
+    fun aLaunchWithoutHandler_isAFailure_andLeavesNoExemption() = runBlocking<Unit> {
         scene.plant(KeyMode.PLAIN, lock = true)
         scene.gateway.succeed()
         scene.coldStart()

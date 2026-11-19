@@ -1,6 +1,7 @@
 package com.doro.organizer.testing
 
 import com.doro.organizer.model.EpochDays
+import com.doro.organizer.model.TextWhitespace
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -31,7 +32,7 @@ class SeedGeneratorTest {
         assertShare("checked", 0.20, notes.count { it.checked })
         assertShare("dated", 0.50, notes.count { it.date != null })
         assertShare("empty", 0.02, notes.count { it.content.isEmpty() })
-        assertShare("whitespace-only", 0.01, notes.count { it.content.isNotEmpty() && it.content.isBlank() })
+        assertShare("whitespace-only", 0.01, notes.count { it.content.isNotEmpty() && TextWhitespace.isBlank(it.content) })
         assertEquals(5, notes.count { it.content.length == SeedGenerator.MAX_CONTENT_CHARS })
     }
 
@@ -47,7 +48,7 @@ class SeedGeneratorTest {
             assertTrue("$note projects", note.projectIds.all { it in 1L..100L } && note.projectIds.size <= 2)
         }
         (model.persons + model.projects).forEach { entity ->
-            assertTrue("$entity name", entity.name.isNotEmpty() && entity.name == entity.name.trim())
+            assertTrue("$entity name", entity.name.isNotEmpty() && entity.name == TextWhitespace.trim(entity.name))
         }
         assertTrue("duplicate names", model.persons.map { it.name }.toSet().size < model.persons.size)
     }

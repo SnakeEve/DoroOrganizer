@@ -103,6 +103,9 @@ class GateScene(
      */
     suspend fun awaitOfferSetups(count: Int) = withTimeout(TIMEOUT_MS) { lock.offerSetups.first { it >= count } }
 
+    /** The slot offers (E5) finished so far. */
+    val offerSetups: Int get() = lock.offerSetups.value
+
     /** Waits until [count] prompts in all were shown. */
     suspend fun awaitPrompts(count: Int) = withTimeout(TIMEOUT_MS) { gateway.shownCount.first { it >= count } }
 

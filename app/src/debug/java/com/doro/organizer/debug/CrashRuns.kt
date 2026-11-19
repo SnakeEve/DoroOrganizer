@@ -28,7 +28,9 @@ import com.doro.organizer.security.UnlockResult
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** What the crash test runs; [hookOp] is the `op` the pipeline passes to its fault hook (null: startup, slot commits). */
 enum class CrashOp(val hookOp: MaintenanceOp?) {
@@ -141,8 +143,29 @@ const val CRASH_RESTORE_INPUT = "crashtest-in/input.db"
 /** Created when the service starts its one run, relative to `noBackupFilesDir`; the test deletes it. */
 const val CRASH_RUN_MARKER = "crashtest-in/ran"
 
+/** Holds the failure that ended a run before its step, relative to `noBackupFilesDir`; the test deletes it. */
+const val CRASH_FAILURE_MARKER = "crashtest-in/failed"
+
 /** The backup document target, relative to `cacheDir`, opened with "wt" like any document Uri. */
 const val CRASH_BACKUP_TARGET = "crashtest-out/backup.db"
+
+/** How long [awaitBackupInputs] waits; reading the settings file and the key-state takes milliseconds. */
+const val BACKUP_INPUTS_TIMEOUT_MS = 20_000L
+
+/**
+ * Waits until both inputs of `backupRequiresPassword()` are known, the key mode and the settings, as they are when
+ * the Settings screen offers a backup (ui.md § 9). While either is unknown the answer is true (DEC-94), so a plaintext
+ * backup without a password would be a programming error (`Err(Unexpected)`). `reconcileAtStartup` sets the key mode
+ * from a valid key-state; nothing else subscribes to the settings in a container without screens. Fails with a clear
+ * message when either never loads.
+ */
+suspend fun awaitBackupInputs(container: AppContainer) {
+    val loaded = withTimeoutOrNull(BACKUP_INPUTS_TIMEOUT_MS) {
+        container.dbMaintenance.keyMode.first { it != null }
+        container.settingsStore.settings.first { it != null }
+    }
+    checkNotNull(loaded) { "the key mode or the settings never loaded" }
+}
 
 /**
  * Runs [request] on [container] as the screens would: startup reconciliation first, the live database opened for an
@@ -165,6 +188,7 @@ suspend fun runCrashRequest(context: Context, container: AppContainer, request: 
         val key = vault.unlock(request.password?.copyOf()) as UnlockResult.Key
         container.databaseHolder.open(state.generation, key.rawKey)
     }
+    if (request.op == CrashOp.BackupToDocument || request.op == CrashOp.BackupForShare) awaitBackupInputs(container)
     when (request.op) {
         CrashOp.BackupToDocument -> {
             val target = File(context.cacheDir, CRASH_BACKUP_TARGET).apply { parentFile?.mkdirs() }

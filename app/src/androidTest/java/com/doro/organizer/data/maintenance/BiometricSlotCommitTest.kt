@@ -227,11 +227,12 @@ class BiometricSlotCommitTest {
         val cipher = setup.armCipher()
         setup.bio.failNext(BioOp.DoFinal, ProviderException("injected"))
         val state = vaults.stateFile.readBytes()
+        val committed = commits // the setup's own: the fresh database and the key change
 
         assertEquals(AppResult.Err(AppError.AuthFailed), setup.maintenance.createBiometricSlot(cipher))
 
         assertArrayEquals(state, vaults.stateFile.readBytes())
-        assertEquals(0, commits)
+        assertEquals(committed, commits)
         assertFalse(vaults.bioKeyExists())
     }
 

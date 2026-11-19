@@ -1,6 +1,5 @@
 package com.doro.organizer.data
 
-import androidx.room.withTransaction
 import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.core.time.AppTime
@@ -46,7 +45,7 @@ class DefaultEntityRepository(
     private suspend fun deleteImpact(kind: EntityKind, id: Long): AppResult<DeleteImpact> =
         databaseHolder.withDb { db ->
             val entities = db.entities(kind)
-            db.withTransaction { DeleteImpact(n = entities.impactN(id), m = entities.impactM(id)) }
+            db.transaction { DeleteImpact(n = entities.impactN(id), m = entities.impactM(id)) }
         }
 
     // data-layer.md § Deletes, steps 1 to 4. The junction rows go first and explicitly: whether Room's invalidation
