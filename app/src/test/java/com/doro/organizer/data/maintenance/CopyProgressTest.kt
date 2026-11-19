@@ -46,6 +46,24 @@ class CopyProgressTest {
     }
 
     @Test
+    fun everyBlock_reportsTheBytesCopiedSoFar_andAThrowStopsTheCopy() {
+        val source = ByteArray(10_000)
+        val out = ByteArrayOutputStream()
+        val seen = mutableListOf<Long>()
+
+        val failure = runCatching {
+            copyWithProgress(ByteArrayInputStream(source), out, 0, { error("unknown length: no progress") }, bufferSize = 4096) {
+                seen += it
+                if (it > 5000) throw IllegalStateException("bound")
+            }
+        }.exceptionOrNull()
+
+        assertEquals("bound", failure?.message)
+        assertEquals(listOf(4096L, 8192L), seen)
+        assertEquals(8192, out.size()) // the block that crossed the bound was written, the rest never read
+    }
+
+    @Test
     fun progress_publishesRunningWithTheFraction_withoutTheFaultHook() {
         val published = mutableListOf<MaintenanceStatus>()
         val hookCalls = mutableListOf<PipelineStep>()

@@ -170,13 +170,13 @@ internal class KeyChangePipeline(
         }
         val reopened = when (exported) {
             ExclusiveExport.NotRun, ExclusiveExport.Corrupt -> return AppResult.Err(AppError.DatabaseUnavailable)
-            ExclusiveExport.Unknown -> return unknownOutcome(run)
+            ExclusiveExport.Unknown -> return outcomeUnknown(run)
             is ExclusiveExport.Failed -> return AppResult.Err(pipelineError(exported.cause))
             is ExclusiveExport.Done -> exported.reopened
         }
         val result = checkNotNull(commit) { "commit result" }
         when (result.outcome) {
-            CommitOutcome.Unknown -> return unknownOutcome(run)
+            CommitOutcome.Unknown -> return outcomeUnknown(run)
             CommitOutcome.NotCommitted -> return AppResult.Err(notCommittedError(result.cause))
             CommitOutcome.Committed -> if (reopened) run.outcome = MaintenanceOutcome.Reopened
         }
@@ -235,7 +235,7 @@ internal class KeyChangePipeline(
         val result = commitGeneration(files, keyVault, staged, newGeneration, prepared.slot, null, run::step)
         return when (result.outcome) {
             CommitOutcome.NotCommitted -> AppResult.Err(notCommittedError(result.cause))
-            CommitOutcome.Unknown -> unknownOutcome(run)
+            CommitOutcome.Unknown -> outcomeUnknown(run)
             CommitOutcome.Committed -> {
                 deps.keyMode.value = KeyMode.PASSWORD
                 run.outcome = MaintenanceOutcome.OpenWithNewKey
@@ -282,12 +282,6 @@ internal class KeyChangePipeline(
             files.clearDir(files.stagingDir)
             share.clear()
         }
-    }
-
-    /** `CommitOutcome.Unknown` or a failure after `commitStarted`: nothing deleted, staging left for startup. */
-    private fun unknownOutcome(run: OperationRun): AppResult<MaintenanceResult> {
-        run.outcome = MaintenanceOutcome.Restart
-        return AppResult.Err(AppError.OutcomeUnknown)
     }
 
     /** security.md § 4 step 2 and architecture.md § Error model: the `UnlockResult` of the current password. */

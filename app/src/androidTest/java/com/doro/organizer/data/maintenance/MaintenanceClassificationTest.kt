@@ -18,11 +18,15 @@ import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.KekOp
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.MaintenanceSetup
+import com.doro.organizer.testing.RestoreAnswer
 import com.doro.organizer.testing.ScriptedVault
 import com.doro.organizer.testing.SeedGenerator
 import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestKey
+import com.doro.organizer.testing.backupTo
+import com.doro.organizer.testing.enterCorrupt
 import com.doro.organizer.testing.openDatabase
+import com.doro.organizer.testing.restoreAnswering
 import com.doro.organizer.testing.seed
 import java.io.File
 import java.io.FileNotFoundException
@@ -45,7 +49,8 @@ import org.junit.runner.RunWith
  * testing.md L-13 for the contexts DbMaintenance and Documents of db-lifecycle.md § Classification table: the rows
  * that no other test asserts, each through the production pipeline where a fault can be planted, and on the
  * classifying function itself (`pipelineError`, `notCommittedError`) where no file can trigger it reliably. The
- * restore, Start fresh and Erase rows come with those operations.
+ * restore-candidate rows are `RestoreValidationTest`'s; the slot-key rows `RestoreFromCorruptFingerprintTest`'s; the
+ * KEK-fallback rows `RestoreKekFallbackTest`'s; the Erase origin rows `ForgotPasswordTest`'s.
  */
 @RunWith(AndroidJUnit4::class)
 class MaintenanceClassificationTest {
@@ -71,6 +76,7 @@ class MaintenanceClassificationTest {
         RecordingDocumentsProvider.directory(context).deleteRecursively()
         RecordingDocumentsProvider.failOpen = null
         RecordingDocumentsProvider.openReturnsNull = false
+        RecordingDocumentsProvider.failRead = null
     }
 
     @After
@@ -184,6 +190,44 @@ class MaintenanceClassificationTest {
     }
 
     @Test
+    fun aRestoreDocumentThatCannotBeRead_isFileAccessOrStorageFull_andNothingStaysStaged() = runClassificationTest {
+        setup.start()
+        val backup = setup.backupTo(context, "unreadable.db")
+        val state = vaults.stateFile.readBytes()
+        for (fault in READ_FAULTS) {
+            RecordingDocumentsProvider.failRead = fault.failure
+
+            val result = setup.maintenance.restore(backup.uri, MaintenanceOrigin.Ready)
+
+            assertEquals(fault.name, AppResult.Err(fault.expected), result)
+            assertEquals(fault.name, emptyList<String>(), setup.files.restoreDir.list()!!.toList())
+        }
+        assertArrayEquals(state, vaults.stateFile.readBytes())
+        assertEquals(emptyList<Boolean>(), setup.listener.startedFor(MaintenanceOp.Restore))
+    }
+
+    @Test
+    fun aRestoreFromCorruptWhoseSlotUnlockIsKeyFailed_isKeyUnavailable_beforeMaintenanceStarted() = runClassificationTest {
+        passwordModeWithSlot()
+        val backup = setup.backupTo(context, "slot-key-failed.db", OLD)
+        setup.enterCorrupt()
+        val state = vaults.stateFile.readBytes()
+        checkNotNull(vault).nextBiometricUnlock = UnlockResult.KeyFailed
+
+        val result = setup.maintenance.restoreAnswering(
+            backup.uri,
+            MaintenanceOrigin.Corrupt,
+            RestoreAnswer.backupPassword(OLD),
+            RestoreAnswer.fingerprint { setup.unlockCipher() },
+        )
+
+        assertEquals(AppResult.Err(AppError.KeyUnavailable), result)
+        assertArrayEquals(state, vaults.stateFile.readBytes())
+        assertEquals(emptyList<Boolean>(), setup.listener.startedFor(MaintenanceOp.Restore))
+        assertTrue(vaults.bioKeyExists())
+    }
+
+    @Test
     fun aFailedTargetVerification_isUnexpected() = runClassificationTest {
         val key = TestKey.Raw(ByteArray(32) { 7 }).bytes()
         val plaintext = databases.file("plaintext-target.db").also { createEmptyDatabase(context, it) }
@@ -239,6 +283,15 @@ class MaintenanceClassificationTest {
         const val NEW = "startup password 2"
 
         fun noSpace(errno: Int) = FileNotFoundException("injected").apply { initCause(ErrnoException("open", errno)) }
+
+        /** A provider refusal at open for reading; `openFileDescriptor`'s `FileNotFoundException` retries as a stream. */
+        val READ_FAULTS = listOf(
+            OpenFault("FileNotFoundException", FileNotFoundException("injected"), AppError.FileAccess),
+            OpenFault("SecurityException", SecurityException("injected"), AppError.FileAccess),
+            OpenFault("IllegalArgumentException", IllegalArgumentException("injected"), AppError.FileAccess),
+            OpenFault("UnsupportedOperationException", UnsupportedOperationException("injected"), AppError.FileAccess),
+            OpenFault("ENOSPC", noSpace(OsConstants.ENOSPC), AppError.StorageFull),
+        )
 
         val OPEN_FAULTS = listOf(
             OpenFault("no descriptor", null, AppError.FileAccess),

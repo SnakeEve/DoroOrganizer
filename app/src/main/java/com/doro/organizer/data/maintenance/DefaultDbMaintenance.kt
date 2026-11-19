@@ -55,7 +55,12 @@ class DefaultDbMaintenance(
     private val backups = BackupPipeline(deps, documents, share)
     private val keyChanges = KeyChangePipeline(deps, share, ::keepResetKey)
     private val slotCommits = BiometricSlotCommits(deps)
-    private val startup = StartupReconciler(deps, share)
+    private val marker = DataResetMarker(deps)
+    private val startup = StartupReconciler(deps, marker)
+    private val questions = RestoreQuestions()
+    private val restores = RestorePipeline(deps, documents, questions, marker)
+    private val freshStarts = StartFreshPipeline(deps, marker)
+    private val erases = ErasePipeline(deps)
 
     /** Every operation, the startup functions and every key-state write hold it (db-lifecycle.md § Concurrency rules). */
     private val opMutex = Mutex()
@@ -128,6 +133,33 @@ class DefaultDbMaintenance(
             }
         }
 
+    override suspend fun restore(source: Uri, origin: MaintenanceOrigin): AppResult<MaintenanceResult> =
+        operation(MaintenanceOp.Restore, origin) { run ->
+            require(origin != MaintenanceOrigin.NeedsPassword) { "restore origin" }
+            restores.restore(run, source, origin)
+        }
+
+    override fun answerPassword(password: CharArray?) = questions.answer(RestoreQuestions.Answer.Password(password))
+
+    override fun answerBiometric(cipher: SlotCipher?) = questions.answer(RestoreQuestions.Answer.Biometric(cipher))
+
+    override fun answerConfirmation(confirmed: Boolean) =
+        questions.answer(RestoreQuestions.Answer.Confirmation(confirmed))
+
+    override fun cancelRestore() = questions.cancel()
+
+    override suspend fun startFresh(origin: MaintenanceOrigin): AppResult<MaintenanceResult> =
+        operation(MaintenanceOp.StartFresh, origin) { run ->
+            require(origin == MaintenanceOrigin.Corrupt || origin == MaintenanceOrigin.KeyUnavailable) { "start fresh origin" }
+            freshStarts.startFresh(run)
+        }
+
+    override suspend fun erase(origin: MaintenanceOrigin): AppResult<MaintenanceResult> =
+        operation(MaintenanceOp.Erase, origin) { run ->
+            require(origin != MaintenanceOrigin.KeyUnavailable) { "erase origin" }
+            erases.erase(run, origin)
+        }
+
     override suspend fun resetPasswordWithBiometric(
         origin: MaintenanceOrigin,
         cipher: SlotCipher,
@@ -181,7 +213,7 @@ class DefaultDbMaintenance(
             var result: AppResult<MaintenanceResult> = AppResult.Err(AppError.Unexpected)
             try {
                 discardResetKey()
-                result = frameError(origin) ?: body(run)
+                result = frameError(op, origin) ?: body(run)
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -197,7 +229,12 @@ class DefaultDbMaintenance(
                 withContext(NonCancellable) {
                     try {
                         val unknown = run.outcome == MaintenanceOutcome.Restart && run.commitStarted
-                        if (!unknown) deps.bestEffort("cleanup") { files.clearDir(files.stagingDir) } // else: for startup
+                        if (!unknown) {
+                            deps.bestEffort("cleanup") {
+                                files.clearDir(files.stagingDir)
+                                files.clearDir(files.restoreDir)
+                            }
+                        } // else: for startup
                         passwords.forEach { it?.fill('\u0000') }
                         run.zeroSecrets()
                         mutableStatus.value = MaintenanceStatus.Finished(op, result, run.previousContentLost)
@@ -215,19 +252,25 @@ class DefaultDbMaintenance(
     }
 
     /**
-     * Frame steps 3 and 4: the temporary directories are emptied (no other operation can be using them), and the
-     * origin the screen passed is checked against the holder. `Ready` with a holder that is no longer open means the
-     * gate left `Ready` meanwhile; any other mismatch is a programming error.
+     * Frame steps 3 and 4: the temporary directories are emptied (no other operation can be using them; Erase skips
+     * this, so it stays available), and the origin the screen passed is checked against the holder. `Ready` with a
+     * holder that is no longer open means the gate left `Ready` meanwhile; a restore then continues as from `Corrupt`.
+     * An Erase whose holder does not match its origin did not start. Any other mismatch is a programming error.
      */
-    private fun frameError(origin: MaintenanceOrigin): AppResult.Err? {
-        if (!files.clearDir(files.stagingDir) || !files.clearDir(files.restoreDir)) {
+    private fun frameError(op: MaintenanceOp, origin: MaintenanceOrigin): AppResult.Err? {
+        if (op != MaintenanceOp.Erase && (!files.clearDir(files.stagingDir) || !files.clearDir(files.restoreDir))) {
             return AppResult.Err(AppError.DatabaseUnavailable)
         }
-        val open = holder.state.value is HolderState.Open
-        return when (origin) {
-            MaintenanceOrigin.Ready -> if (open) null else AppResult.Err(AppError.DatabaseUnavailable)
+        val state = holder.state.value
+        val open = state is HolderState.Open
+        return when {
+            op == MaintenanceOp.Erase -> {
+                val matches = if (origin == MaintenanceOrigin.Ready) open else state == HolderState.Closed
+                if (matches) null else AppResult.Err(AppError.DatabaseUnavailable)
+            }
+            origin == MaintenanceOrigin.Ready -> if (open || op == MaintenanceOp.Restore) null else AppResult.Err(AppError.DatabaseUnavailable)
             else -> {
-                check(holder.state.value == HolderState.Closed) { "recovery origin with an open database" }
+                check(state == HolderState.Closed) { "recovery origin with an open database" }
                 null
             }
         }

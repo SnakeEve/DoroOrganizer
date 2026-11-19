@@ -17,7 +17,8 @@ import java.io.FileNotFoundException
  * The document provider of the backup tests (testing.md § 5, L-08), debug builds only. It runs in the app process, so
  * a test reads [modes] directly. Files live in `cacheDir/recording-provider/<last path segment>`. Mode `"w"` opens
  * without truncating, as some real providers do, so only `"wt"` replaces a longer old document. It answers the
- * queries a backup makes (`OpenableColumns.SIZE`) and `DocumentsContract.deleteDocument`, which arrives as `call`.
+ * queries a backup and a restore make (`OpenableColumns.SIZE`) and `DocumentsContract.deleteDocument`, which
+ * arrives as `call`.
  * A real `DocumentsProvider` must be exported with `MANAGE_DOCUMENTS`, which a test-only component must not be.
  */
 class RecordingDocumentsProvider : ContentProvider() {
@@ -25,12 +26,16 @@ class RecordingDocumentsProvider : ContentProvider() {
 
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, args: Array<out String>?, sort: String?): Cursor {
         val file = fileOf(uri)
-        return MatrixCursor(arrayOf(OpenableColumns.SIZE)).apply { if (file.exists()) addRow(arrayOf(file.length())) }
+        return MatrixCursor(arrayOf(OpenableColumns.SIZE)).apply {
+            if (file.exists()) addRow(arrayOf(if (sizeUnknown) null else reportedSize ?: file.length()))
+        }
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
         synchronized(modes) { modes += mode }
-        if (mode != "r") {
+        if (mode == "r") {
+            failRead?.let { throw it }
+        } else {
             failOpen?.let { throw it }
             if (openReturnsNull) return null
         }
@@ -78,6 +83,18 @@ class RecordingDocumentsProvider : ContentProvider() {
         /** Thrown by every later open for writing, before any stream exists (context Documents, testing.md L-13). */
         @Volatile
         var failOpen: Exception? = null
+
+        /** Thrown by every later open for reading (a restore's `COPY_INPUT`, context Documents of testing.md L-13). */
+        @Volatile
+        var failRead: Exception? = null
+
+        /** Answered as `OpenableColumns.SIZE` instead of the file's length: a provider that misreports it (L-11). */
+        @Volatile
+        var reportedSize: Long? = null
+
+        /** Answers `OpenableColumns.SIZE` with null: a provider that does not know the size. */
+        @Volatile
+        var sizeUnknown = false
 
         /** Makes every later open for writing return no descriptor, so `openOutputStream` returns null. */
         @Volatile

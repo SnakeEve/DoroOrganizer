@@ -46,6 +46,44 @@ interface DbMaintenance : BiometricSlotWriter {
 
     suspend fun changeKey(target: KeyMode, currentPassword: CharArray?, newPassword: CharArray?): AppResult<MaintenanceResult>
 
+    // Settings (Ready) and the Corrupt and KeyUnavailable screens: the caller passes the screen's own origin.
+
+    /**
+     * Restore from [source] (DEC-84, db-lifecycle.md § Restore), origin `Ready`, `Corrupt` or `KeyUnavailable`. It
+     * asks its questions through [status] (`Needs…`) and waits for the matching answer; nothing changes before the
+     * user confirmed.
+     */
+    suspend fun restore(source: Uri, origin: MaintenanceOrigin): AppResult<MaintenanceResult>
+
+    /**
+     * Answers `NeedsBackupPassword` or `NeedsDatabasePassword`; null cancels the restore. The array is owned by the
+     * restore from the call on and zeroed in every case, also when no such question is pending.
+     */
+    fun answerPassword(password: CharArray?)
+
+    /**
+     * Answers `NeedsBiometricUnlock` with the authorized cipher of the prompt; null: use the password instead (after
+     * `afterKekFailure = true` it ends the restore with `Err(KeyUnavailable)`).
+     */
+    fun answerBiometric(cipher: SlotCipher?)
+
+    /** Answers `NeedsConfirmation`; false cancels the restore. */
+    fun answerConfirmation(confirmed: Boolean)
+
+    /** The Cancel button of the checking phase: ends a restore that has not been confirmed yet with `RestoreCancelled`. */
+    fun cancelRestore()
+
+    /** Start fresh after its confirmation (DEC-85, DEC-86): origin `Corrupt` or `KeyUnavailable` only. */
+    suspend fun startFresh(origin: MaintenanceOrigin): AppResult<MaintenanceResult>
+
+    // Forgot-password screen (DEC-63). Any other origin is a programming error.
+
+    /**
+     * Erase all data (security.md § 5.4, db-lifecycle.md § Erase): origin `NeedsPassword` (Room closed), `Ready` (the
+     * password screen of `Locked(Ready)`, Room open) or `Corrupt` (the password screen of `Locked(Corrupt)`).
+     */
+    suspend fun erase(origin: MaintenanceOrigin): AppResult<MaintenanceResult>
+
     /**
      * The fingerprint password reset (DEC-63) from the Forgot-password screen: origin `NeedsPassword` (Room closed) or
      * `Ready` (the password screen of `Locked(Ready)`, Room open); never `Corrupt`.

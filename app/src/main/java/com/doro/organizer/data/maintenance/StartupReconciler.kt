@@ -1,6 +1,5 @@
 package com.doro.organizer.data.maintenance
 
-import androidx.core.util.AtomicFile
 import com.doro.organizer.core.log.AppLog
 import com.doro.organizer.data.DbFailure
 import com.doro.organizer.data.RawConnections
@@ -9,8 +8,6 @@ import com.doro.organizer.data.nextGeneration
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.security.KeyVaultException
 import java.io.File
-import java.io.FileNotFoundException
-import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
@@ -19,7 +16,10 @@ import kotlin.coroutines.cancellation.CancellationException
  * Reconciliation opens no connection, needs no key, never writes `db-state.json` and deletes generation files only
  * when a valid key-state names an existing live file (DEC-86).
  */
-internal class StartupReconciler(private val deps: MaintenanceDeps, private val share: ShareFiles) {
+internal class StartupReconciler(
+    private val deps: MaintenanceDeps,
+    private val marker: DataResetMarker,
+) {
     private val files get() = deps.files
 
     /** The decision `completeStartup` still has to execute; null once done (or for `Proceed`). */
@@ -52,7 +52,7 @@ internal class StartupReconciler(private val deps: MaintenanceDeps, private val 
         val read = readKeyState()
         val onDisk = files.generationsOnDisk().keys
         val mainFiles = onDisk.filterTo(mutableSetOf(), files::hasMainFile)
-        applyResetMarker(read)
+        marker.applyAtStartup(read)
         val decision = startupDecision(read, mainFiles) { RawConnections.isPlaintext(files.live(it)) }
         val live = (read as? KeyStateRead.Valid)?.state?.generation?.let(files::live)
         val liveUsable = live != null && live.isFile && live.length() > 0
@@ -80,20 +80,6 @@ internal class StartupReconciler(private val deps: MaintenanceDeps, private val 
         deps.keyVault.readState()?.let(KeyStateRead::Valid) ?: KeyStateRead.Missing
     } catch (e: KeyVaultException) {
         KeyStateRead.Invalid
-    }
-
-    /** Step 5 (db-lifecycle.md § Data-reset marker): the reset happens if and only if the new data was committed. */
-    private suspend fun applyResetMarker(read: KeyStateRead) {
-        val marker = AtomicFile(files.resetMarker)
-        val content = try {
-            marker.readFully().toString(Charsets.US_ASCII)
-        } catch (e: FileNotFoundException) {
-            return
-        } catch (e: IOException) {
-            "" // unreadable counts as unparseable: a reset is the safe side
-        }
-        if (markerResets(read, content)) deps.settingsStore.onDataReplaced()
-        marker.delete()
     }
 
     /**

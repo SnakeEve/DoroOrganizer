@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import com.doro.organizer.core.log.AppLog
 import com.doro.organizer.core.result.AppError
+import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.core.time.AppTime
 import com.doro.organizer.data.DatabaseHolder
 import com.doro.organizer.data.DbFailure
@@ -94,6 +95,15 @@ internal fun pipelineError(e: Throwable): AppError = when {
     e.isStorageFull() -> AppError.StorageFull
     classify(e) == DbFailure.Transient -> AppError.DatabaseUnavailable
     else -> AppError.Unexpected
+}
+
+/**
+ * `CommitOutcome.Unknown`, or a failure after `commitStarted`: the key-state on disk may already name the new
+ * generation, so nothing is deleted, the marker stays and startup decides (db-lifecycle.md § Generation commit).
+ */
+internal fun outcomeUnknown(run: OperationRun): AppResult<MaintenanceResult> {
+    run.outcome = MaintenanceOutcome.Restart
+    return AppResult.Err(AppError.OutcomeUnknown)
 }
 
 /** `CommitOutcome.NotCommitted` (and a failed `RENAME`): storage full if its cause says so, else a programming fault. */

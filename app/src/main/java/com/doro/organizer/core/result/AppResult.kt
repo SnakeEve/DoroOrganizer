@@ -30,6 +30,9 @@ sealed interface AppError {
     /** A SAF or FileProvider I/O error, a null stream or a revoked grant (db-lifecycle.md § Classification table). */
     data object FileAccess : AppError
 
+    /** A restore candidate failed validation (db-lifecycle.md § Restore validation); the live data is untouched. */
+    data class InvalidBackup(val reason: BackupRejection) : AppError
+
     /** A Keystore failure while obtaining or changing a key, or an unusable key-state (DEC-86). */
     data object KeyUnavailable : AppError
 

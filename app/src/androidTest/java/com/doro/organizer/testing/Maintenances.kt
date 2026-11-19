@@ -4,6 +4,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.password.passwordBytes
 import com.doro.organizer.core.result.AppResult
+import com.doro.organizer.data.DatabaseHolder
 import com.doro.organizer.data.DbFiles
 import com.doro.organizer.data.DefaultDatabaseHolder
 import com.doro.organizer.data.HolderState
@@ -35,6 +36,10 @@ import org.junit.Assert.assertEquals
 class RecordingMaintenanceListener : MaintenanceListener {
     private val events = mutableListOf<Any>()
 
+    /** Runs inside every `onMaintenanceStarted`, after recording it: what a test sees when the gate enters Maintenance. */
+    @Volatile
+    var onStarted: ((MaintenanceOp) -> Unit)? = null
+
     /** Thrown once by the next `onMaintenanceFinished`, after recording it: a gate bug. */
     @Volatile
     var failNextFinished: Throwable? = null
@@ -44,8 +49,12 @@ class RecordingMaintenanceListener : MaintenanceListener {
 
     val finished: List<MaintenanceOutcome> get() = synchronized(events) { events.filterIsInstance<MaintenanceOutcome>() }
 
+    /** The `fingerprintReset` flags of every `onMaintenanceStarted` for [op]. */
+    fun startedFor(op: MaintenanceOp): List<Boolean> = started.filter { it.first == op }.map { it.second }
+
     override fun onMaintenanceStarted(op: MaintenanceOp, fingerprintReset: Boolean) {
         synchronized(events) { events += Started(op, fingerprintReset) }
+        onStarted?.invoke(op)
     }
 
     override fun onMaintenanceFinished(outcome: MaintenanceOutcome) {
@@ -66,15 +75,18 @@ class RecordingMaintenanceListener : MaintenanceListener {
 class ScriptedFaultHook : MaintenanceFaultHook {
     @Volatile private var target: Pair<MaintenanceOp?, PipelineStep>? = null
     @Volatile private var error: Throwable? = null
+    @Volatile private var beforeThrow: () -> Unit = {}
     @Volatile private var gate: CompletableDeferred<Unit>? = null
     private val seen = mutableListOf<Pair<MaintenanceOp?, PipelineStep>>()
 
     /** Reached by the blocked operation. */
     val blocked = CompletableDeferred<Unit>()
 
-    fun throwAt(op: MaintenanceOp?, step: PipelineStep, error: Throwable) {
+    /** Throws [error] at ([op], [step]), after [before] ran there: a fault that also changes what follows it. */
+    fun throwAt(op: MaintenanceOp?, step: PipelineStep, error: Throwable, before: () -> Unit = {}) {
         target = op to step
         this.error = error
+        beforeThrow = before
     }
 
     fun blockAt(op: MaintenanceOp?, step: PipelineStep) {
@@ -88,6 +100,7 @@ class ScriptedFaultHook : MaintenanceFaultHook {
     fun clear() {
         target = null
         error = null
+        beforeThrow = {}
         gate = null
     }
 
@@ -96,7 +109,10 @@ class ScriptedFaultHook : MaintenanceFaultHook {
     override suspend fun before(op: MaintenanceOp?, step: PipelineStep) {
         synchronized(seen) { seen += op to step }
         if (target != (op to step)) return
-        error?.let { throw it }
+        error?.let {
+            beforeThrow()
+            throw it
+        }
         gate?.let {
             blocked.complete(Unit)
             it.await()
@@ -120,6 +136,7 @@ class MaintenanceSetup(
     val files: DbFiles = maintenanceFiles(databases, vaults),
     dispatchers: AppDispatchers = AppDispatchers.production(),
     wrapVault: (KeyVault) -> KeyVault = { it },
+    wrapHolder: (DatabaseHolder) -> DatabaseHolder = { it },
 ) {
     val context = InstrumentationRegistry.getInstrumentation().targetContext!!
     val hook = ScriptedFaultHook()
@@ -127,7 +144,7 @@ class MaintenanceSetup(
     val vault: DefaultKeyVault = vaults.vault(settings, time, AppDispatchers.production(), kek, bio = bio)
     val holder: DefaultDatabaseHolder = databases.newHolder()
     val maintenance = DefaultDbMaintenance(
-        context, files, wrapVault(vault), holder, settings, time, dispatchers, applicationScope, hook,
+        context, files, wrapVault(vault), wrapHolder(holder), settings, time, dispatchers, applicationScope, hook,
     ) { listener }
 
     /** Effects E1 and E2: reconcile, complete, unlock with [password] (`passwordBytes`), open; asserts the open. */

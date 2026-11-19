@@ -1,5 +1,6 @@
 package com.doro.organizer.data
 
+import androidx.core.util.AtomicFile
 import java.io.File
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 
@@ -61,6 +62,18 @@ class DbFiles(val databasesDir: File, val noBackupDir: File, cacheDir: File) {
         return dir.listFiles().isNullOrEmpty()
     }
 
+    /**
+     * Erase, `ERASE_FILES` (db-lifecycle.md § Erase): every generation file set, the [committed] one last, then the
+     * contents of [stagingDir], [restoreDir] and [shareDir], then the data-reset marker with its `AtomicFile`
+     * siblings. Best effort: whatever remains is what an interrupted Erase leaves, and startup decides from it
+     * (crash-safety rows CS-25, CS-26).
+     */
+    fun deleteEverything(committed: Long?) {
+        erasureOrder(generationsOnDisk().keys, committed).forEach { deleteGeneration(it) }
+        listOf(stagingDir, restoreDir, shareDir).forEach { clearDir(it) }
+        AtomicFile(resetMarker).delete()
+    }
+
     private companion object {
         /** The main file and the sidecars whose absence makes a generation deleted. */
         val SIDECARS = listOf("", "-wal", "-shm", "-journal")
@@ -72,3 +85,7 @@ class DbFiles(val databasesDir: File, val noBackupDir: File, cacheDir: File) {
 
     override fun toString() = "DbFiles" // no paths in logs (DEC-70)
 }
+
+/** The order in which Erase deletes the generation sets [onDisk]: [committed], when present, last (§ Erase step 5). */
+internal fun erasureOrder(onDisk: Set<Long>, committed: Long?): List<Long> =
+    onDisk.filter { it != committed }.sorted() + onDisk.filter { it == committed }

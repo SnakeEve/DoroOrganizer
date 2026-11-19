@@ -31,6 +31,9 @@ internal class OperationRun(
         hook.before(op, step)
     }
 
+    /** Publishes a restore question (`Needs…`) or the step an answer resumed; no hook runs. */
+    fun show(status: MaintenanceStatus) = publish(status)
+
     /** Publishes `Running(op, step, fraction)` while a copy of known length runs; no hook runs. */
     fun progress(step: PipelineStep, fraction: Float) = publish(MaintenanceStatus.Running(op, step, fraction))
 

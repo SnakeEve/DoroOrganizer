@@ -2,6 +2,7 @@ package com.doro.organizer.data.maintenance
 
 import android.content.ContentResolver
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import com.doro.organizer.core.log.AppLog
@@ -11,9 +12,13 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import kotlin.coroutines.cancellation.CancellationException
 
-/** The SAF document of a backup (db-lifecycle.md § To a document); no URI or name ever reaches a log (DEC-70). */
+/**
+ * The SAF documents of a backup and of a restore (db-lifecycle.md § To a document, § Restore); no URI or name ever
+ * reaches a log (DEC-70).
+ */
 internal class SafDocuments(private val resolver: ContentResolver) {
     /** `OpenableColumns.SIZE`, or null when the provider does not report it or the query fails. */
     fun size(uri: Uri): Long? = try {
@@ -31,6 +36,21 @@ internal class SafDocuments(private val resolver: ContentResolver) {
         } catch (e: Exception) {
             AppLog.d("backup: document delete failed: ${e.javaClass.simpleName}")
         }
+    }
+
+    /**
+     * COPY_INPUT: the document's bytes, through a descriptor where the provider offers one, which [onDescriptor]
+     * receives so that `cancelRestore()` can close it and unblock a pending read. A provider that cannot offer one
+     * (`FileNotFoundException`) falls back to a plain stream; a null descriptor or stream is a `FileNotFoundException`.
+     */
+    fun openInput(uri: Uri, onDescriptor: (ParcelFileDescriptor) -> Unit): InputStream {
+        val descriptor = try {
+            resolver.openFileDescriptor(uri, "r")
+        } catch (e: FileNotFoundException) {
+            return resolver.openInputStream(uri) ?: throw FileNotFoundException("no input stream")
+        } ?: throw FileNotFoundException("no descriptor")
+        onDescriptor(descriptor)
+        return ParcelFileDescriptor.AutoCloseInputStream(descriptor)
     }
 
     /**
