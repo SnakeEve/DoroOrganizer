@@ -33,22 +33,30 @@ Rules:
 
 ```kotlin
 // package com.doro.organizer.data — used only by DatabaseHolder and DbMaintenance
-class DbFiles(context: Context) {
-    val databasesDir: File = context.getDatabasePath("doro-0.db").parentFile!!   // <dataDir>/databases
-    val stagingDir = File(context.noBackupFilesDir, "staging")
-    val restoreDir = File(context.noBackupFilesDir, "restore")
-    val shareDir = File(context.cacheDir, "share")
-    val resetMarker = File(context.noBackupFilesDir, "data-reset.pending")
-
-    fun ensureDirs()                                  // mkdirs() for databasesDir, stagingDir, restoreDir, shareDir
+class DbFiles(val databasesDir: File) {               // the caller chooses the root; tests pass a temporary directory
     fun live(gen: Long) = File(databasesDir, "doro-$gen.db")
+
+    // Added with DbMaintenance and the startup reconciliation, which are their first users (not in the code before):
+    val stagingDir: File                              // <noBackupFilesDir>/staging
+    val restoreDir: File                              // <noBackupFilesDir>/restore
+    val shareDir: File                                // <cacheDir>/share
+    val resetMarker: File                             // <noBackupFilesDir>/data-reset.pending
+    fun ensureDirs()                                  // mkdirs() for databasesDir, stagingDir, restoreDir, shareDir
     fun generationsOnDisk(): Map<Long, Set<File>>     // number -> existing files of that set (main and sidecars)
     fun hasMainFile(gen: Long): Boolean               // live(gen).isFile
     fun deleteGeneration(gen: Long): Boolean          // see the rules above
     fun clearDir(dir: File)                           // deletes the children of stagingDir, restoreDir or shareDir
     fun deleteEverything()                            // Erase: every generation set, the three temp dirs, the marker
+
+    companion object {
+        // Production factory, added when AppContainer.files is wired (SPEC T14):
+        fun forApp(context: Context): DbFiles          // databasesDir = context.getDatabasePath("doro-0.db").parentFile!! (<dataDir>/databases)
+    }
 }
 ```
+
+- The constructor takes plain `File` roots, never a `Context`, so instrumented tests point every root at a temporary directory (`TestDatabases.files`, [testing.md § 7](testing.md#7-fixtures-and-fakes)) and nothing in a test touches the app's real `databases/`. Only `forApp(context)` reads the `Context` paths listed at the top of this section.
+- Today (T9) the class holds only `databasesDir` and `live(gen)`, the members `DatabaseHolder` uses. When DbMaintenance adds the staging, restore and share directories and the marker, the constructor gains their roots as further `File` parameters (the `noBackupFilesDir` and `cacheDir` equivalents), which `forApp` fills from the `Context`; the members above keep their names and behavior. `deleteGeneration` and `clearDir` arrive with their first caller, so no member exists without a user.
 
 ## Generations and commit
 
@@ -276,7 +284,7 @@ Notes:
 // package com.doro.organizer.data
 interface DatabaseHolder {
     val state: StateFlow<HolderState>
-    /** Effect E2 only. Takes ownership of rawKey: kept while Room is open, zeroed by the holder on failure. */
+    /** Effect E2 only. Takes ownership of rawKey: kept while Room is open, zeroed by the holder on failure and, before the IllegalStateException, when called outside Closed. */
     suspend fun open(generation: Long, rawKey: ByteArray): OpenResult
     /** Effect E3. Drains, closes Room, zeroes the key. Never deletes a file (DEC-85). */
     suspend fun close()
@@ -318,7 +326,8 @@ fun interface FlowProblemListener { fun onFlowProblem(error: AppError) }   // im
 ```
 
 - The holder needs no `KeyMode`: an empty key means plaintext, any other key means encrypted.
-- Construction ([architecture.md](architecture.md) § Event wiring): `DefaultDatabaseHolder(files, dispatchers, corruptionListener: () -> CorruptionListener, flowProblemListener: FlowProblemListener)`. The `CorruptionListener` is a provider, because SessionGate depends on the holder; it is resolved at the first corruption event and is never cached before. `FlowProblemListener` is a plain value (AppContainer's lambda posts to `AppMessages`). `DbMaintenance` takes its `MaintenanceListener` as a `() -> MaintenanceListener` provider for the same reason.
+- Construction ([architecture.md](architecture.md) § Event wiring): `DefaultDatabaseHolder(context: Context, files: DbFiles, dispatchers: AppDispatchers, corruptionListener: () -> CorruptionListener, flowProblemListener: FlowProblemListener)`. `context` is the application `Context`; the holder uses it only to pass it to [`buildRoom(context, …)`](#room-builder) in step 5 of the open sequence, because `Room.databaseBuilder` requires one. It never reads a path from it: every file comes from `files`. The `CorruptionListener` is a provider, because SessionGate depends on the holder; it is invoked at every corruption event, never at construction. `FlowProblemListener` is a plain value (AppContainer's lambda posts to `AppMessages`). `DbMaintenance` takes its `MaintenanceListener` as a `() -> MaintenanceListener` provider for the same reason.
+- `CorruptionListener` and `FlowProblemListener` live in `data` (`HolderListeners.kt`); `HolderState`, `OpenResult`, `OpenFailureKind`, `ExclusiveScope` and `Reopen` live next to the interface in `DatabaseHolder.kt`.
 - E2 maps `OpenResult.Opened` to the gate event `Opened` and `Failed(kind)` to `OpenFailed(kind)` (T16–T19). E2 calls `open` with the generation of the key-state that `KeyVault` just read. On the cipher path E2 maps `Failed(Corrupt, keyRejected = true)` to a slot failure: `KeyVault.deleteBiometricKey()` and `PasswordNeeded(…, FingerprintChanged)` (T22; [architecture.md](architecture.md) § States, events and effects, E2; [Failure classification](#classification-table)). On every other path (the password and `DEVICE` keys, proven by a GCM tag; the empty `PLAIN` key; the reopen at the end of exclusive mode, which reports `ReopenFailed(kind)`) `keyRejected` is ignored and the result is Corrupt.
 - `toString()` of `HolderState.Open` and `ExclusiveScope` prints the generation only, never a key (DEC-70).
 
@@ -339,7 +348,7 @@ fun interface FlowProblemListener { fun onFlowProblem(error: AppError) }   // im
 
 `open(generation, rawKey)` runs on `dispatchers.io`; state Closed → Opening. In E2 the key was produced by `KeyVault` moments earlier: in `DEVICE` and `PASSWORD` mode it is proven by the GCM tags of the key slot, in `PLAIN` mode it is the empty key, so no failure below is ever a wrong password ([security.md](security.md) § 5.1, DEC-62). A key released by the biometric slot is authentic (its own GCM tag) but not proven to be the database's key ([security.md](security.md) § 3.7.3): the two results that mean "this key does not fit the file" (step 3 and step 4.1) therefore carry `keyRejected = true`, which E2 turns into a slot failure on the cipher path instead of the Corrupt screen (DEC-60, DEC-85). That is also why the file checks come after the key: the Corrupt screen appears only after authentication (DEC-85).
 
-1. Precondition: `SqlcipherEngine.init()` has run (E1: `System.loadLibrary("sqlcipher")`, the process-wide SQLCipher settings of [security.md](security.md) § 3.4, release logger off; [architecture.md](architecture.md) § SessionGate). `DbFiles.deleteGeneration`, used by reconciliation, calls the same SQLCipher class after that initialization.
+1. Precondition: `SqlcipherEngine.init()` has run (E1: `System.loadLibrary("sqlcipher")`, the process-wide SQLCipher settings of [security.md](security.md) § 3.4, release logger off; [architecture.md](architecture.md) § SessionGate). `DbFiles.deleteGeneration`, used by reconciliation, calls the same SQLCipher class after that initialization. `SqlcipherEngine.init()` is synchronized and idempotent, and `RawConnections.open` calls it again before every raw connection, so no raw connection can ever open on an uninitialized engine.
 2. Presence: `f = files.live(generation)`. If `!f.isFile` or `f.length() == 0L`: **Corrupt**. Neither SQLite nor Room may ever create the live file: the raw connection never passes `CREATE_IF_NECESSARY`, and Room only ever sees a file that passed step 4.
 3. Header: `RawConnections.readsAsPlaintext(f)` must equal `rawKey.isEmpty()`. A mismatch is **Corrupt** with `keyRejected = true`: the committed key-state is authoritative and the commit protocol only commits verified pairs. An `IOException` other than a header shorter than 16 bytes (`EIO`, `EACCES`, `EMFILE`) propagates and is **Transient** ([Failure classification](#failure-classification), context Opening): a read error on a plaintext file must never become the Corrupt screen, whose Start fresh deletes the data.
 4. Raw verification on a dedicated connection, closed in `finally`:
@@ -379,15 +388,28 @@ internal fun SQLiteDatabase.column0(sql: String): List<String?> =
 
 internal class CheckFailed(val failure: DbFailure, val keyRejected: Boolean = false) : Exception("open check failed")   // constant message (DEC-70)
 
-/** Steps 4.1–4.4. A SQLiteNotADatabaseException at the open or at step 4.1 becomes CheckFailed(Corrupt, keyRejected = true); step 3 throws the same for a header mismatch. */
+/** Steps 2–4. Throws CheckFailed for every Corrupt and NewerVersion outcome; other exceptions propagate to openFailureKind. */
 internal fun verifyLive(file: File, key: ByteArray) {
-    val db = try { RawConnections.open(file, key) } catch (e: SQLiteNotADatabaseException) { throw CheckFailed(DbFailure.Corrupt, keyRejected = true) }
-    db.use { verifyOpened(it) }
+    if (!file.isFile || file.length() == 0L) throw CheckFailed(DbFailure.Corrupt)                       // step 2
+    if (RawConnections.readsAsPlaintext(file) != key.isEmpty()) throw CheckFailed(DbFailure.Corrupt, keyRejected = true)   // step 3
+    var keyCheck = true                                    // true until the first read (step 4.1) has succeeded
+    try {
+        RawConnections.open(file, key).use { db ->
+            val objects = db.longOf("SELECT count(*) FROM sqlite_master WHERE name <> 'android_metadata'")
+            keyCheck = false
+            verifyOpened(db, objects)
+        }
+    } catch (e: SQLiteException) { throw rawCheckFailure(e, keyCheck) }
 }
 
-private fun verifyOpened(db: SQLiteDatabase) {
-    val objects = try { db.longOf("SELECT count(*) FROM sqlite_master WHERE name <> 'android_metadata'") }
-                  catch (e: SQLiteNotADatabaseException) { throw CheckFailed(DbFailure.Corrupt, keyRejected = true) }
+/** The Opening rows for an exception from raw verification. */
+internal fun rawCheckFailure(e: SQLiteException, keyCheck: Boolean): Exception = when {
+    e is SQLiteNotADatabaseException && keyCheck -> CheckFailed(DbFailure.Corrupt, keyRejected = true)   // the key does not fit the file
+    e.javaClass == SQLiteException::class.java -> CheckFailed(DbFailure.Corrupt)   // plain SQLITE_ERROR: the statements are fixed, so it comes from the file
+    else -> e                                                                       // classified by class in openFailureKind
+}
+
+private fun verifyOpened(db: SQLiteDatabase, objects: Long) {
     if (objects == 0L) throw CheckFailed(DbFailure.Corrupt)
     val version = db.longOf("PRAGMA user_version")
     if (version > AppDatabase.VERSION) throw CheckFailed(DbFailure.NewerVersion)
@@ -442,7 +464,7 @@ override fun <T> observe(query: (AppDatabase) -> Flow<T>): Flow<T> =
 ```
 
 - The outer flow never completes (`state` is a `StateFlow`). While the holder is not `Open` it emits nothing, so a downstream `stateIn` keeps showing the last list; when a new `Open` arrives the query subscribes to the new instance and emits again. Flows therefore survive every swap without ViewModel code (DEC-81). `HolderState.Open` uses identity equality, so a reopen of the same generation is still a new state.
-- `isEnvironmental()` is true for the Transient classes and storage full of the base mapping ([Classes](#classes)); `CancellationException` is never environmental. `retryWhen` re-subscribes to the same instance after 2 s, at most 3 times, as long as the instance is still current.
+- `isEnvironmental()` follows the Runtime context of the [classification table](#classification-table), not the base mapping (DEC-81): it is true exactly when `runtimeFailure(e)` ([Classes](#classes)) is Transient or StorageFull, that is for `SQLiteDiskIOException`, `SQLiteCantOpenDatabaseException`, `SQLiteReadOnlyDatabaseException`, `SQLiteAccessPermException`, `SQLiteOutOfMemoryException` and storage full (`SQLiteFullException`, errno `ENOSPC` or `EDQUOT`). `SQLiteDatabaseLockedException`, `SQLiteTableLockedException` and `IOException`, which the base mapping calls Transient, are Programming in this context and are never retried: WAL readers never lock and no app file I/O runs inside a query, so they can only be bugs, and `onFlowError` rethrows them. `CancellationException` is never environmental. `retryWhen` re-subscribes to the same instance after 2 s, at most 3 times, as long as the instance is still current.
 - `onFlowError(e, s)`: `CancellationException` is rethrown. If `s` is no longer the current state, the instance was retired by `exclusive` or `close`; the error (typically Room's `IllegalStateException` after close) is swallowed and the inner flow completes. Corruption (`SQLiteDatabaseCorruptException`, `SQLiteNotADatabaseException`) from the current instance is [reported](#runtime-corruption-routing) and the inner flow completes. An environmental error that survived the retries completes the inner flow and calls `FlowProblemListener.onFlowProblem(StorageFull or DatabaseUnavailable)`, so the shell shows a message; the list keeps its last value and re-subscribes at the next `Open`. A transient disk error or a full disk must not crash the app: a crash would lose the editor draft typed since the last `ON_STOP` (DEC-37) and could repeat on every start. Anything else is rethrown and crashes the app ([Failure classification](#failure-classification), context "Runtime"); the next start re-verifies the file.
 - Repositories add `distinctUntilChanged`, mapping and `flowOn` after `observe` ([data-layer.md](data-layer.md) § Reactivity). Never collect a DAO flow obtained outside `observe`; never keep `s.db`.
 
@@ -460,7 +482,7 @@ override suspend fun <T> withDb(block: suspend (AppDatabase) -> T): AppResult<T>
 - `acquire()`: under the state lock (a short-held lock that guards the in-flight count; it is not the transition `Mutex`), if the state is `Open`, increment the in-flight count and return it. `Closed`: return null at once. `Opening`, `Draining`, `Exclusive`: remember the `dataset` of the last `Open`, suspend until the state is `Open` or `Closed`, then return null if it is `Closed` or its `dataset` changed, otherwise try again. The increment happens only under the lock and only in `Open`, so once `Draining` is set no new call can enter.
 - `release()` decrements the count in `finally`, also on cancellation; exclusive mode and `close` wait for it to reach 0.
 - `Lease` is a coroutine-context element carrying the instance. A nested call (a helper that is itself a `withDb` caller; the repositories use none today, because [data-layer.md § Transactions and results](data-layer.md#transactions-and-results) routes nested work through `internal` helpers such as `insertNew(db, …)` that take the open `db`) reuses the outer instance instead of acquiring again; acquiring again could wait for a drain that is itself waiting for the outer call. The `Lease` reaches only calls made in the same coroutine, so nested work must be an internal (non-public) suspend function called directly inside the outer `withDb` and its `withTransaction`. It never detaches into `applicationScope` and never calls the public repository method: that would start a coroutine without the `Lease`, which would acquire again and could deadlock against a drain, and its write would run outside the outer transaction (DEC-33).
-- `runClassified` maps exceptions per [Failure classification](#failure-classification), context "Runtime": corruption is reported and becomes `Err(DatabaseUnavailable)`; `SQLiteFullException` becomes `Err(StorageFull)`; the transient I/O classes become `Err(DatabaseUnavailable)`; `CancellationException` and everything else is rethrown.
+- `runClassified` maps exceptions per [Failure classification](#failure-classification), context "Runtime" (`runtimeFailure`, [Classes](#classes)): corruption is reported and becomes `Err(DatabaseUnavailable)`; storage full becomes `Err(StorageFull)`; the Transient classes of the Runtime table become `Err(DatabaseUnavailable)`; `CancellationException` and everything else, the locking exceptions and `IOException` included (DEC-81), is rethrown.
 - Repositories call `withDb` once per public method and run their transaction inside it; writes run detached in `applicationScope` ([architecture.md](architecture.md) § Layering and data flow, rule 6). DbMaintenance never calls `withDb` and never runs inside it.
 
 ### Exclusive mode
@@ -480,7 +502,17 @@ override suspend fun <T> withDb(block: suspend (AppDatabase) -> T): AppResult<T>
 
 ### Close
 
-`close()` (effect E3: every transition of [architecture.md](architecture.md) § Transition table whose effect column says E3): state `Draining`; wait for the in-flight count to reach 0; `db.close()` in `NonCancellable`; zero the key (under the transition `Mutex`); state `Closed`. Waiting `withDb` calls get `DatabaseUnavailable`. No file is deleted (DEC-85); a `Closed` holder is reopened only by E2. When the state is already `Closed`, `close()` is a no-op.
+`close()` (effect E3: every transition of [architecture.md](architecture.md) § Transition table whose effect column says E3) uses the same drain as [exclusive mode](#exclusive-mode) (DEC-81). Under the transition `Mutex` and in `NonCancellable`:
+
+1. State `Draining`: `flatMapLatest` cancels every inner flow; new `withDb` calls wait.
+2. Wait until the in-flight count of `withDb` calls is 0 (exclusive mode step 3).
+3. Wait until the instance's `activeFlows` count reaches 0, polling every 10 ms for at most 2 s; on timeout log the constant `exclusive: flow drain timeout` and continue (exclusive mode step 4).
+4. `db.close()` on `dispatchers.io`.
+5. In `finally`, so also when a drain step or Room's `close()` throws: zero the key and publish state `Closed`.
+
+Waiting `withDb` calls get `DatabaseUnavailable`. No file is deleted (DEC-85); a `Closed` holder is reopened only by E2. When the state is already `Closed`, `close()` is a no-op; any other state is impossible under the `Mutex` and is a programming error (`IllegalStateException`).
+
+Why the flow drain also runs here, although no maintenance operation follows: it keeps one drain path for `exclusive` and `close`, and it guarantees that the key is zeroed only after every reader that might still use a connection keyed from it, a cancelled flow query included, has finished (L-03; [security.md](security.md) § 6.4). This is stricter than waiting for the `withDb` calls alone, and costs at most 2 s only when a flow ignores cancellation.
 
 ### Runtime corruption routing
 
@@ -533,18 +565,41 @@ internal fun Throwable.isStorageFull(): Boolean = this is SQLiteFullException ||
     generateSequence(this) { it.cause }.filterIsInstance<ErrnoException>()
         .any { it.errno == OsConstants.ENOSPC || it.errno == OsConstants.EDQUOT }
 
+internal fun Throwable.isCorruption(): Boolean =                     // SQLITE_CORRUPT or SQLITE_NOTADB
+    this is SQLiteNotADatabaseException || this is SQLiteDatabaseCorruptException
+
 /** Base mapping. Context rules below override it where a row says so. */
 internal fun classify(e: Throwable): DbFailure = when {
     e is CancellationException -> throw e
     e is CheckFailed -> e.failure
-    e is SQLiteNotADatabaseException || e is SQLiteDatabaseCorruptException -> DbFailure.Corrupt
+    e.isCorruption() -> DbFailure.Corrupt
     e.isStorageFull() -> DbFailure.StorageFull
     e is SQLiteDiskIOException || e is SQLiteCantOpenDatabaseException || e is SQLiteReadOnlyDatabaseException ||
         e is SQLiteAccessPermException || e is SQLiteDatabaseLockedException || e is SQLiteTableLockedException ||
         e is SQLiteOutOfMemoryException || e is IOException -> DbFailure.Transient
     else -> DbFailure.Programming
 }
+
+/** Context Opening: the kind an open or reopen reports; NewerVersion and storage full are Transient (DEC-91). */
+internal fun openFailureKind(e: Throwable): OpenFailureKind = when (classify(e)) {
+    DbFailure.Corrupt -> OpenFailureKind.Corrupt
+    DbFailure.NewerVersion, DbFailure.StorageFull, DbFailure.Transient -> OpenFailureKind.Transient
+    DbFailure.Programming -> throw e                                  // e.g. Room's identity or migration IllegalStateException
+}
+
+/** Context Runtime (withDb and observe), DEC-81: narrower than the base mapping. */
+internal fun runtimeFailure(e: Throwable): DbFailure = when {
+    e is CancellationException -> throw e
+    e.isCorruption() -> DbFailure.Corrupt
+    e.isStorageFull() -> DbFailure.StorageFull
+    e is SQLiteDiskIOException || e is SQLiteCantOpenDatabaseException || e is SQLiteReadOnlyDatabaseException ||
+        e is SQLiteAccessPermException || e is SQLiteOutOfMemoryException -> DbFailure.Transient
+    else -> DbFailure.Programming                                     // locking exceptions, IOException, constraints, …
+}
 ```
+
+- `classify` serves the Opening context (through `openFailureKind`) and, later, DbMaintenance. `runtimeFailure` is the Runtime table in code: `withDb` (`runClassified`) and `observe` (`isEnvironmental`, `onFlowError`) both use it, so a class that `withDb` rethrows is never retried in a flow either (DEC-81).
+- All three live in `data/DbFailure.kt`; `CheckFailed`, `verifyLive` and `rawCheckFailure` live in `data/RawConnections.kt`.
 
 The classes are the ones sqlcipher-android throws for the SQLite result codes: `SQLITE_CORRUPT` → `SQLiteDatabaseCorruptException`; `SQLITE_NOTADB` → `net.zetetic.database.sqlcipher.SQLiteNotADatabaseException` (a wrong key, an encrypted file opened as plaintext and a non-database file all look like this); `SQLITE_FULL` → `SQLiteFullException`; `SQLITE_IOERR` → `SQLiteDiskIOException`; `SQLITE_CANTOPEN`, `SQLITE_READONLY`, `SQLITE_PERM`, `SQLITE_BUSY`, `SQLITE_LOCKED`, `SQLITE_NOMEM` → the matching `android.database.sqlite` subclasses; `SQLITE_CONSTRAINT` → `SQLiteConstraintException`; plain `SQLITE_ERROR` and unlisted codes → `SQLiteException` itself. A page whose HMAC fails is returned to SQLite zeroed, so it surfaces as `SQLITE_CORRUPT`, or as `SQLITE_NOTADB` for page 1.
 
