@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- security.md § 9.1: exactly cacheDir/share/; never files-path, root-path or path=".". -->
+<paths>
+    <cache-path name="share" path="share/" />
+</paths>

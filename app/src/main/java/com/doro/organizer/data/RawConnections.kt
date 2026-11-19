@@ -4,6 +4,7 @@ import android.database.sqlite.SQLiteException
 import com.doro.organizer.data.db.AppDatabase
 import java.io.EOFException
 import java.io.File
+import java.io.IOException
 import java.io.RandomAccessFile
 import net.zetetic.database.DatabaseErrorHandler
 import net.zetetic.database.sqlcipher.SQLiteDatabase
@@ -23,6 +24,16 @@ internal object RawConnections {
         } catch (e: EOFException) {
             false
         }
+    }
+
+    /**
+     * Conservative, for adoption at startup and the export target check: true only when the first 16 bytes are the
+     * plaintext magic. A short or unreadable file is not plaintext (the safe side: it is never adopted).
+     */
+    fun isPlaintext(file: File): Boolean = try {
+        readsAsPlaintext(file)
+    } catch (e: IOException) {
+        false
     }
 
     /**

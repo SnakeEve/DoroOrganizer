@@ -1,5 +1,6 @@
 package com.doro.organizer.testing
 
+import com.doro.organizer.core.password.passwordBytes
 import com.doro.organizer.security.sqlcipherRawKey
 
 /** The key of a test database in each of SQLCipher's three keying forms (DEC-60, DEC-83). */
@@ -21,11 +22,8 @@ sealed interface TestKey {
         override fun bytes(): ByteArray = sqlcipherRawKey(dek, ::ByteArray)
     }
 
-    /**
-     * A passphrase, as backup files use it (DEC-83). Plain UTF-8 equals production's `passwordBytes` (security.md
-     * § 6.3) only for NFC text; delegate to it once it exists.
-     */
+    /** A passphrase, as backup files use it (DEC-83): production's `passwordBytes` (UTF-8 of NFC, security.md § 6.3). */
     class Passphrase(private val password: String) : TestKey {
-        override fun bytes(): ByteArray = password.toByteArray(Charsets.UTF_8)
+        override fun bytes(): ByteArray = checkNotNull(passwordBytes(password.toCharArray())) { "malformed passphrase" }
     }
 }

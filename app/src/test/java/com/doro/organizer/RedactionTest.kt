@@ -1,27 +1,42 @@
 package com.doro.organizer
 
+import com.doro.organizer.core.password.PasswordCheck
 import com.doro.organizer.core.result.AppError
+import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.core.result.InputRule
 import com.doro.organizer.data.CreatedIds
 import com.doro.organizer.data.ExclusiveScope
+import com.doro.organizer.data.OpenFailureKind
 import com.doro.organizer.data.Reopen
 import com.doro.organizer.data.db.EntityOptionRow
 import com.doro.organizer.data.db.NoteDetailRow
 import com.doro.organizer.data.db.NoteEntity
 import com.doro.organizer.data.db.NotePersonCrossRef
 import com.doro.organizer.data.db.NoteProjectCrossRef
-import com.doro.organizer.data.db.PersonEntity
 import com.doro.organizer.data.db.NoteRowRaw
+import com.doro.organizer.data.db.PersonEntity
 import com.doro.organizer.data.db.ProjectEntity
 import com.doro.organizer.data.db.SaveProbe
+import com.doro.organizer.data.maintenance.CommitOutcome
+import com.doro.organizer.data.maintenance.CommitResult
+import com.doro.organizer.data.maintenance.ExclusiveExport
+import com.doro.organizer.data.maintenance.KeyStateRead
+import com.doro.organizer.data.maintenance.MaintenanceFaultHook
+import com.doro.organizer.data.maintenance.MaintenanceOp
+import com.doro.organizer.data.maintenance.MaintenanceOutcome
+import com.doro.organizer.data.maintenance.MaintenanceResult
+import com.doro.organizer.data.maintenance.MaintenanceStatus
+import com.doro.organizer.data.maintenance.OperationRun
+import com.doro.organizer.data.maintenance.PipelineStep
+import com.doro.organizer.data.maintenance.StartupDecision
 import com.doro.organizer.model.BatchResult
 import com.doro.organizer.model.DateFilter
 import com.doro.organizer.model.DeleteImpact
 import com.doro.organizer.model.DraftInsert
-import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.EntityDeleteResult
 import com.doro.organizer.model.EntityOption
 import com.doro.organizer.model.EntityRef
+import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.NoteDetail
 import com.doro.organizer.model.NoteDraft
@@ -39,6 +54,7 @@ import com.doro.organizer.security.KeyVaultException
 import com.doro.organizer.security.PreparedKey
 import com.doro.organizer.security.UnlockResult
 import com.doro.organizer.testing.SENTINEL
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
@@ -303,6 +319,69 @@ class RedactionTest {
         assertEquals(
             listOf("KeySlot(mode=PASSWORD)", "Kdf", "BioSlot", "KeyState(mode=PASSWORD)", "PreparedKey(mode=PASSWORD)",
                 "Key(kekBroken=false)"),
+            printed,
+        )
+    }
+
+    @Test
+    fun passwordCheck_neverPrintsThePassword() {
+        assertEquals("Ok", PasswordCheck.Ok(SENTINEL.toByteArray()).toString())
+        assertEquals("Rejected(rule=PasswordTooShort)", PasswordCheck.Rejected(InputRule.PasswordTooShort).toString())
+    }
+
+    @Test
+    fun appErrors_ofDbMaintenance_printTheCaseOnly() {
+        val printed = listOf(
+            AppError.Throttled(5_000),
+            AppError.InvalidInput(InputRule.PasswordMalformed),
+            AppError.InvalidInput(InputRule.PasswordMismatch),
+            AppError.StorageFull,
+            AppError.FileAccess,
+            AppError.KeyUnavailable,
+            AppError.AuthFailed,
+            AppError.Busy,
+            AppError.OutcomeUnknown,
+            AppError.Unexpected,
+        ).map { it.toString() }
+
+        assertEquals(
+            listOf("Throttled(retryAtElapsedMs=5000)", "InvalidInput(rule=PasswordMalformed)",
+                "InvalidInput(rule=PasswordMismatch)", "StorageFull", "FileAccess", "KeyUnavailable", "AuthFailed", "Busy",
+                "OutcomeUnknown", "Unexpected"),
+            printed,
+        )
+    }
+
+    @Test
+    fun maintenanceTypes_printEnumsAndIdsOnly() {
+        val secret = SENTINEL.toByteArray()
+        val state = KeyState(4, KeySlot(KeyMode.PASSWORD, secret, secret, secret, Kdf(600_000, secret)), BioSlot(secret, secret))
+        val printed = listOf(
+            MaintenanceStatus.Running(MaintenanceOp.Backup, PipelineStep.WRITE_DOCUMENT, 0.5f),
+            MaintenanceStatus.Finished(MaintenanceOp.KeyChange, AppResult.Ok(MaintenanceResult.KeyChanged(KeyMode.PLAIN, KeyMode.PASSWORD))),
+            MaintenanceStatus.Finished(MaintenanceOp.Backup, AppResult.Err(AppError.FileAccess), previousContentLost = true),
+            MaintenanceOutcome.ReopenFailed(OpenFailureKind.Corrupt),
+            StartupDecision.Proceed(4, KeyMode.DEVICE),
+            StartupDecision.AdoptPlain(2),
+            CommitResult(CommitOutcome.Unknown, IOException(SENTINEL)),
+            KeyStateRead.Valid(state),
+            ExclusiveExport.Failed(IOException(SENTINEL)),
+            OperationRun(MaintenanceOp.Restore, MaintenanceFaultHook.None, {}, {}).apply { own(secret) },
+        ).map { it.toString() }
+
+        assertEquals(
+            listOf(
+                "Running(op=Backup, step=WRITE_DOCUMENT)",
+                "Finished(op=KeyChange, result=Ok(value=KeyChanged(from=PLAIN, to=PASSWORD)), previousContentLost=false)",
+                "Finished(op=Backup, result=Err(error=FileAccess), previousContentLost=true)",
+                "ReopenFailed(kind=Corrupt)",
+                "Proceed(generation=4, mode=DEVICE)",
+                "AdoptPlain(generation=2)",
+                "CommitResult(outcome=Unknown)",
+                "Valid(KeyState(mode=PASSWORD))",
+                "Failed",
+                "OperationRun(op=Restore)",
+            ),
             printed,
         )
     }

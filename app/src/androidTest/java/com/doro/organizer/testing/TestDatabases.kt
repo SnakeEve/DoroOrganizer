@@ -33,7 +33,10 @@ class TestDatabases(private val keyBytes: (TestKey) -> ByteArray = TestKey::byte
     lateinit var directory: File
         private set
 
-    /** The live-generation files of this instance's holders, in `<directory>/databases`. */
+    /**
+     * The database files of this instance: `databases/`, the `noBackupFilesDir` equivalent `nobackup/` (staging,
+     * restore, the data-reset marker) and the `cacheDir` equivalent `cache/` (share files), all in [directory].
+     */
     lateinit var files: DbFiles
         private set
 
@@ -42,7 +45,11 @@ class TestDatabases(private val keyBytes: (TestKey) -> ByteArray = TestKey::byte
         val root = File(context.noBackupFilesDir, "test-databases")
         check(root.isDirectory || root.mkdirs()) { "cannot create the test database root" }
         directory = Files.createTempDirectory(root.toPath(), "db").toFile()
-        files = DbFiles(File(directory, "databases").apply { check(mkdir()) { "cannot create databases/" } })
+        files = DbFiles(
+            databasesDir = File(directory, "databases").apply { check(mkdir()) { "cannot create databases/" } },
+            noBackupDir = File(directory, "nobackup"),
+            cacheDir = File(directory, "cache"),
+        )
     }
 
     /**

@@ -32,6 +32,17 @@
             </intent-filter>
         </activity>
 
+        <!-- DEC-68, DEC-83: the share sheet's backups; not exported, read grants per share only. -->
+        <provider
+            android:name=".BackupFileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- security.md § 9.1, DEC-68: no services. Room merges this one in for enableMultiInstanceInvalidation, which no
              builder uses (db-lifecycle.md § Room builder). -->
         <service
