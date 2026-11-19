@@ -132,13 +132,13 @@ fun KeyState.matches(gen: Long, slot: KeySlot, bio: BioSlot?): Boolean =
 fun bioMatches(actual: BioSlot?, expected: BioSlot?): Boolean =
     if (expected == null) actual == null else actual != null && actual.sameAs(expected)
 
-/** Best effort: makes renames inside dir durable. Never throws. */
+/** Best effort: makes renames inside dir durable. Never throws. Package com.doro.organizer.core.io (KeyVault.eraseState uses it too). */
 fun syncDirectory(dir: File) {
     try {
         val fd = Os.open(dir.path, OsConstants.O_RDONLY, 0)
         try { Os.fsync(fd) } finally { Os.close(fd) }
-    } catch (e: ErrnoException) { AppLog.w("syncDirectory failed: ${e.javaClass.simpleName} errno=${e.errno}")
-    } catch (e: Exception) { AppLog.w("syncDirectory failed: ${e.javaClass.simpleName}") }
+    } catch (e: ErrnoException) { AppLog.d("syncDirectory failed: ${e.javaClass.simpleName} errno=${e.errno}")   // AppLog has only d()
+    } catch (e: Exception) { AppLog.d("syncDirectory failed: ${e.javaClass.simpleName}") }
 }
 ```
 
