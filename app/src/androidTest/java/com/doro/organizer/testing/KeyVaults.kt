@@ -2,8 +2,7 @@ package com.doro.organizer.testing
 
 import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.core.coroutines.AppDispatchers
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
+import com.doro.organizer.debug.testBioKeySpec
 import com.doro.organizer.security.AndroidBioKeystore
 import com.doro.organizer.security.AndroidKekKeystore
 import com.doro.organizer.security.BIO_ALIAS
@@ -173,18 +172,6 @@ class FaultyKekKeystore(
         return block()
     }
 }
-
-/**
- * The test configuration of the biometric seam (testing.md § 5, technique "Biometric slot"): the production alias,
- * key size, GCM mode and purposes, without the user-authentication parameters, so a `Cipher` works without a touch.
- * `BiometricKeySpecTest` pins the production spec.
- */
-fun testBioKeySpec(): KeyGenParameterSpec =
-    KeyGenParameterSpec.Builder(BIO_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-        .setKeySize(256)
-        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-        .build()
 
 /** The operations of [BioKeystore], for scripting failures. */
 enum class BioOp { ContainsAlias, Generate, Delete, InitEncrypt, InitDecrypt, UpdateAad, DoFinal }

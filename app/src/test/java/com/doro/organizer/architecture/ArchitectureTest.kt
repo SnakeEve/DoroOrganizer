@@ -300,6 +300,18 @@ class ArchitectureTest {
     }
 
     @Test
+    fun crashTestKeys() = assertClean(CrashTestKeysRule::check)
+
+    @Test
+    fun crashTestKeys_planted() {
+        val body = "val vault = crashTestVault(app, settings, time, dispatchers)"
+        assertNoneReported(planted("debug/CrashRuns.kt", body, sourceSet = "debug"), CrashTestKeysRule::check)
+        assertReported(planted("AppContainer.kt", body), 3, CrashTestKeysRule::check)
+        assertReported(planted("debug/Tools.kt", "val spec = testBioKeySpec()", sourceSet = "debug"), 3, CrashTestKeysRule::check)
+        assertReported(planted("debug/CrashRuns.kt", body), 3, CrashTestKeysRule::check) // main source set
+    }
+
+    @Test
     fun rule6_sqlText() = assertClean(SqlTextRule::check)
 
     @Test

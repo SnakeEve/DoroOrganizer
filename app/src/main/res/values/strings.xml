@@ -2,4 +2,14 @@
 <!-- Every user-visible text of the app (DEC-55); keys and wording: ui.md § 11. -->
 <resources>
     <string name="app_name">Doro Organizer</string>
+
+    <string name="action_cancel">Cancel</string>
+    <string name="action_use_password">Use password</string>
+
+    <!-- System authentication prompts (ui.md § 8.11). -->
+    <string name="biometric_unlock_title">Unlock Doro Organizer</string>
+    <string name="biometric_enable_title">Turn on biometric lock</string>
+    <string name="biometric_disable_title">Turn off biometric lock</string>
+    <string name="biometric_slot_title">Set up fingerprint unlock</string>
+    <string name="biometric_reset_title">Confirm with your fingerprint</string>
 </resources>

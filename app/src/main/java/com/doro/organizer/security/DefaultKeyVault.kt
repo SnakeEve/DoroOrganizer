@@ -38,7 +38,8 @@ import kotlinx.coroutines.withContext
  * § 3.6). The locked body is not cancellable, so a cancelled caller never drops a secret before it is zeroed (V16).
  */
 class DefaultKeyVault(
-    private val stateFile: File,
+    /** Internal for the wiring check that it lives in the same `noBackupFilesDir` as `DbFiles.noBackupDir`. */
+    internal val stateFile: File,
     private val kek: KekKeystore,
     private val settings: SettingsStore,
     private val appTime: AppTime,
@@ -621,7 +622,8 @@ class DefaultKeyVault(
         /** The production vault: `noBackupFilesDir/db-state.json` on AndroidKeyStore, with the default seams. */
         fun create(context: Context, settings: SettingsStore, appTime: AppTime, dispatchers: AppDispatchers) =
             DefaultKeyVault(
-                stateFile = File(context.noBackupFilesDir, STATE_FILE_NAME),
+                // `noBackupFilesDir` without its getter, which creates the directory on the main thread (DbFiles.forApp).
+                stateFile = File(File(context.applicationInfo.dataDir, "no_backup"), STATE_FILE_NAME),
                 kek = AndroidKekKeystore.forDevice(context),
                 settings = settings,
                 appTime = appTime,

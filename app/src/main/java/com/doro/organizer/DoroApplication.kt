@@ -9,7 +9,8 @@ open class DoroApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        if (Application.getProcessName() != packageName) return // a secondary process starts nothing here
+        if (Application.getProcessName() != packageName) return // the debug :crashtest process builds its own container
+        DebugTools.install(this) // StrictMode in debug, no-op in release
         startApp()
     }
 
@@ -17,6 +18,7 @@ open class DoroApplication : Application() {
     protected open fun startApp() {
         container = createContainer()
         container.installProcessObservers()
+        container.sessionGate.start() // Starting; the live Room instance is never built here (DEC-90)
     }
 
     protected open fun createContainer(): AppContainer = AppContainer(this)

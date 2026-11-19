@@ -16,7 +16,7 @@ import com.doro.organizer.security.KeyVaultException
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.MaintenanceSetup
-import com.doro.organizer.testing.ReadBackFailingVault
+import com.doro.organizer.debug.ReadBackFailingVault
 import com.doro.organizer.testing.RestoreAnswer.Companion.confirm
 import com.doro.organizer.testing.SeedGenerator
 import com.doro.organizer.testing.TestDatabases

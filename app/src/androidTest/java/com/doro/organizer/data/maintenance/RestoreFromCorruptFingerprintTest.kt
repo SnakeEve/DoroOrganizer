@@ -36,7 +36,8 @@ import org.junit.runner.RunWith
 /**
  * The DbMaintenance mechanics of testing.md L-43 (DEC-84, DEC-65; db-lifecycle.md § Origins and target key): a
  * restore from `Corrupt` in `PASSWORD` mode asks the fingerprint first, then the database password; what is counted,
- * and what the slot-key check deletes. The prompts and `slotPrompt` are the Compose and gate halves (SPEC T14, T19).
+ * and what the slot-key check deletes. The prompts and `slotPrompt` are the gate half,
+ * `session.RestoreKeyGateTest`, and the Compose half (SPEC T19).
  */
 @RunWith(AndroidJUnit4::class)
 class RestoreFromCorruptFingerprintTest {

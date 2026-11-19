@@ -5,6 +5,7 @@ import android.system.OsConstants
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.core.result.AppError
 import com.doro.organizer.core.result.AppResult
+import com.doro.organizer.debug.ReadBackFailingVault
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.security.BioSlotStatus
 import com.doro.organizer.security.KeyFailure
@@ -14,7 +15,6 @@ import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.BioOp
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.MaintenanceSetup
-import com.doro.organizer.testing.ReadBackFailingVault
 import com.doro.organizer.testing.ScriptedVault
 import com.doro.organizer.testing.TestDatabases
 import java.io.IOException

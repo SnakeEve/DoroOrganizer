@@ -1,0 +1,161 @@
+package com.doro.organizer.testing
+
+import androidx.lifecycle.Lifecycle
+import androidx.test.core.app.ActivityScenario
+import androidx.test.platform.app.InstrumentationRegistry
+import com.doro.organizer.MainActivity
+import com.doro.organizer.core.result.AppResult
+import com.doro.organizer.data.HolderState
+import com.doro.organizer.model.KeyMode
+import com.doro.organizer.security.AppLockController
+import com.doro.organizer.security.KeyVault
+import com.doro.organizer.session.GateEvent
+import com.doro.organizer.session.GateState
+import java.io.File
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertEquals
+
+/**
+ * A cold start of the real app in the test process (testing.md § 7, Wiring) over the test's own files: [plant] writes
+ * the key-state, the data and the settings through a [MaintenanceSetup] on the same files, vault directory and
+ * settings; [coldStart] then starts the gate of [app]'s container and launches `MainActivity`, whose
+ * `AppLockController.attach` runs the auto-prompt. Everything below the platform is real except [gateway] (the
+ * fingerprint sensor), [settings], [time] and [process]. Declare [app] as `@get:Rule(order = 3)` after [databases],
+ * [vaults] and [scope].
+ */
+class GateScene(
+    private val databases: TestDatabases,
+    private val vaults: KeyVaultRule,
+    private val scope: ApplicationScopeRule,
+) {
+    val time = FakeAppTime()
+    val settings = FakeSettingsStore().apply { load() }
+    val gateway = FakeBiometricGateway()
+    val process = TestProcessLifecycle()
+    val kdf = TestKdf(time)
+    val kek = FaultyKekKeystore()
+    val bio = FaultyBioKeystore()
+
+    /** Every secret the app's vault allocated, to check their zeroing (L-03). */
+    val secrets = SecretRecorder()
+
+    /** Wraps the app's vault, for the cases that script a vault answer. */
+    var wrapVault: (KeyVault) -> KeyVault = { it }
+
+    private lateinit var lock: OfferCountingLockController
+
+    /** The API level the controller decides its credential branch by; null: the phone's. Set before [coldStart]. */
+    var controllerSdkInt: Int? = null
+
+    val app = DoroAppRule(autoStart = false) {
+        appTime = time
+        settingsStore = settings
+        processLifecycle = process
+        biometricGateway = gateway
+        files = maintenanceFiles(databases, vaults)
+        keyVault = { store, _, dispatchers ->
+            wrapVault(vaults.vault(store, time, dispatchers, kek, newSecret = secrets, kdf = kdf, bio = bio))
+        }
+        wrapLockController = { OfferCountingLockController(it).also { lock = it } }
+        lockSdkInt = { controllerSdkInt }
+    }
+
+    private var scenario: ActivityScenario<MainActivity>? = null
+
+    val gate get() = app.container.sessionGate
+
+    /** Data in [mode] (with [password] for `PASSWORD`), the lock setting and, with [slot], a live biometric slot. */
+    suspend fun plant(mode: KeyMode, password: String? = null, lock: Boolean = false, slot: Boolean = false) {
+        val setup = MaintenanceSetup(databases, vaults, scope.scope, settings, time, kek, bio)
+        setup.start()
+        if (mode != KeyMode.PLAIN) setup.changeKey(mode, null, password)
+        if (slot) assertEquals(AppResult.Ok(Unit), setup.maintenance.createBiometricSlot(setup.armCipher()))
+        settings.setBiometricLock(lock)
+        setup.holder.close()
+    }
+
+    /** The process comes to the foreground, the gate starts and `MainActivity` is launched. */
+    fun coldStart() {
+        onMain { process.moveTo(Lifecycle.State.RESUMED) }
+        app.start()
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+    }
+
+    /** A trip to the background and back through the process lifecycle (security.md § 7.7). */
+    fun backgroundTrip() = onMain {
+        process.moveTo(Lifecycle.State.CREATED)
+        process.moveTo(Lifecycle.State.RESUMED)
+    }
+
+    suspend fun awaitGate(predicate: (GateState) -> Boolean): GateState =
+        withTimeout(TIMEOUT_MS) { gate.state.first(predicate) }
+
+    suspend fun awaitGate(state: GateState): GateState = awaitGate { it == state }
+
+    /**
+     * Waits until effect E5 (`reconcileLock()`, then the offer) has finished [count] times in all, so a test asserts
+     * its outcome, or the absence of an offer, after it ran.
+     */
+    suspend fun awaitOfferSetups(count: Int) = withTimeout(TIMEOUT_MS) { lock.offerSetups.first { it >= count } }
+
+    /** Waits until [count] prompts in all were shown. */
+    suspend fun awaitPrompts(count: Int) = withTimeout(TIMEOUT_MS) { gateway.shownCount.first { it >= count } }
+
+    fun dispatch(event: GateEvent) = onMain { gate.dispatch(event) }
+
+    fun submit(password: String) = dispatch(GateEvent.PasswordSubmitted(password.toCharArray()))
+
+    /** The live Room instance's holder state, compared by identity across a lock (same instance, no reopen). */
+    fun holderState(): HolderState = app.container.databaseHolder.state.value
+
+    fun finish() = scenario?.close()
+
+    /** Runs [block] on the main thread with the launched `MainActivity`. */
+    fun onActivity(block: (MainActivity) -> Unit) {
+        checkNotNull(scenario) { "not started" }.onActivity(block)
+    }
+
+    /** Moves the launched `MainActivity` to [state] (CREATED: stopped, its state saved). */
+    fun moveActivityTo(state: Lifecycle.State) {
+        checkNotNull(scenario) { "not started" }.moveToState(state)
+    }
+
+    /** The main file of the committed generation. */
+    suspend fun liveFile(): File = app.container.files.live(checkNotNull(app.container.keyVault.readState()).generation)
+
+    /**
+     * The runtime-corruption technique of testing.md § 5 for a `PLAIN` database open in the holder: with the WAL
+     * empty, random bytes over every page but the first, so the next read on a reader connection fails.
+     */
+    suspend fun damageOpenPlainDatabase() {
+        val file = liveFile()
+        val db = (holderState() as HolderState.Open).db
+        db.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(TRUNCATE)").use { it.moveToFirst() }
+        (2..pageCount(file)).forEach { corruptPage(file, it) }
+    }
+
+    companion object {
+        const val TIMEOUT_MS = 20_000L
+
+        fun onMain(block: () -> Unit) = InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
+    }
+}
+
+/** The real controller, counting each finished E5 (`offerSlotSetup`), which reports through no flow. */
+private class OfferCountingLockController(private val inner: AppLockController) : AppLockController by inner {
+    private val finished = MutableStateFlow(0)
+    val offerSetups: StateFlow<Int> = finished.asStateFlow()
+
+    override suspend fun offerSlotSetup() {
+        try {
+            inner.offerSlotSetup()
+        } finally {
+            finished.update { it + 1 }
+        }
+    }
+}

@@ -194,35 +194,6 @@ fun maintenanceFiles(databases: TestDatabases, vaults: KeyVaultRule, cacheDir: F
     DbFiles(databases.files.databasesDir, checkNotNull(vaults.stateFile.parentFile), cacheDir)
 
 /**
- * A vault whose read right after the next commit throws [failure] once, for the `CommitOutcome.Unknown` cases of
- * testing.md L-14 and L-16 (a read-back that fails although the commit landed).
- */
-class ReadBackFailingVault(private val delegate: KeyVault, private val failure: () -> Throwable) : KeyVault by delegate {
-    /** Set by the test: the next commit arms one failing read. */
-    @Volatile
-    var failReadAfterNextCommit = false
-
-    @Volatile
-    private var armed = false
-
-    override suspend fun commit(generation: Long, slot: KeySlot, bio: BioSlot?) {
-        delegate.commit(generation, slot, bio)
-        if (failReadAfterNextCommit) {
-            failReadAfterNextCommit = false
-            armed = true
-        }
-    }
-
-    override suspend fun readState(): KeyState? {
-        if (armed) {
-            armed = false
-            throw failure()
-        }
-        return delegate.readState()
-    }
-}
-
-/**
  * A vault with scripted answers for the classification and slot-commit tests (testing.md L-13, L-41): it counts
  * every `commit`, makes the next one throw [failNextCommit] before anything is written, and answers the next
  * `unlockWithBiometric` with [nextBiometricUnlock] without using the cipher.

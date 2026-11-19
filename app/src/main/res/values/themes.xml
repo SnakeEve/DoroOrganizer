@@ -4,4 +4,11 @@
     <style name="Theme.Doro" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/window_background</item>
     </style>
+
+    <!-- The launch theme of MainActivity (ui.md § 13.6); installSplashScreen() switches to Theme.Doro. -->
+    <style name="Theme.Doro.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/window_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Doro</item>
+    </style>
 </resources>

@@ -140,6 +140,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.lifecycle.process) // ProcessLifecycleOwner: AppTime refresh (architecture.md § Time)
     implementation(libs.androidx.datastore.preferences) // SettingsStore, the only DataStore user (DEC-09)
+    implementation(libs.androidx.biometric) // AppLockController's BiometricGateway, the only importer (DEC-04, DEC-65)
+    implementation(libs.androidx.core.splashscreen) // the held launch splash (architecture.md § MainActivity startup order)
 
     testImplementation(libs.junit)
     testImplementation(libs.org.json) // Android's org.json is a stub on the JVM
@@ -150,6 +152,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.kotlinx.coroutines.test) // virtual time for the AppTime wiring
     androidTestImplementation(libs.turbine) // waits for Flow emissions (testing.md § 1)
+    androidTestImplementation(libs.androidx.test.espresso.intents) // answers the API 28–29 credential screen (L-19)
     androidTestUtil(libs.androidx.test.orchestrator)
 }
 

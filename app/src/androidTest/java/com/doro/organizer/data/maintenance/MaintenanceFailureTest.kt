@@ -8,6 +8,7 @@ import com.doro.organizer.core.result.AppError
 import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.core.result.InputRule
 import com.doro.organizer.data.HolderState
+import com.doro.organizer.debug.ReadBackFailingVault
 import com.doro.organizer.debug.RecordingDocumentsProvider
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.security.KeyFailure
@@ -15,7 +16,6 @@ import com.doro.organizer.security.KeyVaultException
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.MaintenanceSetup
-import com.doro.organizer.testing.ReadBackFailingVault
 import com.doro.organizer.testing.SeedGenerator
 import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.maintenanceFiles

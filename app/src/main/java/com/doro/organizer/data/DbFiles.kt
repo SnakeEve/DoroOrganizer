@@ -1,5 +1,6 @@
 package com.doro.organizer.data
 
+import android.content.Context
 import androidx.core.util.AtomicFile
 import java.io.File
 import net.zetetic.database.sqlcipher.SQLiteDatabase
@@ -74,12 +75,24 @@ class DbFiles(val databasesDir: File, val noBackupDir: File, cacheDir: File) {
         AtomicFile(resetMarker).delete()
     }
 
-    private companion object {
+    companion object {
+        /**
+         * The production roots: the directories `getDatabasePath`, `noBackupFilesDir` and `cacheDir` name, derived from
+         * `applicationInfo.dataDir` because those getters create the directory on the calling thread, while
+         * construction does no I/O (architecture.md § Dependency injection). [ensureDirs] creates them in E1;
+         * `cache/` exists from installation. `noBackupDir` is the directory `DefaultKeyVault.create` keeps
+         * `db-state.json` in, because every commit syncs the key-state's directory through it.
+         */
+        fun forApp(context: Context): DbFiles {
+            val dataDir = File(context.applicationInfo.dataDir)
+            return DbFiles(File(dataDir, "databases"), File(dataDir, "no_backup"), File(dataDir, "cache"))
+        }
+
         /** The main file and the sidecars whose absence makes a generation deleted. */
-        val SIDECARS = listOf("", "-wal", "-shm", "-journal")
+        private val SIDECARS = listOf("", "-wal", "-shm", "-journal")
 
         /** (number, file) of every generation file name in [dir]. */
-        fun generationFiles(dir: File): List<Pair<Long, File>> =
+        private fun generationFiles(dir: File): List<Pair<Long, File>> =
             dir.listFiles().orEmpty().mapNotNull { file -> generationOf(file.name)?.let { it to file } }
     }
 

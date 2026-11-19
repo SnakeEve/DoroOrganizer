@@ -7,5 +7,10 @@
             android:name=".debug.RecordingDocumentsProvider"
             android:authorities="${applicationId}.testdocs"
             android:exported="false" />
+        <!-- testing.md § 5 (L-15): the process that DbMaintenance runs in until the fault hook kills it. -->
+        <service
+            android:name=".debug.CrashTestService"
+            android:exported="false"
+            android:process=":crashtest" />
     </application>
 </manifest>

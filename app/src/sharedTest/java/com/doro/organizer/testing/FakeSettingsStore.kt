@@ -27,6 +27,10 @@ class FakeSettingsStore(initial: Settings = Settings()) : SettingsStore {
     @Volatile
     var failReads = false
 
+    /** The write that makes [edits] reach this count, and every later one, fails as with [failEdits]. */
+    @Volatile
+    var failEditsFrom = Int.MAX_VALUE
+
     @Volatile
     var edits = 0
         private set
@@ -94,7 +98,7 @@ class FakeSettingsStore(initial: Settings = Settings()) : SettingsStore {
 
     /** One atomic write: refused as a whole while [failEdits] is set. */
     private fun update(change: () -> Unit) = synchronized(lock) {
-        if (failEdits) throw IOException("injected settings write failure")
+        if (failEdits || edits + 1 >= failEditsFrom) throw IOException("injected settings write failure")
         change()
         edits++
         if (visible.value != null) visible.value = values

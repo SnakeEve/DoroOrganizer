@@ -39,7 +39,8 @@ import org.junit.runner.RunWith
  * when the database password of a restore from `Corrupt` fails in the Keystore layer, the fingerprint is asked once
  * more if and only if the slot is live, at most once per restore, and nothing is counted or committed when it does not
  * give the key. Every case runs with the KEK alias deleted after the gate reached `Corrupt`. The prompt counts,
- * `reportPasswordKekFailure()` and the `kekBroken` flag are the gate and Compose halves (SPEC T14, T19).
+ * `reportPasswordKekFailure()` and the `kekBroken` flag are the gate half, `session.RestoreKeyGateTest`, and
+ * the Compose half (SPEC T19).
  */
 @RunWith(AndroidJUnit4::class)
 class RestoreKekFallbackTest {

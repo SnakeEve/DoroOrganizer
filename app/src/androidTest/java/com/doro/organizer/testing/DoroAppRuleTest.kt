@@ -32,7 +32,7 @@ class DoroAppRuleTest {
     fun rule_installsContainerWithOverridesBeforeTest_andCancelsScopeAfter() {
         val dispatchers = AppDispatchers(Dispatchers.Unconfined, Dispatchers.Unconfined, Dispatchers.Unconfined)
         val scope = CoroutineScope(Job())
-        val rule = DoroAppRule {
+        val rule = DoroAppRule(autoStart = false) {
             this.dispatchers = dispatchers
             applicationScope = scope
         }
@@ -52,7 +52,7 @@ class DoroAppRuleTest {
     fun rule_installsTimeAndLifecycleOverrides_andConnectsNoFakeClock() {
         val time = FakeAppTime()
         val process = TestProcessLifecycle()
-        val rule = DoroAppRule {
+        val rule = DoroAppRule(autoStart = false) {
             appTime = time
             processLifecycle = process
         }
@@ -66,7 +66,7 @@ class DoroAppRuleTest {
 
     @Test
     fun rule_withoutOverrides_keepsProductionMembers() {
-        val rule = DoroAppRule()
+        val rule = DoroAppRule(autoStart = false)
 
         rule.run {
             assertSame(Dispatchers.IO, app.container.dispatchers.io)
