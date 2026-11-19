@@ -30,8 +30,8 @@ import kotlinx.coroutines.withContext
  * The production [KeyVault] (security.md § 3). [stateFile] is `noBackupFilesDir/db-state.json` (DEC-80).
  *
  * Seams that only tests replace (security.md § 3.6): [kek] (the Keystore half of the KEK layer), [newSecret] (the
- * allocator of every DEK, password KEK, outer-layer plaintext and raw key, so tests can check the zeroing) and [kdf]
- * (the password derivation, so tests can count derivations).
+ * allocator of every DEK, password KEK, outer-layer plaintext and raw key, so tests can check the zeroing), [kdf]
+ * (the password derivation, so tests can count derivations) and [bio] (the Keystore half of the biometric slot).
  *
  * Locking: every public member enters [locked] exactly once and calls only private `*Locked` helpers, which never
  * lock; Kotlin's Mutex is not reentrant, so a public member calling another would hang the cold start (security.md
@@ -45,10 +45,19 @@ class DefaultKeyVault(
     private val dispatchers: AppDispatchers,
     private val newSecret: (Int) -> ByteArray = ::ByteArray,
     private val kdf: (password: ByteArray, salt: ByteArray, iterations: Int) -> ByteArray = ::pbkdf2Sha256,
+    bio: BioKeystore = AndroidBioKeystore(),
 ) : KeyVault {
     private val mutex = Mutex()
     private val atomicFile = AtomicFile(stateFile)
     private val random = SecureRandom()
+    private val biometric = BioSlotCrypto(bio, dispatchers, newSecret)
+
+    /**
+     * The generation whose `PASSWORD` slot failed its KEK check during a fingerprint unlock (security.md § 3.7.3).
+     * The next `prepare(PASSWORD, …)` (the fingerprint reset's) checks that KEK again and replaces it once if it still
+     * fails (§ 3.1, § 4.3); a KEK that works again is reused, because the committed slot still needs it.
+     */
+    private var brokenKekGeneration: Long? = null
 
     /**
      * The slot the last `prepare(PASSWORD, …)` returned: committing it means the user has just typed the new password
@@ -137,14 +146,65 @@ class DefaultKeyVault(
     override suspend fun eraseState() = locked {
         freshSlot = null
         memoryBackoff = null
+        brokenKekGeneration = null
         withContext(dispatchers.io) {
             atomicFile.delete() // the encrypted data is unreadable from here on
             stateFile.parentFile?.let(::syncDirectory)
             deleteKekLocked()
         }
+        biometric.deleteBioKeyLocked()
     }
 
     override suspend fun deleteKek() = locked { withContext(dispatchers.io) { deleteKekLocked() } }
+
+    override suspend fun biometricSlotStatus(): BioSlotStatus = locked { biometric.statusLocked(committedStateOrNullLocked()) }
+
+    override suspend fun biometricUnlockCipher(): SlotCipherResult =
+        locked { biometric.unlockCipherLocked(committedStateOrNullLocked()) }
+
+    override suspend fun unlockWithBiometric(cipher: SlotCipher): UnlockResult {
+        // An arm cipher here would encrypt 48 bytes into 64 and kill a valid slot: a caller bug must crash (§ 3.7.3).
+        require(cipher.use == SlotUse.Unlock) { "not an unlock cipher" }
+        return locked {
+            when (val opened = biometric.unwrapLocked(committedStateOrNullLocked(), cipher)) {
+                is SlotDek.Failed -> opened.result
+                is SlotDek.Released -> {
+                    val rawKey = opened.dek.zeroAfter { sqlcipherRawKey(it, newSecret) }
+                    // A programming error in the KEK check must not drop the raw key unzeroed (V16).
+                    val kekBroken = try {
+                        kekBrokenLocked(opened.state)
+                    } catch (t: Throwable) {
+                        rawKey.fill(0)
+                        throw t
+                    }
+                    UnlockResult.Key(rawKey, kekBroken)
+                }
+            }
+        }
+    }
+
+    override suspend fun verifyBiometric(cipher: SlotCipher): UnlockResult {
+        require(cipher.use == SlotUse.Unlock) { "not an unlock cipher" }
+        return locked {
+            when (val opened = biometric.unwrapLocked(committedStateOrNullLocked(), cipher)) {
+                is SlotDek.Failed -> opened.result
+                is SlotDek.Released -> {
+                    opened.dek.fill(0) // proven by the tag; no raw key is built
+                    UnlockResult.Verified(kekBroken = kekBrokenLocked(opened.state))
+                }
+            }
+        }
+    }
+
+    override suspend fun biometricArmCipher(): SlotCipherResult = locked { biometric.armCipherLocked(committedStateOrNullLocked()) }
+
+    override suspend fun wrapForBiometric(cipher: SlotCipher, liveRawKey: ByteArray): WrapResult {
+        // Before any Keystore call, so a caller bug is a crash and not a state change (§ 3.7.2).
+        require(cipher.use == SlotUse.Arm) { "not an arm cipher" }
+        return locked { biometric.wrapLocked(committedStateOrNullLocked(), cipher, liveRawKey) }
+    }
+
+    override suspend fun deleteBiometricKey() = locked { biometric.deleteBioKeyLocked() }
 
     override suspend fun isPasswordReminderDue(): Boolean = locked {
         // A timestamp that cannot be read counts as lost, and a lost timestamp counts as due (security.md § 5.6).
@@ -325,6 +385,24 @@ class DefaultKeyVault(
         }
     }
 
+    /**
+     * The KEK check of a fingerprint unlock (security.md § 3.7.3): the slot never touches the KEK, so the outer layer
+     * of the committed `PASSWORD` slot is unwrapped too (no password, no authentication) and its plaintext zeroed.
+     * True when it fails; the generation is then remembered for the KEK replacement of the fingerprint reset, whose
+     * `prepare` runs this check again. It never changes the unlock itself and is never KeyUnavailable while the slot
+     * works.
+     */
+    private suspend fun kekBrokenLocked(state: KeyState): Boolean {
+        val outer = outerUnwrapLocked(state.slot)
+        if (outer == null) {
+            brokenKekGeneration = state.generation
+            return true
+        }
+        outer.fill(0)
+        if (brokenKekGeneration == state.generation) brokenKekGeneration = null
+        return false
+    }
+
     /** Runs a Keystore [step] once more after 1 s when it fails, except for a tag failure (security.md § 5.2). */
     private suspend fun <T> retryOnce(step: () -> T): T = try {
         step()
@@ -336,7 +414,14 @@ class DefaultKeyVault(
 
     /** New DEK, both wraps for `PASSWORD` (a non-null [password]) or the KEK wrap for `DEVICE`, and the raw key. */
     private suspend fun prepareWrappedLocked(password: ByteArray?): PreparedKey {
-        val committedPlain = committedStateOrNullLocked()?.slot?.mode == KeyMode.PLAIN
+        val committed = committedStateOrNullLocked()
+        val committedPlain = committed?.slot?.mode == KeyMode.PLAIN
+        // The fingerprint reset after a kekBroken unlock: if the committed slot's outer layer still fails, the password
+        // can no longer open it and the commit replaces that slot, so the KEK is replaced once instead of reused
+        // (security.md § 3.1, § 4.3). The check runs again first: deleting a KEK that works would leave the committed
+        // slot unreadable if this operation then fails before its commit.
+        val replaceKek = password != null && committed != null && committed.generation == brokenKekGeneration &&
+            kekBrokenLocked(committed)
         val dek = newSecret(SECRET_SIZE).also(random::nextBytes)
         return dek.zeroAfter {
             val mode: KeyMode
@@ -365,27 +450,39 @@ class DefaultKeyVault(
             }
             // The inner wrap is what an offline password attack needs (security.md § 3.1): zeroed like a secret.
             val (outerIv, wrapped) = try {
-                outerWrapLocked(outerAad(mode, kdfParams, innerIv), outerInput, committedPlain)
+                outerWrapLocked(outerAad(mode, kdfParams, innerIv), outerInput, committedPlain, replaceKek)
             } finally {
                 if (outerInput !== dek) outerInput.fill(0)
             }
+            // Once: a retried reset reuses the KEK made here. A replacement that failed keeps the mark for the retry.
+            if (replaceKek) brokenKekGeneration = null
             PreparedKey(KeySlot(mode, outerIv, wrapped, innerIv, kdfParams), sqlcipherRawKey(dek, newSecret))
         }
     }
 
     /**
-     * The outer wrap with the KEK lifecycle of security.md § 3.1 and § 3.2: the KEK is generated only when missing;
-     * a StrongBox KEK created here that fails its self-check is replaced once by a non-StrongBox one; an existing
-     * KEK that fails is replaced only while the committed mode is `PLAIN` (no committed slot uses it). Each Keystore
-     * step is retried once after 1 s first (§ 5.2). Any other failure throws `KeyVaultException(KeyUnavailable)`
-     * before any export starts.
+     * The outer wrap with the KEK lifecycle of security.md § 3.1 and § 3.2: the KEK is generated only when missing,
+     * or replaced up front when [replaceKek] (a KEK found broken for the committed slot); a StrongBox KEK created here
+     * that fails its self-check is replaced once by a non-StrongBox one; an existing KEK that fails is replaced only
+     * while the committed mode is `PLAIN` (no committed slot uses it). Each Keystore step is retried once after 1 s
+     * first (§ 5.2). Any other failure throws `KeyVaultException(KeyUnavailable)` before any export starts.
      */
     private suspend fun outerWrapLocked(
         aad: ByteArray,
         input: ByteArray,
         committedPlain: Boolean,
+        replaceKek: Boolean,
     ): Pair<ByteArray, ByteArray> = withContext(dispatchers.io) {
-        var origin = keystoreStep { if (kek.containsAlias()) KekOrigin.Existing else generateKekLocked() }
+        var origin = keystoreStep {
+            when {
+                replaceKek -> {
+                    deleteKekLocked()
+                    generateKekLocked()
+                }
+                kek.containsAlias() -> KekOrigin.Existing
+                else -> generateKekLocked()
+            }
+        }
         var wrap = wrapAndCheckLocked(aad, input)
         while (wrap == null) {
             origin = when {
@@ -521,8 +618,6 @@ class DefaultKeyVault(
         /** The key-state file name in `noBackupFilesDir` (DEC-80). */
         const val STATE_FILE_NAME = "db-state.json"
 
-        private const val KEYSTORE_RETRY_DELAY_MS = 1_000L
-
         /** The production vault: `noBackupFilesDir/db-state.json` on AndroidKeyStore, with the default seams. */
         fun create(context: Context, settings: SettingsStore, appTime: AppTime, dispatchers: AppDispatchers) =
             DefaultKeyVault(
@@ -535,12 +630,15 @@ class DefaultKeyVault(
     }
 }
 
+/** The wait before the one retry of a failed Keystore step (security.md § 5.2, DEC-76). */
+internal const val KEYSTORE_RETRY_DELAY_MS = 1_000L
+
 /** The Keystore failure family of security.md § 5.2; anything else is a programming error and is not classified. */
-private fun Exception.isKeystoreFailure() =
+internal fun Exception.isKeystoreFailure() =
     this is GeneralSecurityException || this is ProviderException || this is IOException
 
 /** Runs [block] on this secret and zeroes it afterwards, whatever happens. */
-private inline fun <T> ByteArray.zeroAfter(block: (ByteArray) -> T): T = try {
+internal inline fun <T> ByteArray.zeroAfter(block: (ByteArray) -> T): T = try {
     block(this)
 } finally {
     fill(0)

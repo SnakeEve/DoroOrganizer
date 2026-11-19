@@ -45,3 +45,10 @@ internal fun passwordLayer(cipherMode: Int, passwordKek: ByteArray, iv: ByteArra
     cipher.updateAAD(PASSWORD_LAYER_AAD)
     return cipher.doFinal(input)
 }
+
+/**
+ * The AAD of the biometric slot: binds it to the password slot it was armed next to, whose `outerIv` is new for
+ * every wrap of every DEK, so a stale `bioSlot` next to a newer slot fails its tag (security.md § 3.7.2).
+ */
+internal fun bioSlotAad(outerIv: ByteArray): ByteArray =
+    "doro.bio.v1:${base64Encoder.encodeToString(outerIv)}".toByteArray(Charsets.US_ASCII)

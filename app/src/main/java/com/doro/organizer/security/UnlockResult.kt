@@ -10,7 +10,7 @@ sealed interface UnlockResult {
         override fun toString() = "Key(kekBroken=$kekBroken)"
     }
 
-    /** `verifyPassword`: correct, nothing returned. */
+    /** `verifyPassword` or `verifyBiometric`: correct, nothing returned. [kekBroken]: `verifyBiometric` only. */
     data class Verified(val kekBroken: Boolean = false) : UnlockResult
 
     /** A wrong password (counted), or empty or malformed input (not counted). */
@@ -21,6 +21,12 @@ sealed interface UnlockResult {
 
     /** A `PASSWORD` slot and no password supplied. */
     data object PasswordNeeded : UnlockResult
+
+    /**
+     * The biometric slot path failed (security.md § 3.7.4); never KeyUnavailable. [invalidated]: the slot is dead
+     * (tag failure, wrong length, judged dead after repeated failures) and its alias is deleted.
+     */
+    data class SlotFailed(val invalidated: Boolean) : UnlockResult
 
     /** KeyUnavailable (security.md § 5.2): the Keystore layer failed or the key-state is unusable. */
     data object KeyFailed : UnlockResult

@@ -2,7 +2,12 @@ package com.doro.organizer.testing
 
 import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.core.coroutines.AppDispatchers
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import com.doro.organizer.security.AndroidBioKeystore
 import com.doro.organizer.security.AndroidKekKeystore
+import com.doro.organizer.security.BIO_ALIAS
+import com.doro.organizer.security.BioKeystore
 import com.doro.organizer.security.CALIBRATION_ITERATIONS
 import com.doro.organizer.security.DefaultKeyVault
 import com.doro.organizer.security.KEK_ALIAS
@@ -19,8 +24,8 @@ import org.junit.Assert.assertTrue
 import org.junit.rules.ExternalResource
 
 /**
- * A fresh key-state directory per test and no KEK before or after it, so vault tests never see each other's
- * Keystore entries (the Orchestrator's `pm clear` removes them as well). Declare it as a `@get:Rule`.
+ * A fresh key-state directory per test and no KEK or biometric key before or after it, so vault tests never see
+ * each other's Keystore entries (the Orchestrator's `pm clear` removes them as well). Declare it as a `@get:Rule`.
  */
 class KeyVaultRule : ExternalResource() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext!!
@@ -31,6 +36,7 @@ class KeyVaultRule : ExternalResource() {
 
     override fun before() {
         deleteKekAlias()
+        deleteBioAlias()
         val root = File(context.noBackupFilesDir, "test-key-vaults")
         check(root.isDirectory || root.mkdirs()) { "cannot create the key-state test root" }
         stateFile = File(Files.createTempDirectory(root.toPath(), "kv").toFile(), DefaultKeyVault.STATE_FILE_NAME)
@@ -39,6 +45,7 @@ class KeyVaultRule : ExternalResource() {
     override fun after() {
         stateFile.parentFile?.deleteRecursively()
         deleteKekAlias()
+        deleteBioAlias()
     }
 
     /** The production vault on [stateFile] with the given seams. */
@@ -49,11 +56,16 @@ class KeyVaultRule : ExternalResource() {
         kek: KekKeystore = AndroidKekKeystore.forDevice(context),
         newSecret: (Int) -> ByteArray = ::ByteArray,
         kdf: (ByteArray, ByteArray, Int) -> ByteArray = TestKdf(time),
-    ) = DefaultKeyVault(stateFile, kek, settings, time, dispatchers, newSecret, kdf)
+        bio: BioKeystore = FaultyBioKeystore(),
+    ) = DefaultKeyVault(stateFile, kek, settings, time, dispatchers, newSecret, kdf, bio)
 
     fun kekExists(): Boolean = androidKeyStore().containsAlias(KEK_ALIAS)
 
     fun deleteKekAlias() = androidKeyStore().deleteEntry(KEK_ALIAS)
+
+    fun bioKeyExists(): Boolean = androidKeyStore().containsAlias(BIO_ALIAS)
+
+    fun deleteBioAlias() = androidKeyStore().deleteEntry(BIO_ALIAS)
 
     private fun androidKeyStore() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 }
@@ -153,6 +165,76 @@ class FaultyKekKeystore(
     override fun doFinal(cipher: Cipher, input: ByteArray): ByteArray = call(KekOp.DoFinal) { delegate.doFinal(cipher, input) }
 
     private fun <T> call(op: KekOp, block: () -> T): T {
+        val failure = synchronized(this) {
+            counts[op] = (counts[op] ?: 0) + 1
+            failures[op]?.removeFirstOrNull()
+        }
+        if (failure != null) throw failure
+        return block()
+    }
+}
+
+/**
+ * The test configuration of the biometric seam (testing.md § 5, technique "Biometric slot"): the production alias,
+ * key size, GCM mode and purposes, without the user-authentication parameters, so a `Cipher` works without a touch.
+ * `BiometricKeySpecTest` pins the production spec.
+ */
+fun testBioKeySpec(): KeyGenParameterSpec =
+    KeyGenParameterSpec.Builder(BIO_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+        .setKeySize(256)
+        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+        .build()
+
+/** The operations of [BioKeystore], for scripting failures. */
+enum class BioOp { ContainsAlias, Generate, Delete, InitEncrypt, InitDecrypt, UpdateAad, DoFinal }
+
+/**
+ * The biometric seam of security.md § 3.6 over the real AndroidKeyStore in the test configuration, with scripted
+ * failures: each [failNext] makes the next call of that operation throw. [doFinalOutputs] keeps every array that
+ * `doFinal` returned, so a test can check that the vault zeroed the provider-allocated plaintext; [replaceNextOutput]
+ * swaps the next `doFinal` result for an array of another length.
+ */
+class FaultyBioKeystore(private val delegate: BioKeystore = AndroidBioKeystore(::testBioKeySpec)) : BioKeystore {
+    private val failures = mutableMapOf<BioOp, ArrayDeque<Exception>>()
+    private val counts = mutableMapOf<BioOp, Int>()
+    private val outputs = mutableListOf<ByteArray>()
+    private var nextOutputSize: Int? = null
+
+    fun failNext(op: BioOp, error: Exception) = synchronized(this) {
+        failures.getOrPut(op) { ArrayDeque() }.addLast(error)
+    }
+
+    fun replaceNextOutput(size: Int) = synchronized(this) { nextOutputSize = size }
+
+    fun calls(op: BioOp): Int = synchronized(this) { counts[op] ?: 0 }
+
+    /** The number of calls of every operation together. */
+    fun totalCalls(): Int = synchronized(this) { counts.values.sum() }
+
+    fun doFinalOutputs(): List<ByteArray> = synchronized(this) { outputs.toList() }
+
+    override fun containsAlias(): Boolean = call(BioOp.ContainsAlias) { delegate.containsAlias() }
+
+    override fun generate() = call(BioOp.Generate) { delegate.generate() }
+
+    override fun delete() = call(BioOp.Delete) { delegate.delete() }
+
+    override fun initEncrypt(): Cipher = call(BioOp.InitEncrypt) { delegate.initEncrypt() }
+
+    override fun initDecrypt(iv: ByteArray): Cipher = call(BioOp.InitDecrypt) { delegate.initDecrypt(iv) }
+
+    override fun updateAad(cipher: Cipher, aad: ByteArray) = call(BioOp.UpdateAad) { delegate.updateAad(cipher, aad) }
+
+    override fun doFinal(cipher: Cipher, input: ByteArray): ByteArray = call(BioOp.DoFinal) {
+        val real = delegate.doFinal(cipher, input)
+        val size = synchronized(this) { nextOutputSize.also { nextOutputSize = null } }
+        val result = if (size == null) real else ByteArray(size) { 0x33 }.also { real.fill(0) }
+        synchronized(this) { outputs += result }
+        result
+    }
+
+    private fun <T> call(op: BioOp, block: () -> T): T {
         val failure = synchronized(this) {
             counts[op] = (counts[op] ?: 0) + 1
             failures[op]?.removeFirstOrNull()

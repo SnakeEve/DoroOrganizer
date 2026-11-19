@@ -24,3 +24,27 @@ internal fun sqlcipherRawKey(dek: ByteArray, newSecret: (Int) -> ByteArray): Byt
     }
     return out
 }
+
+/**
+ * The DEK of the raw key [raw], the inverse of [sqlcipherRawKey] without a `String` (security.md § 3.7.2), in an
+ * array from [newSecret]; the caller zeroes it. Anything but `x'<64 lowercase hex>'` is a caller bug.
+ */
+internal fun dekFromRawKey(raw: ByteArray, newSecret: (Int) -> ByteArray): ByteArray {
+    require(
+        raw.size == RAW_KEY_SIZE && raw[0] == 'x'.code.toByte() && raw[1] == '\''.code.toByte() &&
+            raw[RAW_KEY_SIZE - 1] == '\''.code.toByte(),
+    ) { "raw key" } // constant message (DEC-70)
+    fun nibble(b: Byte): Int = when (val c = b.toInt()) {
+        in 0x30..0x39 -> c - 0x30
+        in 0x61..0x66 -> c - 0x61 + 10
+        else -> throw IllegalArgumentException("raw key")
+    }
+    val out = newSecret(SECRET_SIZE)
+    try {
+        for (i in 0 until SECRET_SIZE) out[i] = ((nibble(raw[2 + 2 * i]) shl 4) or nibble(raw[3 + 2 * i])).toByte()
+    } catch (e: IllegalArgumentException) {
+        out.fill(0) // half a DEK is still secret
+        throw e
+    }
+    return out
+}

@@ -29,8 +29,10 @@ interface KeyVault {
 
     /**
      * A new DEK and its slot for [target]; [newPassword] is required (non-empty) for `PASSWORD` and must be null
-     * otherwise. Persists nothing but a missing KEK, or a broken one while the committed mode is `PLAIN` (security.md
-     * § 3.1). Throws [KeyVaultException] (`KeyUnavailable`) when the KEK or the password layer fails.
+     * otherwise. Persists nothing but a missing KEK, or a replaced one: a broken KEK while the committed mode is
+     * `PLAIN`, or, once and for `PASSWORD` only, the KEK a fingerprint unlock found broken for the committed generation
+     * and that still fails when checked again (the fingerprint reset, security.md § 3.1, § 4.3). Throws [KeyVaultException] (`KeyUnavailable`) when the KEK or the password
+     * layer fails.
      */
     suspend fun prepare(target: KeyMode, newPassword: ByteArray?): PreparedKey
 
@@ -41,11 +43,51 @@ interface KeyVault {
      */
     suspend fun commit(generation: Long, slot: KeySlot, bio: BioSlot?)
 
-    /** Erase (security.md § 5.4): deletes the key-state file, then the KEK; failed deletes are ignored. */
+    /**
+     * Erase (security.md § 5.4): deletes the key-state file, then the KEK, then the biometric key; failed deletes
+     * are ignored.
+     */
     suspend fun eraseState()
 
     /** Deletes the KEK; failures are ignored. */
     suspend fun deleteKek()
+
+    // The biometric slot (security.md § 3.7). These never touch the backoff values or `passwordVerifiedAt`, never
+    // rewrite the key-state file, and answer a Keystore failure of the biometric key with a result, never a throw.
+
+    /**
+     * The committed slot's condition. Asks the Keystore only whether the alias exists (no operation, no
+     * authentication): the single slot query of `UnlockPolicy`, availability and `reconcileLock`. An alias check that
+     * fails twice (retried after 1 s, § 5.2) is `Dead`: a slot that cannot be looked up is not live.
+     */
+    suspend fun biometricSlotStatus(): BioSlotStatus
+
+    /**
+     * A DECRYPT cipher on the committed `bioSlot` (security.md § 3.7.3): `NoSlot`, `Invalidated` (alias deleted, the
+     * dead `bioSlot` stays in the file) or `Unavailable` (slot kept) when none can be prepared.
+     */
+    suspend fun biometricUnlockCipher(): SlotCipherResult
+
+    /**
+     * The raw key through the slot with an authorized `Unlock` cipher: `Key` (with `kekBroken` when the password
+     * slot's KEK layer fails), `SlotFailed` or `KeyFailed`. Cold start, Restore from Corrupt, fingerprint reset.
+     */
+    suspend fun unlockWithBiometric(cipher: SlotCipher): UnlockResult
+
+    /** As [unlockWithBiometric] but builds no raw key: `Verified(kekBroken)`. Return from background, lock off. */
+    suspend fun verifyBiometric(cipher: SlotCipher): UnlockResult
+
+    /** A new biometric key and its ENCRYPT cipher (security.md § 3.7.2); `NoSlot` unless the mode is `PASSWORD`. */
+    suspend fun biometricArmCipher(): SlotCipherResult
+
+    /**
+     * Wraps the DEK of [liveRawKey] with an authorized `Arm` cipher (security.md § 3.7.2). Persists nothing:
+     * `DbMaintenance` commits the slot. [liveRawKey] stays the caller's.
+     */
+    suspend fun wrapForBiometric(cipher: SlotCipher, liveRawKey: ByteArray): WrapResult
+
+    /** Deletes the alias `doro_bio_v1`, best effort and idempotent; never touches the file. */
+    suspend fun deleteBiometricKey()
 
     /** Whether the 14-day reminder is due (DEC-74, security.md § 5.6). */
     suspend fun isPasswordReminderDue(): Boolean
