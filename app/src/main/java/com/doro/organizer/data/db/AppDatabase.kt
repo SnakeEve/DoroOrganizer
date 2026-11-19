@@ -21,6 +21,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
+    abstract fun noteDao(): NoteDao
+
+    abstract fun personDao(): PersonDao
+
+    abstract fun projectDao(): ProjectDao
+
     companion object {
         /** The schema version; every change raises it by one and ships a migration and its test (DEC-88). */
         const val VERSION = 1

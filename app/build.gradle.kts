@@ -148,6 +148,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.kotlinx.coroutines.test) // virtual time for the AppTime wiring
+    androidTestImplementation(libs.turbine) // waits for Flow emissions (testing.md § 1)
     androidTestUtil(libs.androidx.test.orchestrator)
 }
 

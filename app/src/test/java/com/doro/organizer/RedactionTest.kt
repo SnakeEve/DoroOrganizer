@@ -1,12 +1,22 @@
 package com.doro.organizer
 
+import com.doro.organizer.data.db.EntityOptionRow
+import com.doro.organizer.data.db.NoteDetailRow
 import com.doro.organizer.data.db.NoteEntity
 import com.doro.organizer.data.db.NotePersonCrossRef
 import com.doro.organizer.data.db.NoteProjectCrossRef
 import com.doro.organizer.data.db.PersonEntity
+import com.doro.organizer.data.db.NoteRowRaw
 import com.doro.organizer.data.db.ProjectEntity
+import com.doro.organizer.model.DateFilter
+import com.doro.organizer.model.EntityRef
+import com.doro.organizer.model.NoteFilter
+import com.doro.organizer.model.NoteQuery
+import com.doro.organizer.model.NoteRow
+import com.doro.organizer.model.Perspective
 import com.doro.organizer.testing.SENTINEL
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /**
@@ -62,5 +72,95 @@ class RedactionTest {
     fun crossRefs_printIdsOnly() {
         assertEquals("NotePersonCrossRef(noteId=1, personId=2)", NotePersonCrossRef(1, 2).toString())
         assertEquals("NoteProjectCrossRef(noteId=3, projectId=4)", NoteProjectCrossRef(3, 4).toString())
+    }
+
+    @Test
+    fun noteRowRaw_printsIdOnly() {
+        val raw = NoteRowRaw(
+            id = 10,
+            preview = SENTINEL,
+            date = null,
+            checked = false,
+            checkedAt = null,
+            createdAt = 1,
+            updatedAt = 2,
+            personsJson = SENTINEL,
+            projectsJson = SENTINEL,
+        )
+
+        assertEquals("NoteRowRaw(id=10)", raw.toString())
+    }
+
+    @Test
+    fun noteDetailRow_printsIdOnly() {
+        val row = NoteDetailRow(
+            id = 11,
+            content = SENTINEL,
+            date = null,
+            checked = false,
+            checkedAt = null,
+            createdAt = 1,
+            updatedAt = 2,
+        )
+
+        assertEquals("NoteDetailRow(id=11)", row.toString())
+    }
+
+    @Test
+    fun entityOptionRow_printsIdOnly() {
+        assertEquals("EntityOptionRow(id=12)", EntityOptionRow(12, SENTINEL, 1, 3, true).toString())
+    }
+
+    @Test
+    fun noteRow_printsIdOnly() {
+        val links = listOf(EntityRef(1, SENTINEL))
+        val row = NoteRow(
+            id = 13,
+            preview = SENTINEL,
+            date = null,
+            checked = false,
+            checkedAt = null,
+            createdAt = 1,
+            updatedAt = 2,
+            persons = links,
+            projects = links,
+        )
+
+        assertEquals("NoteRow(id=13)", row.toString())
+    }
+
+    @Test
+    fun entityRef_printsIdOnly() {
+        assertEquals("EntityRef(id=14)", EntityRef(14, SENTINEL).toString())
+    }
+
+    @Test
+    fun noteFilter_printsSearchLengthOnly() {
+        val filter = NoteFilter(
+            perspective = Perspective.Date,
+            primaryDays = DateFilter.Range(5, 6),
+            search = SENTINEL,
+        )
+
+        val text = filter.toString()
+        assertFalse(text, text.contains(SENTINEL))
+        assertEquals(
+            "NoteFilter(perspective=Date, primaryId=null, primaryDays=Range(fromDay=5, toDay=6), personId=null, " +
+                "projectId=null, date=Any, search=<${SENTINEL.length} chars>)",
+            text,
+        )
+    }
+
+    @Test
+    fun noteQuery_printsPatternLengthOnly() {
+        val query = NoteQuery(1, 2, orphanOnly = false, undatedOnly = true, fromDay = 3, toDay = 4, SENTINEL)
+
+        val text = query.toString()
+        assertFalse(text, text.contains(SENTINEL))
+        assertEquals(
+            "NoteQuery(personId=1, projectId=2, orphanOnly=false, undatedOnly=true, fromDay=3, toDay=4, " +
+                "searchPattern=<${SENTINEL.length} chars>)",
+            text,
+        )
     }
 }
