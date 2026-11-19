@@ -33,30 +33,32 @@ Rules:
 
 ```kotlin
 // package com.doro.organizer.data — used only by DatabaseHolder and DbMaintenance
-class DbFiles(val databasesDir: File) {               // the caller chooses the root; tests pass a temporary directory
+class DbFiles(val databasesDir: File, val noBackupDir: File, cacheDir: File) {   // the caller chooses the roots; tests pass temporary directories
     fun live(gen: Long) = File(databasesDir, "doro-$gen.db")
-
-    // Added with DbMaintenance and the startup reconciliation, which are their first users (not in the code before):
-    val stagingDir: File                              // <noBackupFilesDir>/staging
-    val restoreDir: File                              // <noBackupFilesDir>/restore
+    val stagingDir: File                              // <noBackupDir>/staging
+    val restoreDir: File                              // <noBackupDir>/restore
     val shareDir: File                                // <cacheDir>/share
-    val resetMarker: File                             // <noBackupFilesDir>/data-reset.pending
-    fun ensureDirs()                                  // mkdirs() for databasesDir, stagingDir, restoreDir, shareDir
+    val resetMarker: File                             // <noBackupDir>/data-reset.pending
+    fun ensureDirs()                                  // mkdirs() for databasesDir, stagingDir, restoreDir, shareDir; IllegalStateException when one cannot be created
     fun generationsOnDisk(): Map<Long, Set<File>>     // number -> existing files of that set (main and sidecars)
+    fun generationNumbersInUse(): Set<Long>           // every number named by a generation file in databasesDir or stagingDir (Generation numbers)
     fun hasMainFile(gen: Long): Boolean               // live(gen).isFile
     fun deleteGeneration(gen: Long): Boolean          // see the rules above
-    fun clearDir(dir: File)                           // deletes the children of stagingDir, restoreDir or shareDir
-    fun deleteEverything()                            // Erase: every generation set, the three temp dirs, the marker
+    fun clearDir(dir: File): Boolean                  // deletes the children of stagingDir, restoreDir or shareDir; false when a child is still there
+
+    // Added with their first callers:
+    fun deleteEverything()                            // Erase (SPEC T13): every generation set, the three temp dirs, the marker
 
     companion object {
         // Production factory, added when AppContainer.files is wired (SPEC T14):
-        fun forApp(context: Context): DbFiles          // databasesDir = context.getDatabasePath("doro-0.db").parentFile!! (<dataDir>/databases)
+        fun forApp(context: Context): DbFiles          // databasesDir = context.getDatabasePath("doro-0.db").parentFile!! (<dataDir>/databases), noBackupDir = context.noBackupFilesDir, cacheDir = context.cacheDir
     }
 }
 ```
 
 - The constructor takes plain `File` roots, never a `Context`, so instrumented tests point every root at a temporary directory (`TestDatabases.files`, [testing.md § 7](testing.md#7-fixtures-and-fakes)) and nothing in a test touches the app's real `databases/`. Only `forApp(context)` reads the `Context` paths listed at the top of this section.
-- Today (T9) the class holds only `databasesDir` and `live(gen)`, the members `DatabaseHolder` uses. When DbMaintenance adds the staging, restore and share directories and the marker, the constructor gains their roots as further `File` parameters (the `noBackupFilesDir` and `cacheDir` equivalents), which `forApp` fills from the `Context`; the members above keep their names and behavior. `deleteGeneration` and `clearDir` arrive with their first caller, so no member exists without a user.
+- `noBackupDir` must be the directory that holds `db-state.json`: the [generation commit](#generation-commit) and the [biometric slot commits](#biometric-slot-commits) make the key-state rewrite durable with `syncDirectory(files.noBackupDir)`, and the `KeyVault` surface does not expose its directory (security.md § 3.6; `data` may not import `security`). Production guarantees it by building both `DbFiles.forApp(context)` and `DefaultKeyVault.create(…)` on the same `context.noBackupFilesDir` (AppContainer, SPEC T14); the DbMaintenance tests pass the key-state directory of `KeyVaultRule` as `noBackupDir` (`maintenanceFiles`, [testing.md § 7](testing.md#7-fixtures-and-fakes)).
+- Build state (T12): every member above except `deleteEverything` (first caller Erase, T13) and `forApp` (first caller AppContainer, T14) exists; no member exists without a user. The pure name rules live in `data/GenerationNames.kt`: `generationOf(fileName)` (the number of a name matching the pattern above, else null) and `nextGeneration(committed, inUse)` ([Generation numbers](#generation-numbers)).
 
 ## Generations and commit
 
@@ -74,13 +76,13 @@ class DbFiles(val databasesDir: File) {               // the caller chooses the 
 
 ### Generation numbers
 
-- A new generation is `n = 1 + max(G, every number among the generation file names in databases/ and noBackupFilesDir/staging/)`, with `G = 0` when no valid key-state exists, computed by DbMaintenance while it holds the operation mutex. A new file therefore never shares its name, or a stale `-wal`, `-shm` or `-journal`, with an older file, and no database file is ever overwritten in place.
+- A new generation is `n = 1 + max(G, every number among the generation file names in databases/ and noBackupFilesDir/staging/)`, with `G = 0` when no valid key-state exists, computed by DbMaintenance while it holds the operation mutex as `nextGeneration(G, files.generationNumbersInUse())`. A new file therefore never shares its name, or a stale `-wal`, `-shm` or `-journal`, with an older file, and no database file is ever overwritten in place.
 - After Erase every generation file is gone, so numbering restarts at 1; there is nothing left to collide with.
 - Numbers order generations by creation: the highest-numbered file was created last.
 
 ### Generation commit
 
-`DbMaintenance.commitGeneration` is the only way a file becomes live (DEC-80, DEC-87). It is used by first run, key changes (the fingerprint password reset included), restore and Start fresh; the in-place variant (`staged = null`) is used only to adopt an existing plaintext file at startup.
+`commitGeneration` (an internal top-level function of `data.maintenance`, `GenerationCommit.kt`, called only by `DbMaintenance`) is the only way a file becomes live (DEC-80, DEC-87). It is used by first run, key changes (the fingerprint password reset included), restore and Start fresh; the in-place variant (`staged = null`) is used only to adopt an existing plaintext file at startup.
 
 Preconditions: the operation mutex is held; `staged` lies in `noBackupFilesDir/staging/`, is closed, has passed [target verification](#target-verification) and has no non-empty `-journal` or `-wal` next to it (`verifyTarget` removes empty ones, and any `-shm`); no connection is open on `staged` or on `databases/doro-<gen>.db`; Room is closed or open on a different generation; `gen` was computed as above; DbMaintenance has set its `commitStarted` flag, which the [operation frame](#operation-frame) uses to classify a failure that escapes this function.
 
@@ -88,20 +90,24 @@ Preconditions: the operation mutex is held; `staged` lies in `noBackupFilesDir/s
 enum class CommitOutcome { Committed, NotCommitted, Unknown }
 class CommitResult(val outcome: CommitOutcome, val cause: Throwable? = null)
 
-// DbMaintenance; dispatchers.io. Nothing in here can be cancelled. Throwable, not Exception, is caught on purpose.
-suspend fun commitGeneration(staged: File?, gen: Long, slot: KeySlot, bio: BioSlot?): CommitResult = withContext(NonCancellable) {
+// data.maintenance, internal; dispatchers.io. Nothing in here can be cancelled. Throwable, not Exception, is caught on purpose.
+// step(X) is the operation's step callback: it runs faultHook.before(op, X) and publishes Running(op, X).
+internal suspend fun commitGeneration(
+    files: DbFiles, keyVault: KeyVault, staged: File?, gen: Long, slot: KeySlot, bio: BioSlot?,
+    step: suspend (PipelineStep) -> Unit,
+): CommitResult = withContext(NonCancellable) {
     val live = files.live(gen)
     var renamed = false
     try {
         if (staged != null) {
-            fault(RENAME)
+            step(RENAME)
             RandomAccessFile(staged, "r").use { it.fd.sync() }      // 1. staged bytes are on disk
             check(files.deleteGeneration(gen))                      // 2. nothing stale under the new name
             Os.rename(staged.path, live.path)                       // 3. atomic: same filesystem
             renamed = true
             syncDirectory(files.databasesDir)                       // 4. the rename is durable before the commit
         }
-        fault(COMMIT)
+        step(COMMIT)
     } catch (t: Throwable) {                                        // nothing was committed yet, an Error included
         runCatching { if (renamed) files.deleteGeneration(gen) }    // never referenced
         return@withContext CommitResult(CommitOutcome.NotCommitted, t)
@@ -109,7 +115,7 @@ suspend fun commitGeneration(staged: File?, gen: Long, slot: KeySlot, bio: BioSl
     // From here on AtomicFile may already have renamed the key-state: no failure is "NotCommitted" until the read-back says so.
     val writeError: Throwable? = try { keyVault.commit(gen, slot, bio); null } catch (t: Throwable) { t }   // 5. THE COMMIT POINT; KeyVault writes exactly (gen, slot, bio)
     val committed = try {
-        syncDirectory(noBackupFilesDir)                             // 6. the commit is durable before anything is deleted
+        syncDirectory(files.noBackupDir)                            // 6. the commit is durable before anything is deleted
         val state = keyVault.readState()                            // 7. throws KeyVaultException when the file is invalid
         state != null && state.matches(gen, slot, bio)
     } catch (t: Throwable) {
@@ -214,7 +220,7 @@ A Restore or Start fresh commit replaces the data, so navigation, remembered sel
 1. `MARK_RESET`: before `RENAME`, DbMaintenance writes `noBackupFilesDir/data-reset.pending` through `androidx.core.util.AtomicFile`, containing `n` in decimal ASCII, and then calls `syncDirectory(noBackupFilesDir)`. `AtomicFile` syncs the file but not the directory entry its rename creates; without the directory sync a power cut after the key-state rename could keep the commit and lose the marker, and the replaced data would then keep the old navigation ids (an id can name a different row after a restore, [data-layer.md](data-layer.md)). The marker is therefore durable before `RENAME` and `COMMIT`.
 2. `DATA_RESET`: after `Committed`, DbMaintenance calls `SettingsStore.onDataReplaced()` and then deletes the marker with `AtomicFile.delete()`. The delete needs no directory sync: a lost delete only repeats a harmless reset.
 3. On `NotCommitted` the marker is deleted without a reset. On `Unknown` it is left for startup.
-4. Every startup reconciliation (step 5 below): if the marker exists, call `SettingsStore.onDataReplaced()` when the key-state is Valid and its `generation` equals the marker's number, or when the marker cannot be parsed (it cannot happen through `AtomicFile`; a reset is the safe side); then delete the marker. A Missing or Invalid key-state means that nothing was committed: every commit leaves a Valid key-state naming `n` (`AtomicFile` leaves either the old or the new file), so a restore or Start fresh from `KeyUnavailable` that died before its commit must not reset. If the process died after `onDataReplaced()` but before the marker was deleted, startup resets once more; that only increments `dataEpoch` again, which is harmless.
+4. Every startup reconciliation (step 5 below): if the marker exists, call `SettingsStore.onDataReplaced()` when the key-state is Valid and its `generation` equals the marker's number, or when the marker cannot be parsed (it cannot happen through `AtomicFile`; a reset is the safe side) or exists but cannot be read (an `IOException` other than `FileNotFoundException`, DEC-94); then delete the marker. A Missing or Invalid key-state means that nothing was committed: every commit leaves a Valid key-state naming `n` (`AtomicFile` leaves either the old or the new file), so a restore or Start fresh from `KeyUnavailable` that died before its commit must not reset. If the process died after `onDataReplaced()` but before the marker was deleted, startup resets once more; that only increments `dataEpoch` again, which is harmless.
 
 Key changes and backups never write the marker: they keep the data, so navigation and remembered selections stay valid.
 
@@ -261,7 +267,7 @@ Notes:
 
 ### Completing startup in Opening
 
-`DbMaintenance.completeStartup()` is the first call of effect E2, before `KeyVault` produces a key. It takes the operation mutex and executes the remembered decision; after success, or for `Proceed`, it is a no-op, so `Retry` (T20) simply calls it again. It returns `StartupCompletion { Done, Transient, KeyUnavailable }`, which E2 maps to continuing, `OpenFailed(Transient)` and `KeyFailed`.
+`DbMaintenance.completeStartup()` is the first call of effect E2, before `KeyVault` produces a key. It takes the operation mutex and executes the remembered decision; after success, or for `Proceed`, or when nothing is remembered, it is a no-op that returns `Done`, so `Retry` (T20) simply calls it again (DEC-94). A first run that ends `Transient` empties `staging/` (best effort), so its staged file never piles up across retries and the next attempt numbers its file as if this one never ran; after `Unknown` the next reconciliation empties it. It returns `StartupCompletion { Done, Transient, KeyUnavailable }`, which E2 maps to continuing, `OpenFailed(Transient)` and `KeyFailed`.
 
 | Decision | Work | On success |
 |---|---|---|
@@ -653,7 +659,7 @@ Context **DbMaintenance** (any operation; restore-candidate rows are in [Restore
 | Free-space precheck fails | StorageFull | `Err(StorageFull)`; nothing started, no `MaintenanceStarted` |
 | The frame cannot empty `staging/` or `restore/` (step 3) | Transient | `Err(DatabaseUnavailable)`; nothing started |
 | Storage full at any step before `COMMIT` | StorageFull | Rollback; `Err(StorageFull)` |
-| A Transient class of the base mapping (a lingering Room connection after the 2 s drain, a locking exception, an `IOException` on a staging file) at any step before `COMMIT` returned `Committed`, whichever connection threw it | Transient | Rollback; `Err(DatabaseUnavailable)`: nothing was changed, trying again may work |
+| A Transient class of the base mapping (a lingering Room connection after the 2 s drain, a locking exception, an `IOException` on a staging file) at any step before `COMMIT` returned `Committed`, whichever connection threw it | Transient | Rollback; `Err(DatabaseUnavailable)`: nothing was changed, trying again may work (DEC-92; the fault hook's `IOException` at such a step included) |
 | Live file as export source (backup, key change) fails `quick_check`, or reading it throws `SQLiteNotADatabaseException` or `SQLiteDatabaseCorruptException` | Corrupt | Nothing exported. `Reopen.StayClosed`, result `Err(DatabaseUnavailable)`, outcome `ReopenFailed(Corrupt)` (T29a → Corrupt screen). A backup is never written from such a source (DEC-83) |
 | A target verification check fails (`IllegalStateException` from `check`), or opening the target throws a non-Transient exception | Programming | Rollback; `Err(Unexpected)` |
 | `RENAME` fails | StorageFull if the errno says so, else Programming | Rollback (`NotCommitted`); `Err(StorageFull)` or `Err(Unexpected)` |
@@ -708,7 +714,8 @@ The UI maps each result to a string resource; the wording lives in [ui.md § 11 
 | `Err(Unexpected)` from the fingerprint password reset | Dialog `key_change_failed_title` on the screen that asked | The slot's key did not match the open database; nothing changed |
 | `Err(KeyUnavailable)`, `Err(DatabaseUnavailable)` from a biometric slot creation | As for `AuthFailed` above | Nothing changed; the startup password still works |
 | `Err(DatabaseUnavailable)` from a repository | Snackbar of the calling screen | The data could not be read or saved right now |
-| `Err(DatabaseUnavailable)` from Backup or key change | Dialog, on the Corrupt screen when the gate went there | The database was found damaged (or was no longer open), so nothing was exported or changed; earlier backups are unaffected |
+| `Err(DatabaseUnavailable)` from Backup or key change, the gate on the Corrupt screen (outcome `ReopenFailed(Corrupt)`) | Dialog on the Corrupt screen | The database was found damaged, so nothing was exported or changed; earlier backups are unaffected |
+| `Err(DatabaseUnavailable)` from Backup or key change otherwise (the holder was no longer open, the frame could not empty `staging/`, a Transient failure before `COMMIT`, DEC-92) | Dialog | The operation could not run right now; nothing was changed; try again (`maintenance_unavailable`, [ui.md § 9.6](ui.md#96-outcome-messages)) |
 | `Err(DatabaseUnavailable)` from another maintenance operation | Dialog | The operation could not run right now; nothing was changed; try again |
 | `Err(Busy)` | Nothing: the maintenance overlay already blocks the actions that could cause it. From a biometric slot creation (a restore may be waiting at one of its dialogs): `confirmWithPassword(EnableLock)` writes `security.app_lock = false` again, and a creation is offered again later. A slot removal never returns `Busy` | — |
 
@@ -764,7 +771,7 @@ interface DbMaintenance : BiometricSlotWriter {
 
 sealed interface MaintenanceStatus {
     data object Idle : MaintenanceStatus
-    /** fraction: 0..1 while a copy of known length runs (COPY_INPUT, WRITE_DOCUMENT), else null. */
+    /** fraction: 0..1 in whole percents (at most one update per percent) while a copy of known length runs (COPY_INPUT, WRITE_DOCUMENT), else null. */
     data class Running(val op: MaintenanceOp, val step: PipelineStep, val fraction: Float? = null) : MaintenanceStatus
     data class NeedsBackupPassword(val retry: Boolean) : MaintenanceStatus        // restore of an encrypted backup
     data class NeedsDatabasePassword(val error: AppError?) : MaintenanceStatus    // restore from Corrupt in PASSWORD mode
@@ -813,7 +820,8 @@ interface MaintenanceListener {                                               //
 - `SlotCipher` (package `security`, owned by [security.md](security.md) § 3.6) is the cipher of a `BiometricPrompt.CryptoObject` after `onAuthenticationSucceeded`, initialized by `KeyVault` for arming (`SlotUse.Arm`: `createBiometricSlot`) or unwrapping (`SlotUse.Unlock`: `answerBiometric` in a restore from `Corrupt`, `resetPasswordWithBiometric`). It authorizes one cryptographic operation; DbMaintenance uses it at once and never keeps it. Its `toString()` prints the class and the use only (DEC-70).
 - `NeedsBiometricUnlock(afterKekFailure)` is rendered by `MaintenanceStatusHost` ([ui.md § 8.7](ui.md#87-restore-dec-84)), which calls `AppLockController.slotPrompt(AuthPurpose.RestoreKey)` and passes the result to `answerBiometric(cipherOrNull)`. With `afterKekFailure = true` the host first calls `AppLockController.reportPasswordKekFailure()` ([security.md](security.md) § 7.3): `true` sets the kekBroken notice and the `kekBroken` flag, and the host then calls `slotPrompt(RestoreKey)` as usual; `false` (the slot stopped being live in between) makes the host call `answerBiometric(null)` without a prompt. `slotPrompt(RestoreKey)` prompts only when the route would be `Slot` (lock on, usable, `Live`, and the reminder not due, which it counts as not due while the `kekBroken` flag is set, that is until a successful password unlock or fingerprint reset clears it or the process ends; password checks inside maintenance operations never clear it, DEC-86) and returns `Ok(null)` for every other outcome. `answerBiometric(null)` continues with `NeedsDatabasePassword(error = null)` after `afterKekFailure = false`, and ends the restore with `Err(KeyUnavailable)` after `afterKekFailure = true` ([Origins and target key](#origins-and-target-key)). `NeedsBiometricUnlock(true)` is never equal to the `NeedsBiometricUnlock(false)` of the same restore and always follows a `NeedsDatabasePassword`, so the host's "once per status value" rule starts exactly one prompt for each.
 - `discardDocument(uri)` reads `OpenableColumns.SIZE` and, only when it is known to be 0, calls `DocumentsContract.deleteDocument(contentResolver, uri)`; every failure is ignored. The UI calls it when the user cancels the backup password dialog after the picker returned the document. A document that already holds data (the user picked an existing file to overwrite) is never deleted at this point: nothing has been written to it yet.
-- Passwords arrive as `CharArray`; DbMaintenance converts them with `passwordBytes` ([security.md](security.md) § 6.3), which zeroes the chars, and zeroes the bytes per [Key custody](#key-custody).
+- Build state (T12): the interface and types above exist except the restore, Start fresh and Erase members, which land with their pipelines in SPEC T13: `restore`, `answerPassword`, `answerBiometric`, `answerConfirmation`, `cancelRestore`, `startFresh`, `erase`, the `Needs…` statuses, `RestorePreview` and the results `Restored`, `RestoreCancelled`, `StartedFresh` and `Erased` (no stubs). `MaintenanceOp`, `MaintenanceOrigin` and `PipelineStep` are complete, in the order above. `WRITE_DOCUMENT` is the only step that publishes a `fraction` until `COPY_INPUT` lands with the restore; both copies use the internal `copyWithProgress`, and the restore's export is to reuse the exclusive-export skeleton `exportUnderExclusive` (`ExclusiveExport.kt`) that backups and key changes share. Internally, `DefaultDbMaintenance` runs the [operation frame](#operation-frame) and delegates to `BackupPipeline`, `KeyChangePipeline`, `BiometricSlotCommits` and `StartupReconciler` (with the helpers `OperationRun`, `MaintenanceDeps`, `ShareFiles` and `SafDocuments`); the pure startup rules are `startupDecision`, `unreferencedAtStartup` and `markerResets` over `KeyStateRead` (`StartupRules.kt`). `CommitOutcome` and `CommitResult` are public types of `data.maintenance`.
+- Passwords arrive as `CharArray`; DbMaintenance re-checks a new password with `PasswordPolicy.checkPassword` (DEC-93) and converts them with `passwordBytes` ([security.md](security.md) § 6.3), which zeroes the chars, and zeroes the bytes per [Key custody](#key-custody).
 - `MaintenanceListener` keeps the import rules: `data.maintenance` does not import `session`. DbMaintenance makes each call inside `withContext(dispatchers.main)` and SessionGate's implementation calls `dispatch` directly, so the gate state has changed before the next pipeline step runs. AppContainer wires the listener (and the holder's `CorruptionListener`), both as providers, to SessionGate, and the holder's `FlowProblemListener` to `AppMessages` ([architecture.md](architecture.md) § Event wiring). `onMaintenanceStarted(op, fingerprintReset)` passes `fingerprintReset = true` only from `resetPasswordWithBiometric`, so the gate can tell the reset that counts as the unlock (DEC-63) from a Settings key change that a lock overtook.
 - `takeResetKey(generation)` is the hand-over of [Fingerprint password reset](#fingerprint-password-reset) step 8.5: a reset from `NeedsPassword` that committed keeps `prepared.rawKey` (the key of generation `n`) in a private one-slot field instead of zeroing it, then ends with `OpenWithNewKey`; effect E2 in `Opening(viaReset)` calls `takeResetKey(state.generation)` after `completeStartup()` and `KeyVault.readState()` and passes the key to `DatabaseHolder.open`, so the live Room instance is still first built in `Opening` (DEC-90, CLAUDE.md rule 5) and no gate state or event holds the key (DEC-64). It returns the array and clears the field when the generation matches; otherwise it zeroes and clears the field and returns null. The field is also zeroed and cleared at the start of every later operation frame (step 2, once the mutex is held) and in `reconcileAtStartup`, so an untaken key never outlives the next maintenance action; it is never persisted. The order is guaranteed by `opMutex`: the reset sets the field before it calls `onMaintenanceFinished(OpenWithNewKey)` and releases the mutex last, and E2's `completeStartup()` waits for the mutex before `takeResetKey` runs.
 
@@ -830,7 +838,7 @@ Every user operation (`backup*`, `changeKey`, `resetPasswordWithBiometric`, `res
 7. Run the operation's steps, each preceded by `faultHook.before(op, step)` and published as `Running(op, step)`.
 8. Finally, in `NonCancellable`: delete the operation's temporary files (`CLEANUP`), zero every key and password the operation owns (except the committed key that a fingerprint reset from `NeedsPassword` hands to E2 through `takeResetKey`, [Interface and status](#interface-and-status)), set `status = Finished(op, result)`, call `listener.onMaintenanceFinished(outcome)` if and only if step 6 ran, then `opMutex.unlock()`. The mutex is released last, so an effect E1 started by `Restart` waits for it instead of racing the cleanup.
 
-`commitStarted` is a per-operation flag that the frame sets immediately before the first call of `commitGeneration`. Any `Throwable` that escapes an operation's steps (an `Error` included; inside an exclusive block it is caught by the block, [Exclusive mode](#exclusive-mode) step 5) is classified here: with `commitStarted` set it is `Unknown` (nothing deleted, marker left, outcome `Restart`, `Err(OutcomeUnknown)`), because the key-state on disk may already name the new generation; otherwise it is a Programming failure (rollback, `Err(Unexpected)`). Erase has the parallel flag `eraseStarted`, set immediately before `KeyVault.eraseState()`: a `Throwable` after it ends the Erase with outcome `Restart` (the key-state may already be gone, so nothing may reopen `G`); before it the Erase is rolled back as in the [Erase](#erase-forgotten-password) steps.
+`commitStarted` is a per-operation flag that the frame sets immediately before the first call of `commitGeneration`. Any `Throwable` that escapes an operation's steps (an `Error` included; inside an exclusive block it is caught by the block, [Exclusive mode](#exclusive-mode) step 5) is classified here: with `commitStarted` set it is `Unknown` (nothing deleted, marker left, outcome `Restart`, `Err(OutcomeUnknown)`), because the key-state on disk may already name the new generation; otherwise the previous state is in force, the operation rolls back, and the failure is classified by the DbMaintenance context of the [Classification table](#classification-table) (DEC-92): a `CancellationException` is rethrown, a `KeyVaultException` is `Err(KeyUnavailable)`, storage full `Err(StorageFull)`, a Transient class `Err(DatabaseUnavailable)`, anything else a Programming failure (`Err(Unexpected)`). Erase has the parallel flag `eraseStarted`, set immediately before `KeyVault.eraseState()`: a `Throwable` after it ends the Erase with outcome `Restart` (the key-state may already be gone, so nothing may reopen `G`); before it the Erase is rolled back as in the [Erase](#erase-forgotten-password) steps.
 
 A restore that ends before its confirmation (cancelled, rejected, failed) raises neither event; the gate never left its state. Otherwise:
 
@@ -977,7 +985,10 @@ enum class PipelineStep {
     ERASE_KEY_STATE, ERASE_FILES, RESET_SETTINGS, CLEANUP,
     UNLOCK_BIOMETRIC, PREPARE_BIO_SLOT, COMMIT_BIO_SLOT, DELETE_BIO_KEY,   // added for the biometric slot (Q8) and the fingerprint reset; appended, never reordered
 }
-fun interface MaintenanceFaultHook { fun before(op: MaintenanceOp?, step: PipelineStep) }   // op = null: completeStartup and the biometric slot commits (completeStartup's steps overlap with neither; creation and removal share COMMIT_BIO_SLOT, and a test drives one of them at a time)
+fun interface MaintenanceFaultHook {                                  // production binds MaintenanceFaultHook.None
+    suspend fun before(op: MaintenanceOp?, step: PipelineStep)        // suspend: a blocking test hook suspends instead of parking an IO thread
+    companion object { val None = MaintenanceFaultHook { _, _ -> } }
+}   // op = null: completeStartup and the biometric slot commits (completeStartup's steps overlap with neither; creation and removal share COMMIT_BIO_SLOT, and a test drives one of them at a time)
 ```
 
 | Operation | Steps, in order |
@@ -1040,7 +1051,7 @@ UI part ([ui.md](ui.md), launchers in [architecture.md](architecture.md) § Resu
 DbMaintenance part (origin `Ready` only):
 
 6. Before anything is written, `backupToDocument` reads `OpenableColumns.SIZE` of the document and records `createdEmpty = (size == 0L)`: true for a document the picker just created, false for an existing document the user chose to overwrite (DocumentsUI asks to overwrite and returns the existing URI) and when the size is unknown. It then runs `PRECHECK` (free space). On failure the document is handled by the [partial-document rule](#to-a-document-saf) below and the result is `Err(StorageFull)`.
-7. `MaintenanceStarted(Backup)`; empty `cacheDir/share/` (earlier share files are deleted at the next export, DEC-83).
+7. `MaintenanceStarted(Backup)`; empty `cacheDir/share/` (earlier share files are deleted at the next export, DEC-83), best effort: a failed delete is logged by class and the backup continues (DEC-94).
 8. `CLOSE_ROOM`: `holder.exclusive { … }` begins; Room is drained and closed, so the WAL is checkpointed and removed (DEC-89).
 9. `CHECK_SOURCE`: open the [maintenance connection](#maintenance-connection) on `doro-G.db` with the lent live key; `quick_check` must return `ok`. Otherwise the source is Corrupt: no byte is exported or written, the document is handled by the partial-document rule (a pre-existing intact backup stays untouched: it may be the user's only way back), the block returns `StayClosed`, the result is `Err(DatabaseUnavailable)` and the outcome is `ReopenFailed(Corrupt)`, so the Corrupt screen replaces Settings (DEC-83, DEC-85). That screen may show the backup's `Finished` status ("no backup was made"); the shell that normally shows outcomes is not composed in `Corrupt`.
 10. `EXPORT` into `noBackupFilesDir/staging/backup.db` with the backup key; close the connection.
@@ -1051,16 +1062,16 @@ DbMaintenance part (origin `Ready` only):
 15. Result `BackupSaved`; outcome `Reopened` (or `ReopenFailed(kind)` from step 11).
 
 - Mode `"wt"` is required: `"w"` may leave the tail of a longer existing document in place, which would corrupt a backup written over an older, larger one. A provider that rejects `"wt"` fails the backup with `FileAccess`. Verify at setup: the system Files/Downloads provider and Google Drive accept `"wt"` (M-12 in [testing.md](testing.md)).
-- Partial-document rule. A failure before `WRITE_DOCUMENT` has opened the stream (precheck, corrupt source, export, verification, password cancel) calls `DocumentsContract.deleteDocument(contentResolver, uri)` only when `createdEmpty` is true; a pre-existing document is left exactly as it was, including its intact old backup. A failure after `openOutputStream(uri, "wt")` returned a stream (write, flush, close, byte count) always deletes the document (best effort): its old content is already gone and what remains is partial. A failed or unsupported deletion is ignored, and the failure message tells the user that an incomplete file may remain, and, when the target existed, that its previous content was lost: the operation sets `Finished.previousContentLost = true` exactly when `createdEmpty` is false and `openOutputStream` had returned a stream ([User-facing messages](#user-facing-messages)). The user's choice to overwrite an existing document costs that document's old content only once the write has begun.
+- Partial-document rule. A failure before `WRITE_DOCUMENT` has opened the stream (precheck, corrupt source, export, verification, password cancel) calls `DocumentsContract.deleteDocument(contentResolver, uri)` only when `createdEmpty` is true; a failure before the pipeline reads the size (`Busy`, the frame's staging or origin check, the backup-password re-check of DEC-93, a missing required password) applies the same rule through `discardDocument(uri)`, which deletes only a document whose size is known to be 0 (DEC-94); a pre-existing document is left exactly as it was, including its intact old backup. A failure after `openOutputStream(uri, "wt")` returned a stream (write, flush, close, byte count) always deletes the document (best effort): its old content is already gone and what remains is partial. A failed or unsupported deletion is ignored, and the failure message tells the user that an incomplete file may remain, and, when the target existed, that its previous content was lost: the operation sets `Finished.previousContentLost = true` exactly when `createdEmpty` is false and `openOutputStream` had returned a stream ([User-facing messages](#user-facing-messages)). The user's choice to overwrite an existing document costs that document's old content only once the write has begun.
 - Provider metadata is not read back after the write: providers backed by MediaStore update `OpenableColumns.SIZE` asynchronously, so a size comparison could report a good backup as failed and delete it. The size read before any write (step 6) only ever prevents a deletion: anything but a known 0 leaves the document in place. A successful local write also does not mean a cloud provider has uploaded the file.
 
 ### For sharing (share sheet)
 
 1. UI: the plaintext warning or the password dialog, as above; then `backupForShare(password)`.
 2. `PRECHECK`; `MaintenanceStarted(Backup)`.
-3. Empty `cacheDir/share/` (DEC-83), as on the document path.
+3. Empty `cacheDir/share/` (DEC-83), as on the document path (best effort, DEC-94).
 4. `CLOSE_ROOM`, `CHECK_SOURCE`, `EXPORT`, `REOPEN`, `VERIFY_TARGET` as for a document.
-5. `PUBLISH_SHARE`: `Os.rename(backup.db, cacheDir/share/<UUID.randomUUID()>.db)` (same filesystem, no second copy), then `FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file, displayName)` with the file name above as `displayName`, and schedule its [deletion after one hour](#share-file-lifetime).
+5. `PUBLISH_SHARE`: create `cacheDir/share/` again if it is missing (the system may clear `cacheDir` while the process lives, DEC-94), then `Os.rename(backup.db, cacheDir/share/<UUID.randomUUID()>.db)` (same filesystem, no second copy), then `FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file, displayName)` with the file name above as `displayName`, and schedule its [deletion after one hour](#share-file-lifetime).
 6. Result `BackupShared(uri, displayName)`; outcome `Reopened`.
 7. UI: post the chooser as an `ExternalRequest` for the activity-level `StartActivityForResult` launcher, which MainActivity launches under the re-lock exemption:
 
@@ -1142,7 +1153,7 @@ DbMaintenance part. Steps 1–12 change nothing the user could lose: the gate st
 10. `EXPORT`: close the candidate connection; `n` = next generation; open the [maintenance connection](#maintenance-connection) on `incoming.db` with the candidate key and `exportTo(staging/doro-<n>.db, deviceKey)`; close it. Zero the backup password bytes: this was their last use.
 11. `VERIFY_TARGET` on `doro-<n>.db` with `deviceKey`. Origin `Ready` then keeps `keyDigest = SHA-256(deviceKey)`. Then zero `deviceKey` (a copy owned by DbMaintenance). Target verification checks the target with the very key it was exported with, so it cannot detect a wrong source of that key; the digest does (step 13).
 12. `AWAIT_CONFIRMATION`: status `NeedsConfirmation(RestorePreview(notes, persons, projects, resultingMode, encryptionTurnsOff))`, where `encryptionTurnsOff` is true when the origin is `KeyUnavailable` and at least one generation file set that the restore will replace has a main file that is not plaintext (`RawConnections.isPlaintext`, step 4 of [Startup reconciliation](#startup-reconciliation)); it is computed here once and step 21 reuses it. `answerConfirmation(false)` cancels. The question waits through locks and backgrounding (the UI hides the dialog while `Locked`); a process death discards the restore.
-13. `MaintenanceStarted(Restore)` (T27 from `Ready`, T33 from `Corrupt` or `KeyUnavailable`, T12 under a lock), with the origin determined again ([Operation frame](#operation-frame) step 6); then `CLOSE_ROOM` (origin `Ready`): `holder.exclusive { … }` begins. Its first action, before `MARK_RESET`: `check(MessageDigest.isEqual(sha256(scope.liveKey), keyDigest))`. A mismatch means the exported file is keyed with something other than the live DEK; it is a Programming failure that rolls back (`Reopen.Same`, `Err(Unexpected)`) before anything was marked or committed. (A restore that fell back to origin `Corrupt` skips the check: its key came from `copyLiveKey` under the mutex or from `KeyVault`.)
+13. `MaintenanceStarted(Restore)` (T27 from `Ready`, T33 from `Corrupt` or `KeyUnavailable`, T12 under a lock), with the origin determined again ([Operation frame](#operation-frame) step 6); then `CLOSE_ROOM` (origin `Ready`): `holder.exclusive { … }` begins. Its first action, before `MARK_RESET`: `check(constantTimeEquals(sha256(scope.liveKey), keyDigest))` (DEC-93). A mismatch means the exported file is keyed with something other than the live DEK; it is a Programming failure that rolls back (`Reopen.Same`, `Err(Unexpected)`) before anything was marked or committed. (A restore that fell back to origin `Corrupt` skips the check: its key came from `copyLiveKey` under the mutex or from `KeyVault`.)
 14. `MARK_RESET`: write the [data-reset marker](#data-reset-marker) with `n`.
 15. `RENAME`, `COMMIT`: `commitGeneration(staging/doro-<n>.db, n, slot, bio)` with the current key slot and `bioSlot` (origins `Ready`, `Corrupt`; both read with `KeyVault.readState()` under the operation mutex) or the `PLAIN` slot and `bio = null` (origin `KeyUnavailable`).
 16. `DATA_RESET`: `SettingsStore.onDataReplaced()`, then delete the marker ([Commit and reset](#commit-and-reset)).
@@ -1233,7 +1244,7 @@ Every key change makes a new DEK, so its commit drops the biometric slot (step 1
 
 `changeKey(target, currentPassword, newPassword)`, origin `Ready` only:
 
-1. Frame: mutex.
+1. Frame: mutex. Argument rules (DEC-94): the target must differ from a non-`PASSWORD` source, and a new password is given exactly for target `PASSWORD`; a violation is a programming error (`Err(Unexpected)`). The new password is re-checked with `PasswordPolicy.checkPassword` (`Err(InvalidInput(rule))`, DEC-93).
 2. Source `PASSWORD`: `KeyVault.openKey(slot, passwordBytes(currentPassword))` verifies the current password ([security.md](security.md) § 4 step 2). It returns an `UnlockResult` and applies and persists the backoff itself ([security.md](security.md) § 3.6, § 5.3). DbMaintenance maps `PasswordRejected` to `Err(WrongPassword)`, `Throttled` to `Err(Throttled(retryAtElapsedMs))` and `KeyFailed` (or a `KeyVaultException`) to `Err(KeyUnavailable)`, and returns at once; the dialog stays open with the inline error, and no `Maintenance` was entered. A returned `Key` is zeroed at once; the export uses the key held by DatabaseHolder.
 3. `PRECHECK`: free space for a second copy of the database.
 4. `MaintenanceStarted(KeyChange)` (T27).
@@ -1270,12 +1281,12 @@ It is never offered over `Locked(Corrupt)`, `Locked(Maintenance)`, `Locked(KeyUn
 Before the call, the UI collects the new password (twice, with the checkbox, [security.md](security.md) § 6) and obtains the authorized `SlotCipher` with `AppLockController.slotPrompt(AuthPurpose.ResetPassword)` ([security.md](security.md) § 4.3), whose DECRYPT cipher `KeyVault.biometricUnlockCipher()` prepared. The ViewModel sets the `AppMessages` fingerprint-reset marker ([ui.md § 8.15](ui.md#815-set-a-new-password-with-the-fingerprint-dec-63)), then hands the `SlotCipher` and the new password over (ownership rules of [security.md](security.md) § 3.6); the reset is the only consumer of that cipher.
 
 1. Frame: mutex; `staging/` and `restore/` emptied; the origin checked against the holder ([Operation frame](#operation-frame) steps 1–4).
-2. `PasswordPolicy.checkNewPassword` (a violation is `Err(InvalidInput(rule))`, [security.md](security.md) § 4 step 1).
+2. `PasswordPolicy.checkPassword(newPassword)` (a violation is `Err(InvalidInput(rule))`; the dialog already ran `checkNewPassword` on both entries and the acknowledgement, DEC-93).
 3. `UNLOCK_BIOMETRIC`: `state = keyVault.readState()`; it must be Valid, `PASSWORD`, with a biometric slot (otherwise `Err(AuthFailed)`; a Missing or Invalid file is `Err(KeyUnavailable)`, DEC-86). `result = keyVault.unlockWithBiometric(cipher)` (the one authorized `doFinal`, [security.md](security.md) § 3.7.3):
    - `Key(rawKey)`: continue with `source = rawKey`.
    - `SlotFailed(_)`: `Err(AuthFailed)`; nothing changed. When the slot is dead, `KeyVault` has already deleted its alias (the slot stays in the file), and the UI withdraws the fingerprint option. Erase stays available ([Erase](#erase-forgotten-password)).
    - `KeyFailed`: `Err(KeyUnavailable)`; nothing changed.
-   This step never counts toward the backoff, never waits for it and never yields `WrongPassword`: a fingerprint is not a password attempt ([security.md](security.md) § 5.3). A `kekBroken` flag in `Key` needs no handling here: `prepare` in step 6 replaces the broken KEK ([security.md](security.md) § 4.3). Origin `Ready` then checks `MessageDigest.isEqual(source, live)` with `live = holder.copyLiveKey()` (null: `Err(DatabaseUnavailable)`): a mismatch is `Err(Unexpected)` and changes nothing ([security.md](security.md) § 4.3; never KeyUnavailable over an open database, DEC-86; it would break the biometric slot invariant of [Key-state semantics](#key-state-semantics)); both arrays are zeroed right after the comparison, and, as in every key change from `Ready`, the export uses the key held by `DatabaseHolder`. Every result of steps 1 to 3 is returned before `MaintenanceStarted`.
+   This step never counts toward the backoff, never waits for it and never yields `WrongPassword`: a fingerprint is not a password attempt ([security.md](security.md) § 5.3). A `kekBroken` flag in `Key` needs no handling here: `prepare` in step 6 replaces the broken KEK ([security.md](security.md) § 4.3). Origin `Ready` then checks `constantTimeEquals(source, live)` (DEC-93) with `live = holder.copyLiveKey()` (null: `Err(DatabaseUnavailable)`): a mismatch is `Err(Unexpected)` and changes nothing ([security.md](security.md) § 4.3; never KeyUnavailable over an open database, DEC-86; it would break the biometric slot invariant of [Key-state semantics](#key-state-semantics)); both arrays are zeroed right after the comparison, and, as in every key change from `Ready`, the export uses the key held by `DatabaseHolder`. Every result of steps 1 to 3 is returned before `MaintenanceStarted`.
 4. `PRECHECK` (`L + MARGIN`).
 5. `MaintenanceStarted(KeyChange, fingerprintReset = true)`: T12 from `Ready` (behind the lock, `Locked(Maintenance(KeyChange, Ready))` with `resetFrom` set), T41 from `NeedsPassword`. The reset counts as the unlock (DEC-63): from here to `MaintenanceFinished` the gate shows the progress screen and never prompts for the fingerprint, because the slot is about to be dropped ([architecture.md](architecture.md) § SessionGate, `lockScreenOf`).
 6. `PREPARE_KEY`: `keyVault.prepare(PASSWORD, newPasswordBytes)`; zero the new password bytes.

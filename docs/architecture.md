@@ -116,7 +116,7 @@ com.doro.organizer
 ├── core/
 │   ├── time/         AppTime, DefaultAppTime, TimeChangeReceiver
 │   ├── io/           syncDirectory (db-lifecycle.md § Generation commit; security and data.maintenance share it, and security may not import data)
-│   ├── password/     PasswordPolicy: nfc, utf8, passwordBytes, checkNewPassword, PasswordCheck (security.md § 6; ui, session, security and data.maintenance share it)
+│   ├── password/     PasswordPolicy: nfc, utf8, passwordBytes, checkNewPassword, checkPassword, constantTimeEquals, PasswordCheck (security.md § 6, DEC-93; ui, session, security and data.maintenance share it)
 │   ├── coroutines/   AppDispatchers, runDetached
 │   ├── result/       AppResult, AppError, InputRule, BackupRejection
 │   ├── messages/     AppMessages, UserMessage (ui.md § 2.4)
@@ -134,7 +134,7 @@ com.doro.organizer
 │                     BiometricSlotWriter (§ SessionGate)
 ├── data/             DatabaseHolder, CorruptionListener, FlowProblemListener, SqlcipherEngine, DbFiles, NoteRepository, EntityRepository
 │   ├── db/           Room database class, entities, DAOs, NoteRowRaw, migrations (data-layer.md)
-│   └── maintenance/  DbMaintenance, MaintenanceListener, status and result types (db-lifecycle.md)
+│   └── maintenance/  DbMaintenance, DefaultDbMaintenance, MaintenanceListener, MaintenanceFaultHook, PipelineStep, status and result types, CommitOutcome, CommitResult; internal pipelines (db-lifecycle.md § Interface and status)
 ├── session/          SessionGate, GateState, PasswordEntry, GateEvent, GateEffect, reduce(), lockScreenOf()
 └── ui/
     ├── UiGraph, GateGraph, DoroRoot   what the UI may reach; gate switch
@@ -331,7 +331,7 @@ How instrumented tests replace the container and start the gate: [testing.md § 
 | `processLifecycle: LifecycleOwner` | production: `ProcessLifecycleOwner.get()`; tests: a hand-written owner over `LifecycleRegistry`. Overridable. Used by `installProcessObservers`, `AppTime` and `AppLockController` |
 | `appTime` | [Time](#time) |
 | `settingsStore` | below |
-| `files: DbFiles` | the roots of the database, staging, restore and share directories ([db-lifecycle.md § Files on disk](db-lifecycle.md#files-on-disk)); production: `DbFiles.forApp(app)`; tests redirect them to temporary directories, because the constructor takes plain `File` roots (`DbFiles(databasesDir)` until DbMaintenance adds the other roots) |
+| `files: DbFiles` | the roots of the database, staging, restore and share directories ([db-lifecycle.md § Files on disk](db-lifecycle.md#files-on-disk)); production: `DbFiles.forApp(app)`; tests redirect them to temporary directories, because the constructor takes plain `File` roots (`DbFiles(databasesDir, noBackupDir, cacheDir)`; `noBackupDir` must be the `noBackupFilesDir` that `DefaultKeyVault.create` uses, db-lifecycle.md § Files on disk) |
 | `keyVault` | [security.md § 3.6](security.md#36-keyvault-surface) |
 | `databaseHolder` | the only owner of Room (DEC-81); `DefaultDatabaseHolder(app, files, dispatchers, corruptionListener, flowProblemListener)`: the application `Context` (for `buildRoom` only), `files`, `dispatchers`, a `() -> CorruptionListener` provider (SessionGate) and a `FlowProblemListener` that posts to `appMessages` ([Event wiring](#event-wiring); [db-lifecycle.md § Interface](db-lifecycle.md#interface)) |
 | `faultHook: MaintenanceFaultHook` | the type is defined in [db-lifecycle.md § Pipeline steps and fault hook](db-lifecycle.md#pipeline-steps-and-fault-hook); the default is a no-op, and test containers override it with a hook that throws, blocks or kills the process |
@@ -344,7 +344,7 @@ How instrumented tests replace the container and start the gate: [testing.md § 
 | `sessionGate` | `DefaultSessionGate`; implements `LockListener`, `CorruptionListener` and `MaintenanceListener` ([Event wiring](#event-wiring)) |
 | `windowPolicy: StateFlow<WindowPolicy>` | below |
 
-Build order: `files`, `databaseHolder`, `noteRepository` and `entityRepository` join `AppContainer` together when SessionGate is wired (SPEC T14), because the holder's corruption listener is the gate and a container member without a caller would be dead code. `keyVault` (`DefaultKeyVault.create(app, settingsStore, appTime, dispatchers)`, [security.md § 3.6](security.md#36-keyvault-surface)) joins at the same point for the same reason: its callers are `dbMaintenance`, `appLockController` and the gate's effects, and `dbMaintenance` itself needs `databaseHolder`. Until then the vault tests build `DefaultKeyVault` directly (`KeyVaultRule`, [testing.md § 7](testing.md#7-fixtures-and-fakes)). Until then the holder and repository tests build the production classes through `TestDatabases` ([testing.md § 7](testing.md#7-fixtures-and-fakes)); no interim or fake holder exists.
+Build order: `files`, `databaseHolder`, `noteRepository` and `entityRepository` join `AppContainer` together when SessionGate is wired (SPEC T14), because the holder's corruption listener is the gate and a container member without a caller would be dead code. `keyVault` (`DefaultKeyVault.create(app, settingsStore, appTime, dispatchers)`, [security.md § 3.6](security.md#36-keyvault-surface)) joins at the same point for the same reason: its callers are `dbMaintenance`, `appLockController` and the gate's effects, and `dbMaintenance` itself needs `databaseHolder`. `faultHook`, `dbMaintenance` (`DefaultDbMaintenance`) and the `ProcessLifecycleOwner` ON_START observer that calls `dbMaintenance.sweepShareFiles()` join at the same point (T14): the listener of `dbMaintenance` is the gate, and its other callers are the gate's effects, `appLockController` and the Settings screens. Both `files` (`DbFiles.forApp`) and `keyVault` (`DefaultKeyVault.create`) are built on the same `context.noBackupFilesDir`, because the commits sync the key-state's directory through `files.noBackupDir` (db-lifecycle.md § Files on disk); T14 adds a check or test of that wiring. Until then the DbMaintenance tests build `DefaultDbMaintenance` directly (`MaintenanceSetup`, [testing.md § 7](testing.md#7-fixtures-and-fakes)), and the vault tests build `DefaultKeyVault` directly (`KeyVaultRule`, [testing.md § 7](testing.md#7-fixtures-and-fakes)). Until then the holder and repository tests build the production classes through `TestDatabases` ([testing.md § 7](testing.md#7-fixtures-and-fakes)); no interim or fake holder exists.
 
 `windowPolicy` is the single source of the window flags; it carries nothing for the keyboard (below). It combines the settings, the committed key mode and the gate state. While the settings have not been read or the key mode is unknown (null before startup has read it, or while the key-state is invalid) it is the **closed** policy: `FLAG_SECURE` on, recents screenshot off, overlays hidden. A closed policy is still emitted, so the splash hold of [MainActivity startup order](#mainactivity-startup-order) is released (DEC-66, DEC-67; rules: [security.md § 8](security.md#8-screen-protection-dec-66-dec-67)):
 
