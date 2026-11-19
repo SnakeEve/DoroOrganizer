@@ -5,7 +5,10 @@ import com.doro.organizer.model.BatchResult
 import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.NoteDetail
 import com.doro.organizer.model.NoteDraft
+import com.doro.organizer.model.NoteQuery
+import com.doro.organizer.model.NoteRow
 import com.doro.organizer.model.SaveResult
+import kotlinx.coroutines.flow.Flow
 
 /**
  * The editor's one-shot reads and every note and link write (data-layer.md § Editor loads, § Write rules). Each write
@@ -13,6 +16,15 @@ import com.doro.organizer.model.SaveResult
  * persons and projects are skipped, never errors (data-layer.md § Reactivity).
  */
 interface NoteRepository {
+    /**
+     * The rows of [query] in the canonical order of DEC-23, with their links sorted like the pickers (DEC-32). Equal
+     * results are not emitted again (data-layer.md § Reactivity).
+     */
+    fun observeRows(query: NoteQuery): Flow<List<NoteRow>>
+
+    /** Select all (DEC-36): the ids of every row of [query], checked notes and off-screen rows included; unordered. */
+    suspend fun selectIds(query: NoteQuery): AppResult<List<Long>>
+
     /** The note with its links sorted like row links, or `Ok(null)` when it is gone; writes nothing (DEC-21). */
     suspend fun loadNote(id: Long): AppResult<NoteDetail?>
 

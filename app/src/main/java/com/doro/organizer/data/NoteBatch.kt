@@ -4,6 +4,7 @@ import com.doro.organizer.data.db.AppDatabase
 import com.doro.organizer.data.db.NotePersonCrossRef
 import com.doro.organizer.data.db.NoteProjectCrossRef
 import com.doro.organizer.model.BatchResult
+import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.NewEntity
 
 /**
@@ -23,9 +24,9 @@ internal suspend fun associateNotes(
     val alive = db.survivingNotes(noteIds)
     if (alive.isEmpty()) return BatchResult(noteIds.size, changed = 0) // creates no entity (DEC-33)
 
-    val created = insertNew(db, newPersons, newProjects, now)
-    val persons = db.survivingPersons(personIds) + created.persons.values
-    val projects = db.survivingProjects(projectIds) + created.projects.values
+    val created = EntityRepository.insertNew(db, newPersons, newProjects, now)
+    val persons = db.survivingEntities(EntityKind.Person, personIds) + created.persons.values
+    val projects = db.survivingEntities(EntityKind.Project, projectIds) + created.projects.values
 
     val personLinks = alive.flatMap { note -> persons.map { NotePersonCrossRef(note, it) } }
     val projectLinks = alive.flatMap { note -> projects.map { NoteProjectCrossRef(note, it) } }

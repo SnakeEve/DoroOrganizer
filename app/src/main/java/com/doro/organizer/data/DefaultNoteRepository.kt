@@ -1,7 +1,7 @@
 package com.doro.organizer.data
 
 import androidx.room.withTransaction
-import com.doro.organizer.core.coroutines.runDetached
+import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.core.time.AppTime
 import com.doro.organizer.data.db.AppDatabase
@@ -11,19 +11,57 @@ import com.doro.organizer.model.MAX_CONTENT_CHARS
 import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.NoteDetail
 import com.doro.organizer.model.NoteDraft
+import com.doro.organizer.model.NoteQuery
+import com.doro.organizer.model.NoteRow
 import com.doro.organizer.model.SaveResult
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 
 /**
- * Each write validates outside the transaction, so a rejected call writes nothing, then runs one transaction detached
- * in [applicationScope] (data-layer.md § Transactions and results, architecture.md § Layering and data flow, rule 6).
- * Reads run in the caller's scope. Stateless: the DAOs come from [databaseHolder] per call.
+ * Each write validates outside the transaction, so a rejected call writes nothing, then runs as one detached
+ * transaction ([writeTransaction]). One-shot reads run in the caller's scope; flows go through
+ * [DatabaseHolder.observe], so they survive a database swap (DEC-81). Stateless: the DAOs come from [databaseHolder]
+ * per call.
  */
 class DefaultNoteRepository(
     private val databaseHolder: DatabaseHolder,
     private val appTime: AppTime,
     private val applicationScope: CoroutineScope,
+    private val dispatchers: AppDispatchers,
 ) : NoteRepository {
+    // distinctUntilChanged before the mapping: Room re-runs a query on every write to a table it reads, and an equal
+    // result is neither parsed nor sorted again (data-layer.md § Reactivity).
+    override fun observeRows(query: NoteQuery): Flow<List<NoteRow>> =
+        databaseHolder.observe { db ->
+            db.noteDao().observeRows(
+                personId = query.personId,
+                projectId = query.projectId,
+                orphanOnly = query.orphanOnly,
+                undatedOnly = query.undatedOnly,
+                fromDay = query.fromDay,
+                toDay = query.toDay,
+                searchPattern = query.searchPattern,
+            )
+        }
+            .distinctUntilChanged()
+            .map { it.toNoteRows() }
+            .flowOn(dispatchers.default)
+
+    override suspend fun selectIds(query: NoteQuery): AppResult<List<Long>> = databaseHolder.withDb { db ->
+        db.noteDao().selectIds(
+            personId = query.personId,
+            projectId = query.projectId,
+            orphanOnly = query.orphanOnly,
+            undatedOnly = query.undatedOnly,
+            fromDay = query.fromDay,
+            toDay = query.toDay,
+            searchPattern = query.searchPattern,
+        )
+    }
+
     override suspend fun loadNote(id: Long): AppResult<NoteDetail?> = databaseHolder.withDb { db ->
         val notes = db.noteDao()
         db.withTransaction {
@@ -94,11 +132,8 @@ class DefaultNoteRepository(
         }
     }
 
-    /** One transaction with one `now`, taken inside it (DEC-20); only this method opens the transaction. */
     private suspend fun <T> write(block: suspend (db: AppDatabase, now: Long) -> T): AppResult<T> =
-        applicationScope.runDetached {
-            databaseHolder.withDb { db -> db.withTransaction { block(db, appTime.nowMillis()) } }
-        }
+        databaseHolder.writeTransaction(applicationScope, appTime, block)
 
     /** INV-5: the date pickers' range, so a stored date never crashes the editor's picker (DEC-26). */
     private fun requireNoteDate(date: Long?) =

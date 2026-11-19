@@ -2,8 +2,11 @@ package com.doro.organizer.data
 
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.cash.turbine.test
 import com.doro.organizer.data.db.AppDatabase
 import com.doro.organizer.model.BatchResult
+import com.doro.organizer.model.EntityKind
+import com.doro.organizer.model.EntityRef
 import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.SaveResult
 import com.doro.organizer.testing.ApplicationScopeRule
@@ -14,6 +17,7 @@ import com.doro.organizer.testing.TestRows
 import com.doro.organizer.testing.assertDbInvariants
 import com.doro.organizer.testing.canonicalDump
 import com.doro.organizer.testing.draft
+import com.doro.organizer.testing.entityRepository
 import com.doro.organizer.testing.longOf
 import com.doro.organizer.testing.longsOf
 import com.doro.organizer.testing.noteRepository
@@ -31,8 +35,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * testing.md I-42 (a) to (c), repository part: ids that name rows deleted since the UI read them are skipped, never
- * errors (data-layer.md § Reactivity). The editor closing on `NoteGone` and the selection pruning are UI tests.
+ * testing.md I-42 (a) to (d), repository part: ids that name rows deleted since the UI read them are skipped, never
+ * errors, and the existence probe of a deleted entity emits null (data-layer.md § Reactivity). The editor closing on
+ * `NoteGone`, the filters that clear on that null and the selection pruning are UI tests.
  */
 @RunWith(AndroidJUnit4::class)
 class StaleIdTest {
@@ -144,5 +149,23 @@ class StaleIdTest {
 
         assertEquals(BatchResult(selected = 1, changed = 0), result.ok())
         assertEquals(before, canonicalDump(sql))
+    }
+
+    @Test
+    fun deletedEntity_existenceProbeEmitsNull() = runTest(timeout = 10.seconds) {
+        val entities = entityRepository(db, time, applicationScope)
+        val person = rows.person("P", now)
+        val project = rows.project("X", now)
+
+        entities.observe(EntityKind.Person, person).test {
+            assertEquals(EntityRef(person, "P"), awaitItem())
+            entities.deletePerson(person).ok()
+            assertNull("the filter that used it clears (DEC-34)", awaitItem())
+        }
+        entities.observe(EntityKind.Project, project).test {
+            assertEquals(EntityRef(project, "X"), awaitItem())
+            entities.deleteProject(project).ok()
+            assertNull(awaitItem())
+        }
     }
 }

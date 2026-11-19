@@ -24,7 +24,7 @@ internal fun newEntityError(persons: List<NewEntity>, projects: List<NewEntity>)
  * Inserts the entities a save or a batch confirm created (DEC-33) with `created_at = updated_at = now`, inside the
  * caller's transaction (data-layer.md § Transactions and results). Names are stored trimmed (INV-9).
  */
-internal suspend fun insertNew(
+internal suspend fun EntityRepository.Companion.insertNew(
     db: AppDatabase,
     persons: List<NewEntity>,
     projects: List<NewEntity>,

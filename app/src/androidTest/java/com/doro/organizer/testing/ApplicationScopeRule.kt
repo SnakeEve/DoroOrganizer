@@ -21,6 +21,12 @@ class ApplicationScopeRule : ExternalResource() {
         SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> failures += e },
     )
 
+    /**
+     * Removes and returns the failures collected so far, for a test that injects one on purpose. A failing write
+     * reaches this scope's handler before its caller resumes, so the failure is here once the call has thrown.
+     */
+    fun takeFailures(): List<Throwable> = generateSequence { failures.poll() }.toList()
+
     override fun after() {
         scope.cancel()
         assertEquals("failures inside detached writes", emptyList<Throwable>(), failures.toList())

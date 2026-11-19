@@ -17,9 +17,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * testing.md I-43: `EXPLAIN QUERY PLAN` of every read statement constant on the 10,000-note seed, against the table
- * of data-layer.md § Size and performance. No plan ever scans a junction table; the expected indexes are named.
- * The write statements (impact counts, deletes) join this test with the tasks that add them.
+ * testing.md I-43: `EXPLAIN QUERY PLAN` of every read statement constant, the delete impact counts and the note,
+ * junction and entity deletes on the 10,000-note seed, against the table of data-layer.md § Size and performance.
+ * No plan ever scans a junction table; the expected indexes are named.
  */
 @RunWith(AndroidJUnit4::class)
 class QueryPlanTest {
@@ -91,7 +91,7 @@ class QueryPlanTest {
             plan(PERSON_REF_SQL, mapOf("id" to 1L)) to "persons",
             plan(PROJECT_REF_SQL, mapOf("id" to 1L)) to "projects",
         ).forEach { (plan, table) ->
-            assertEquals(listOf("SEARCH $table USING INTEGER PRIMARY KEY (rowid=?)"), plan)
+            assertEquals(listOf(searchByKey(table)), plan)
         }
 
         // Each EXISTS stops at the first row it reads, so a scan of each table is the expected, constant-cost plan.
@@ -100,6 +100,58 @@ class QueryPlanTest {
             assertTrue("has any data: $anyData", anyData.any { Regex("""^SCAN $table\b""").containsMatchIn(it) })
         }
     }
+
+    @Test
+    fun deleteImpact_countsThroughTheEntityIndexes() {
+        val id = mapOf("id" to 1L)
+        assertUses(plan(PERSON_IMPACT_N_SQL, id), "note_persons", PERSON_INDEX, "person N")
+        val personM = plan(PERSON_IMPACT_M_SQL, id)
+        assertUses(personM, "x", PERSON_INDEX, "person M")
+        assertUses(personM, "o", AUTOINDEX_PERSONS, "person M, other persons")
+        assertUses(personM, "y", AUTOINDEX_PROJECTS, "person M, projects")
+
+        assertUses(plan(PROJECT_IMPACT_N_SQL, id), "note_projects", PROJECT_INDEX, "project N")
+        val projectM = plan(PROJECT_IMPACT_M_SQL, id)
+        assertUses(projectM, "y", PROJECT_INDEX, "project M")
+        assertUses(projectM, "o", AUTOINDEX_PROJECTS, "project M, other projects")
+        assertUses(projectM, "x", AUTOINDEX_PERSONS, "project M, persons")
+    }
+
+    @Test
+    fun entityDeletes_searchTheEntityIndexesAndKeys() {
+        val id = mapOf("id" to 1L)
+        assertUses(plan(DELETE_PERSON_LINKS_SQL, id), "note_persons", PERSON_INDEX, "person links")
+        assertUses(plan(DELETE_PROJECT_LINKS_SQL, id), "note_projects", PROJECT_INDEX, "project links")
+        assertEquals(listOf(searchByKey("persons")), plan(PERSON_EXISTS_SQL, id))
+        assertEquals(listOf(searchByKey("projects")), plan(PROJECT_EXISTS_SQL, id))
+        assertParentDelete(plan(DELETE_PERSON_SQL, id), "persons", mapOf("note_persons" to PERSON_INDEX))
+        assertParentDelete(plan(DELETE_PROJECT_SQL, id), "projects", mapOf("note_projects" to PROJECT_INDEX))
+    }
+
+    @Test
+    fun noteDeletes_searchByKey() {
+        // Several ids, as in production: SQLite plans a one-element `IN (?)` as `= ?`.
+        val ids = mapOf("ids" to listOf(1L, 2L, 3L))
+        assertUses(plan(DELETE_PERSON_LINKS_OF_NOTES_SQL, ids), "note_persons", AUTOINDEX_PERSONS, "person links")
+        assertUses(plan(DELETE_PROJECT_LINKS_OF_NOTES_SQL, ids), "note_projects", AUTOINDEX_PROJECTS, "project links")
+        val children = mapOf("note_persons" to AUTOINDEX_PERSONS, "note_projects" to AUTOINDEX_PROJECTS)
+        assertParentDelete(plan(DELETE_NOTES_SQL, ids), "notes", children)
+    }
+
+    /**
+     * A delete from a parent table searches [table] by key. With `PRAGMA foreign_keys` on, SQLite also looks up the
+     * referencing rows of each child table; where the build reports those lookups, each must search its index in
+     * [childIndexes] (a scan is already rejected by [plan]).
+     */
+    private fun assertParentDelete(plan: List<String>, table: String, childIndexes: Map<String, String>) {
+        assertTrue("$table: $plan", searchByKey(table) in plan)
+        plan.filter { it != searchByKey(table) }.forEach { row ->
+            val viaIndex = childIndexes.any { (child, index) -> row.startsWith("SEARCH $child USING") && index in row }
+            assertTrue("$table: unexpected row $row", viaIndex)
+        }
+    }
+
+    private fun searchByKey(table: String) = "SEARCH $table USING INTEGER PRIMARY KEY (rowid=?)"
 
     /** The EXISTS subqueries of `PERSPECTIVE_WHERE` probe the junction primary keys by `note_id`. */
     private fun assertPerspectiveSubqueriesSearchKeys(plan: List<String>, label: String) {
@@ -110,25 +162,45 @@ class QueryPlanTest {
     }
 
     /**
-     * The plan rows of [statement] with [args] bound by name. SQLite numbers named parameters by their first
-     * appearance and shares one number among repeats, so binding the distinct names in that order binds each
-     * occurrence. Every plan is also checked for scans of a junction table under any alias the statement gives it.
+     * The plan rows of [statement] with [args] bound by name. A list value is spread over one parameter per element,
+     * as Room expands a collection parameter. SQLite numbers named parameters by their first appearance and shares
+     * one number among repeats, so binding the distinct names in that order binds each occurrence. Every plan is
+     * also checked for scans of a junction table under any alias the statement gives it.
      */
     private fun plan(statement: String, args: Map<String, Any?>): List<String> {
-        val names = PARAMETER.findAll(statement).map { it.groupValues[1] }.distinct().toList()
-        assertEquals("parameters of the statement", names.toSet(), args.keys)
-        val bound = names.map { name ->
-            when (val value = args[name]) {
+        assertEquals("parameters of the statement", parameters(statement).toSet(), args.keys)
+        val (spread, spreadArgs) = spreadLists(statement, args)
+        val bound = parameters(spread).map { name ->
+            when (val value = spreadArgs[name]) {
                 is Boolean -> if (value) 1L else 0L
                 else -> value
             }
         }
-        val plan = sql.query("EXPLAIN QUERY PLAN $statement", bound.toTypedArray()).use { cursor ->
+        val plan = sql.query("EXPLAIN QUERY PLAN $spread", bound.toTypedArray()).use { cursor ->
             buildList { while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("detail"))) }
         }
         val junctionScan = junctionScan(statement)
         assertFalse("junction table scanned: $plan", plan.any { junctionScan.containsMatchIn(it) })
         return plan
+    }
+
+    private fun parameters(statement: String): List<String> =
+        PARAMETER.findAll(statement).map { it.groupValues[1] }.distinct().toList()
+
+    /** Replaces each list-valued `:name` with `:name_0,:name_1,…` and binds each element to its own name. */
+    private fun spreadLists(statement: String, args: Map<String, Any?>): Pair<String, Map<String, Any?>> {
+        var spread = statement
+        val spreadArgs = LinkedHashMap<String, Any?>()
+        args.forEach { (name, value) ->
+            if (value is List<*>) {
+                val names = value.indices.map { "${name}_$it" }
+                spread = spread.replace(Regex(""":$name\b"""), names.joinToString(",") { ":$it" })
+                names.zip(value).forEach { (element, elementValue) -> spreadArgs[element] = elementValue }
+            } else {
+                spreadArgs[name] = value
+            }
+        }
+        return spread to spreadArgs
     }
 
     /**
@@ -159,6 +231,8 @@ class QueryPlanTest {
         val DATE_INDEX = Regex("""^SEARCH n USING (?:COVERING )?INDEX idx_notes_date\b""")
         val ENTITY_INDEX = Regex("""idx_note_persons_person|idx_note_projects_project""")
         val COLINKED = Regex("""^SEARCH [xy] USING .*""")
+        const val PERSON_INDEX = "idx_note_persons_person"
+        const val PROJECT_INDEX = "idx_note_projects_project"
         const val AUTOINDEX_PERSONS = "sqlite_autoindex_note_persons_1"
         const val AUTOINDEX_PROJECTS = "sqlite_autoindex_note_projects_1"
 

@@ -21,8 +21,8 @@ class SeedGeneratorTest {
         assertEquals((1L..10_000L).toList(), notes.map { it.id })
         assertEquals((1L..300L).toList(), model.persons.map { it.id })
         assertEquals((1L..100L).toList(), model.projects.map { it.id })
-        assertEquals(2_000, notes.count { 1L in it.personIds })
-        assertEquals(1_500, notes.count { 1L in it.projectIds })
+        assertEquals(2_000, notes.count { SeedGenerator.HEAVY_PERSON in it.personIds })
+        assertEquals(1_500, notes.count { SeedGenerator.HEAVY_PROJECT in it.projectIds })
     }
 
     @Test

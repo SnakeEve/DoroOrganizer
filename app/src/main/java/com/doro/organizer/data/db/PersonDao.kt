@@ -11,20 +11,33 @@ import kotlinx.coroutines.flow.Flow
  * (DEC-81).
  */
 @Dao
-interface PersonDao {
-    /** Every person for a picker; [coLinkedTo] is a project id or null ([PERSON_OPTIONS_SQL]). */
+interface PersonDao : EntityDao {
+    /** [coLinkedTo] is a project id or null ([PERSON_OPTIONS_SQL]). */
     @Query(PERSON_OPTIONS_SQL)
-    fun observeOptions(coLinkedTo: Long?): Flow<List<EntityOptionRow>>
+    override fun observeOptions(coLinkedTo: Long?): Flow<List<EntityOptionRow>>
 
-    /** The person [id], or null once it is gone: the existence probe of data-layer.md § Reactivity. */
     @Query(PERSON_REF_SQL)
-    fun observe(id: Long): Flow<EntityRef?>
+    override fun observe(id: Long): Flow<EntityRef?>
 
     /** A new person; returns its id. */
     @Insert
     suspend fun insert(person: PersonEntity): Long
 
-    /** The ids of [ids] that still exist. */
     @Query(EXISTING_PERSON_IDS_SQL)
-    suspend fun existingIds(ids: List<Long>): List<Long>
+    override suspend fun existingIds(ids: List<Long>): List<Long>
+
+    @Query(PERSON_EXISTS_SQL)
+    override suspend fun exists(id: Long): Int
+
+    @Query(PERSON_IMPACT_N_SQL)
+    override suspend fun impactN(id: Long): Int
+
+    @Query(PERSON_IMPACT_M_SQL)
+    override suspend fun impactM(id: Long): Int
+
+    @Query(DELETE_PERSON_LINKS_SQL)
+    override suspend fun deleteLinks(id: Long): Int
+
+    @Query(DELETE_PERSON_SQL)
+    override suspend fun delete(id: Long): Int
 }

@@ -14,6 +14,9 @@ import com.doro.organizer.data.db.ProjectEntity
 import com.doro.organizer.data.db.SaveProbe
 import com.doro.organizer.model.BatchResult
 import com.doro.organizer.model.DateFilter
+import com.doro.organizer.model.DeleteImpact
+import com.doro.organizer.model.EntityDeleteResult
+import com.doro.organizer.model.EntityOption
 import com.doro.organizer.model.EntityRef
 import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.NoteDetail
@@ -239,5 +242,20 @@ class RedactionTest {
     @Test
     fun batchResult_printsCounts() {
         assertEquals("BatchResult(selected=3, changed=2)", BatchResult(3, 2).toString())
+    }
+
+    @Test
+    fun entityOption_printsIdOnly() {
+        assertEquals("EntityOption(id=18)", EntityOption(18, SENTINEL, 1, 3, coLinked = true).toString())
+    }
+
+    @Test
+    fun deleteImpact_printsCounts() {
+        assertEquals("DeleteImpact(n=3, m=1)", DeleteImpact(3, 1).toString())
+    }
+
+    @Test
+    fun entityDeleteResult_printsCounts() {
+        assertEquals("EntityDeleteResult(deleted=true, n=3, m=1)", EntityDeleteResult(true, 3, 1).toString())
     }
 }

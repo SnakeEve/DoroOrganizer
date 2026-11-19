@@ -6,6 +6,7 @@ import com.doro.organizer.data.db.NoteEntity
 import com.doro.organizer.data.db.NotePersonCrossRef
 import com.doro.organizer.data.db.NoteProjectCrossRef
 import com.doro.organizer.data.db.SaveProbe
+import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.NoteDraft
 import com.doro.organizer.model.SaveResult
 import com.doro.organizer.model.SearchText
@@ -64,9 +65,9 @@ private class DesiredLinks(val persons: Set<Long>, val projects: Set<Long>, val 
 
 /** Step 4: the draft's links minus vanished entities, plus the entities it creates. */
 private suspend fun desiredLinks(db: AppDatabase, draft: NoteDraft, now: Long): DesiredLinks {
-    val persons = db.survivingPersons(draft.personIds)
-    val projects = db.survivingProjects(draft.projectIds)
-    val created = insertNew(db, draft.newPersons, draft.newProjects, now)
+    val persons = db.survivingEntities(EntityKind.Person, draft.personIds)
+    val projects = db.survivingEntities(EntityKind.Project, draft.projectIds)
+    val created = EntityRepository.insertNew(db, draft.newPersons, draft.newProjects, now)
     return DesiredLinks(
         persons = (persons + created.persons.values).toSet(),
         projects = (projects + created.projects.values).toSet(),

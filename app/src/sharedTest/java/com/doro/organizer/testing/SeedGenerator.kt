@@ -82,8 +82,8 @@ class SeedGenerator(private val seed: Long = 42, private val notes: Int = 10_000
             do {
                 draft.personIds = pick(random, if (draft in heavyPerson) 2 else 3, 2..PERSONS)
                 draft.projectIds = pick(random, if (draft in heavyProject) 1 else 2, 2..PROJECTS)
-                if (draft in heavyPerson) draft.personIds += 1L
-                if (draft in heavyProject) draft.projectIds += 1L
+                if (draft in heavyPerson) draft.personIds += HEAVY_PERSON
+                if (draft in heavyProject) draft.projectIds += HEAVY_PROJECT
             } while (draft.personIds.isEmpty() && draft.projectIds.isEmpty())
         }
     }
@@ -139,6 +139,12 @@ class SeedGenerator(private val seed: Long = 42, private val notes: Int = 10_000
 
         const val PERSONS = 300
         const val PROJECTS = 100
+
+        /** The person linked to 2,000 notes. */
+        const val HEAVY_PERSON = 1L
+
+        /** The project linked to 1,500 notes. */
+        const val HEAVY_PROJECT = 1L
 
         /** Words that the search tests and oracles reuse; every script and LIKE wildcard of testing.md § 7. */
         val WORDS = listOf(
