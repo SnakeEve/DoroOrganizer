@@ -8,7 +8,7 @@ Conventions: `G` is the committed generation, `n` a new one. "Key" means the raw
 
 ## Files on disk
 
-`databases/` is the parent of `Context.getDatabasePath(…)`; `noBackupFilesDir` and `cacheDir` are the `Context` properties. All three are subdirectories of the app's data directory (`Context.dataDir`) on one filesystem, so `android.system.Os.rename` between them is an atomic `rename(2)`. The app is never `directBootAware`, so all of them live in credential-encrypted storage ([security.md](security.md) § 1.4).
+`databases/` is the parent of `Context.getDatabasePath(…)`; `noBackupFilesDir` and `cacheDir` are the `Context` properties (`DbFiles.forApp` derives all three from `applicationInfo.dataDir`, below). All three are subdirectories of the app's data directory (`Context.dataDir`) on one filesystem, so `android.system.Os.rename` between them is an atomic `rename(2)`. The app is never `directBootAware`, so all of them live in credential-encrypted storage ([security.md](security.md) § 1.4).
 
 | Path | Content | Created | Deleted | Why it never leaves the device |
 |---|---|---|---|---|
@@ -50,15 +50,15 @@ class DbFiles(val databasesDir: File, val noBackupDir: File, cacheDir: File) {  
 
 
     companion object {
-        // Production factory, added with its first caller when AppContainer.files is wired (SPEC T14):
-        fun forApp(context: Context): DbFiles          // databasesDir = context.getDatabasePath("doro-0.db").parentFile!! (<dataDir>/databases), noBackupDir = context.noBackupFilesDir, cacheDir = context.cacheDir
+        // Production factory (AppContainer.files):
+        fun forApp(context: Context): DbFiles          // <dataDir>/databases, <dataDir>/no_backup and <dataDir>/cache with dataDir = context.applicationInfo.dataDir: the directories getDatabasePath, noBackupFilesDir and cacheDir name, without those getters, which create the directory on the calling thread (construction does no I/O; ensureDirs creates them in E1)
     }
 }
 ```
 
 - The constructor takes plain `File` roots, never a `Context`, so instrumented tests point every root at a temporary directory (`TestDatabases.files`, [testing.md § 7](testing.md#7-fixtures-and-fakes)) and nothing in a test touches the app's real `databases/`. Only `forApp(context)` reads the `Context` paths listed at the top of this section.
-- `noBackupDir` must be the directory that holds `db-state.json`: the [generation commit](#generation-commit) and the [biometric slot commits](#biometric-slot-commits) make the key-state rewrite durable with `syncDirectory(files.noBackupDir)`, and the `KeyVault` surface does not expose its directory (security.md § 3.6; `data` may not import `security`). Production guarantees it by building both `DbFiles.forApp(context)` and `DefaultKeyVault.create(…)` on the same `context.noBackupFilesDir` (AppContainer, SPEC T14); the DbMaintenance tests pass the key-state directory of `KeyVaultRule` as `noBackupDir` (`maintenanceFiles`, [testing.md § 7](testing.md#7-fixtures-and-fakes)).
-- Build state (T13): every member above except `forApp` (first caller AppContainer, T14) exists; no member exists without a user. The pure name rules live in `data/GenerationNames.kt`: `generationOf(fileName)` (the number of a name matching the pattern above, else null) and `nextGeneration(committed, inUse)` ([Generation numbers](#generation-numbers)); the order of `deleteEverything` is the pure `erasureOrder(onDisk, committed)` in `DbFiles.kt`.
+- `noBackupDir` must be the directory that holds `db-state.json`: the [generation commit](#generation-commit) and the [biometric slot commits](#biometric-slot-commits) make the key-state rewrite durable with `syncDirectory(files.noBackupDir)`, and the `KeyVault` surface does not expose its directory (security.md § 3.6; `data` may not import `security`). Production guarantees it by building both `DbFiles.forApp(context)` and `DefaultKeyVault.create(…)` on the same `<applicationInfo.dataDir>/no_backup`, the `noBackupFilesDir` path (AppContainer; `ContainerWiringTest`); the DbMaintenance tests pass the key-state directory of `KeyVaultRule` as `noBackupDir` (`maintenanceFiles`, [testing.md § 7](testing.md#7-fixtures-and-fakes)).
+- Build state (T14): every member above exists; no member exists without a user. The pure name rules live in `data/GenerationNames.kt`: `generationOf(fileName)` (the number of a name matching the pattern above, else null) and `nextGeneration(committed, inUse)` ([Generation numbers](#generation-numbers)); the order of `deleteEverything` is the pure `erasureOrder(onDisk, committed)` in `DbFiles.kt`.
 
 ## Generations and commit
 
