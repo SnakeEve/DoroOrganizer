@@ -93,6 +93,7 @@ What to expect:
 | `docs/` | Design documents (below) |
 | `SPEC.md` | Build contract: invariants (§V) and ordered tasks with status (§T); encoding in [FORMAT.md](FORMAT.md) |
 | `CLAUDE.md` | Working rules for Claude Code in this repo |
+| `dev/claude/` | How the build is run with Claude Code: [handoff notes](dev/claude/HANDOFF.md), build workflows, docs checker |
 
 ## Design documents
 
