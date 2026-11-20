@@ -97,7 +97,7 @@ Workflow({ scriptPath: "<repo>/dev/claude/workflows/doro-build-tasks.js",
 This is the same loop as the owner's puja_android ("cumbuckets") project. adb is not on PATH; from Git Bash:
 
 ```bash
-adb="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"     # Windows default SDK location
+adb="${ANDROID_HOME:-$LOCALAPPDATA/Android/Sdk}/platform-tools/adb.exe"   # ANDROID_HOME if set, else the Windows default SDK location
 "$adb" devices                                             # the phone must show as "device"
 ./gradlew :app:assembleDebug
 "$adb" install -r app/build/outputs/apk/debug/app-debug.apk   # owner taps Install; retry if cancelled (below)
@@ -127,12 +127,15 @@ adb="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"     # Windows default SDK
 There are two HyperOS behaviors on this phone, and both end in `INSTALL_FAILED_USER_RESTRICTED`:
 - **This repo (2026-11-19/20):** a confirmation popup with about a 12 s countdown appears for every install. The owner taps *Install*.
 - **cumbuckets (2026-11-10/15):** the Security app sometimes cancelled an install within about 45 ms. Retrying `adb install -r` worked, after up to five tries. An *update* of an installed app once went through while the phone was locked, but a *new* package needed the phone unlocked.
+- **Updates pass without a popup (verified 2026-11-21, HyperOS OS3.0.303.0):** the fresh install of the debug app asked; an `adb install -r` over it went through in 3 s with nobody touching the phone.
 
 So: ask the owner to unlock the phone and watch it, then retry up to about five times. Never try to automate the popup: the system ignores injected taps on it, by design.
 
 ### 4.3 Instrumented tests through Gradle (verified here)
 
 **Install popups:** each Gradle connected run installs four packages (the app, the test app, the Orchestrator, test services), so it shows **four popups** (section 4.2). Tell the owner before each run. Gradle uninstalls all four at the end, so the next run asks again; section 4.4 avoids that.
+
+**Keeping the four packages installed (verified 2026-11-21, AGP 9.5.1):** put `android.injected.androidTest.leaveApksInstalledAfterRun=true` in the machine's user-level `~/.gradle/gradle.properties`, never in the repo. Gradle then leaves all four packages on the phone after a run, and later runs only update them, so they need no taps (a second `NoteRowTest` run passed hands-off). The owner taps the four popups once per phone. After that, never uninstall the packages while the owner is away: the next fresh install would wait for a tap.
 
 **Full suite:** about 875 tests in about 46 minutes. The Orchestrator runs each test in its own process with `clearPackageData`.
 
