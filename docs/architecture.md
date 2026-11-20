@@ -166,7 +166,8 @@ DoroOrganizer/
 │       ├── manifest/         CheckManifestTask (:app:checkReleaseManifestPolicy), ManifestRules, FilePaths, Xml
 │       ├── pagesize/         CheckPageSizeTask (:app:checkReleasePageSize), PageSizeRules, ElfLoadSegments
 │       ├── logs/             CheckReleaseLogsTask (:app:checkReleaseLogs), DexLogScanner, R8Outputs
-│       └── dependencies/     CheckBannedDependenciesTask (:app:checkBannedDependencies), BannedDependencies, ModuleGraph
+│       ├── dependencies/     CheckBannedDependenciesTask (:app:checkBannedDependencies), BannedDependencies, ModuleGraph
+│       └── devicetests/      CheckDeviceTestResultsTask (:app:checkDeviceTestResults), DeviceTestResults
 └── config/                  the gates' reviewed lists and scripts (root directory, read by the gates and their tests)
     ├── permission-allowlist.txt        security.md § 9.3
     ├── banned-dependencies.txt         security.md § 9.3 and testing.md § 9
@@ -176,7 +177,7 @@ DoroOrganizer/
     └── check-released-schemas.sh       its released-schema part
 ```
 
-- The plugin registers `checkReleaseManifestPolicy`, `checkReleasePageSize`, `checkReleaseLogs`, `checkBannedDependencies` and the aggregate `verificationGates` (all in the `verification` group). `checkReleaseManifest` is not used as a name because AGP already defines a task of that name. `app/build.gradle.kts` makes `:app:verificationGates` also depend on `:build-logic:test`, so the unit tests that pin the gate rules run with the gates.
+- The plugin registers `checkReleaseManifestPolicy`, `checkReleasePageSize`, `checkReleaseLogs`, `checkBannedDependencies` and the aggregate `verificationGates` (all in the `verification` group), and `checkDeviceTestResults`, the result check of the `device-tests` job ([testing.md § 9](testing.md#9-ci-pipeline)), which finalizes `connected<TestBuildType>AndroidTest`, reads AGP's results folder of that run by its path and is not part of `verificationGates`. `checkReleaseManifest` is not used as a name because AGP already defines a task of that name. `app/build.gradle.kts` makes `:app:verificationGates` also depend on `:build-logic:test`, so the unit tests that pin the gate rules run with the gates.
 - The gate tasks read only AGP's public variant API (`androidComponents.onVariants`: the `APK`, `MERGED_MANIFEST` and `OBFUSCATION_MAPPING_FILE` artifacts, `applicationId`, the resource sources, each component's `runtimeConfiguration`) and the build-tools binaries `zipalign` and `dexdump` of the SDK's `buildToolsVersion`. They write nothing and are not cacheable.
 - The `build-logic` tests are JVM-only JUnit4 tests (no Android, no SQLCipher); they read the real `config/` files, compare the banned-dependency bullets of security.md § 9.3 and testing.md § 9 with `config/banned-dependencies.txt`, and run `config/check-released-schemas.sh` in a throwaway git repository (they need `git` and `sh` on the path; on Windows `sh` comes from Git).
 - The package-layer rules, [Import rules](#import-rules) and [Boundary test](#boundary-test) apply to the app sources only, not to `build-logic`. The `com.doro.organizer.gates` package exists only in `build-logic`.
@@ -213,7 +214,7 @@ Each pair is two files with the same fully qualified class name in `src/debug/ja
 
 ### Boundary test
 
-`ArchitectureTest` (JUnit4 in `app/src/test`, DEC-03, [testing.md I-39 and I-41](testing.md#4-invariant-catalog)) reads every `.kt` file under `app/src/{main,debug,release}/{java,kotlin}` (the `qa` and `benchmark` build types reuse `src/release`, so there is nothing more to scan), assigns it to a row by its `package` line, strips comments and string literals (except for rule 6), and fails with `file:line` for any rule below. This section is the single list of its rules (rule 7 is checked by `CrashTestKeysRule`, rule 8 by `TransactionRule`, rule 9 by `WhitespaceRule`); testing.md I-41 and [security.md § 10](security.md#10-logging-and-leak-hygiene-dec-70) link here and never restate them.
+`ArchitectureTest` (JUnit4 in `app/src/test`, DEC-03, [testing.md I-39 and I-41](testing.md#4-invariant-catalog)) reads every `.kt` file under `app/src/{main,debug,release}/{java,kotlin}` (the `qa` and `benchmark` build types reuse `src/release`, so there is nothing more to scan), assigns it to a row by its `package` line, strips comments and string literals (except for rule 6), and fails with `file:line` for any rule below. This section is the single list of its rules (rule 7 is checked by `CrashTestKeysRule`, rule 8 by `TransactionRule`, rule 9 by `WhitespaceRule`); testing.md I-41 and [security.md § 10](security.md#10-logging-and-leak-hygiene-dec-70) link here and never restate them. `ArchitectureTest` also hosts one check that is not a boundary rule and reads the compiled instrumented tests instead of sources: `TestMethodRule`, owned by [testing.md § 1](testing.md#1-test-layers).
 
 1. **Imports.** An import or fully qualified `com.doro.organizer.` reference that the import table forbids, or a forbidden third-party package. Tokens `noteRepository`, `entityRepository` and `settingsStore` in `ui/gate` files.
 2. **Banned tokens**, each allowed only where stated:
