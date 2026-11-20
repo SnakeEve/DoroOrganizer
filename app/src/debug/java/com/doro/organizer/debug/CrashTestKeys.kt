@@ -7,19 +7,18 @@ import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.time.AppTime
 import com.doro.organizer.security.AndroidBioKeystore
 import com.doro.organizer.security.AndroidKekKeystore
-import com.doro.organizer.security.BIO_ALIAS
 import com.doro.organizer.security.DefaultKeyVault
 import com.doro.organizer.settings.SettingsStore
 import java.io.File
 
 /**
- * The test configuration of the biometric seam (testing.md § 5, technique "Biometric slot"): the production alias,
- * key size, GCM mode and purposes, without the user-authentication parameters, so a `Cipher` works without a touch.
- * Debug-only: the `:crashtest` process cannot load test classes, and it arms and uses the slot with this spec.
- * `BiometricKeySpecTest` pins the production spec.
+ * The test configuration of the biometric seam (testing.md § 5, technique "Biometric slot"): the given slot alias and
+ * the production key size, GCM mode and purposes, without the user-authentication parameters, so a `Cipher` works
+ * without a touch. Debug-only: the `:crashtest` process cannot load test classes, and it arms and uses the slot with
+ * this spec. `BiometricKeySpecTest` pins the production spec.
  */
-fun testBioKeySpec(): KeyGenParameterSpec =
-    KeyGenParameterSpec.Builder(BIO_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+fun testBioKeySpec(alias: String): KeyGenParameterSpec =
+    KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
         .setKeySize(256)
         .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
         .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)

@@ -2,7 +2,9 @@ package com.doro.organizer.data.maintenance
 
 import androidx.core.util.AtomicFile
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.model.KeyMode
+import com.doro.organizer.security.BioSlotStatus
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.MaintenanceSetup
@@ -159,6 +161,54 @@ class StartupReconciliationTest {
         assertEquals(settings, setup.settings.snapshot())
     }
 
+    /** DEC-98: every biometric key that no committed slot names goes; the committed slot's own key stays. */
+    @Test
+    fun theBiometricKeysNoCommittedSlotNames_areSwept_andTheSlotsOwnKeyStays() = runStartupTest {
+        setup.start()
+        setup.changeKey(KeyMode.PASSWORD, new = PASSWORD)
+        assertEquals(AppResult.Ok(Unit), setup.maintenance.createBiometricSlot(setup.armCipher()))
+        val alias = requireNotNull(setup.state().bioSlot).keyAlias
+        setup.armCipher() // an arming that never committed, as a crash at PREPARE_BIO_SLOT leaves it (CS-29)
+        setup.holder.close()
+        val state = stateFingerprint()
+
+        setup.maintenance.reconcileAtStartup()
+
+        assertEquals(setOf(alias), vaults.bioAliases())
+        assertEquals(BioSlotStatus.Live, setup.vault.biometricSlotStatus())
+        assertEquals(state, stateFingerprint())
+    }
+
+    @Test
+    fun theBiometricKeySweep_deletesEveryKeyOverAMissingKeyState_andNoneOverAnInvalidOne() = runStartupTest {
+        setup.vault.commit(1, setup.vault.prepare(KeyMode.PASSWORD, PASSWORD.toByteArray()).slot, null)
+        setup.armCipher()
+        val aliases = vaults.bioAliases()
+        vaults.stateFile.writeText("{")
+
+        assertEquals(StartupDecision.KeyUnavailable, setup.maintenance.reconcileAtStartup())
+        assertEquals(aliases, vaults.bioAliases()) // DEC-86: nothing is acted on over an invalid key-state
+
+        assertTrue(vaults.stateFile.delete())
+        assertEquals(StartupDecision.FirstRun, setup.maintenance.reconcileAtStartup())
+        assertFalse(vaults.bioKeyExists())
+    }
+
+    /** DEC-86: under KeyUnavailable the keys go only with the user's Restore or Start fresh, a missing file included. */
+    @Test
+    fun theBiometricKeySweep_neverRunsUnderKeyUnavailable_overAMissingKeyState() = runStartupTest {
+        setup.vault.commit(1, setup.vault.prepare(KeyMode.PASSWORD, PASSWORD.toByteArray()).slot, null)
+        setup.armCipher()
+        val aliases = vaults.bioAliases()
+        assertTrue(vaults.stateFile.delete())
+        databases.createLive(2, TestKey.Raw(ByteArray(32) { 7 }))
+
+        assertEquals(StartupDecision.KeyUnavailable, setup.maintenance.reconcileAtStartup())
+
+        assertEquals(1, aliases.size)
+        assertEquals(aliases, vaults.bioAliases())
+    }
+
     @Test
     fun aPartialNewKeyStateFile_isIgnored() = runStartupTest {
         // Verified at setup: androidx.core 1.19.1's AtomicFile writes "<name>.new".
@@ -200,4 +250,8 @@ class StartupReconciliationTest {
 
     private fun stateFingerprint(): Triple<Long, Long, List<Byte>> =
         vaults.stateFile.let { Triple(it.length(), it.lastModified(), it.readBytes().toList()) }
+
+    private companion object {
+        const val PASSWORD = "startup password 1"
+    }
 }

@@ -1,5 +1,8 @@
 package com.doro.organizer.architecture
 
+import java.io.File
+import java.nio.file.Files
+import javax.tools.ToolProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -8,7 +11,8 @@ import org.junit.Test
 /**
  * testing.md I-41: one method per rule and banned-token group of architecture.md § Boundary test, run over the
  * production sources, each with a twin that plants violating source text and expects it reported at `file:line`.
- * Planted sources start with their package line and a blank line, so the planted body starts on line 3.
+ * Planted sources start with their package line and a blank line, so the planted body starts on line 3. One more rule
+ * reads the compiled instrumented tests instead: every `@Test` is a method JUnit accepts (testing.md § 1).
  */
 class ArchitectureTest {
     @Test
@@ -384,6 +388,88 @@ class ArchitectureTest {
         }
     }
 
+    @Test
+    fun instrumentedTestMethods_areAllAcceptedByJUnit() {
+        val classes = ClassFile.readAll(TestMethodRule.androidTestClassRoots)
+        // The scan is real: the compiled instrumented tests, parameterized classes included.
+        assertTrue(classes.any { it.name == "com.doro.organizer.data.maintenance.CrashSafetyTest" })
+        assertTrue(classes.sumOf { type -> type.methods.count { "Lorg/junit/Test;" in it.annotations } } > 500)
+        val violations = TestMethodRule.check(classes)
+        assertTrue(violations.joinToString("\n", prefix = "JUnit rejects these (testing.md § 1):\n"), violations.isEmpty())
+    }
+
+    @Test
+    fun instrumentedTestMethods_planted() {
+        val planted = compileJava(
+            "Planted.java",
+            """
+            package planted;
+
+            import org.junit.rules.TestRule;
+
+            public class Planted {
+                static final long BIG = 1L << 40;
+                static final double HALF = 0.5;
+
+                @org.junit.Rule public TestRule rule = (base, description) -> base;
+                @org.junit.Rule TestRule hiddenRule = (base, description) -> base;
+                @org.junit.ClassRule public static TestRule classRule = (base, description) -> base;
+                @org.junit.ClassRule public TestRule instanceClassRule = (base, description) -> base;
+                @org.junit.Rule @org.junit.ClassRule public static TestRule both = (base, description) -> base;
+
+                @org.junit.Rule public TestRule getRuleByGetter() { return rule; }
+                @org.junit.Rule TestRule getHiddenRuleByGetter() { return rule; }
+
+                @org.junit.BeforeClass public static void setUpClass() { }
+                @org.junit.BeforeClass public void notStaticSetUpClass() { }
+                @org.junit.AfterClass static void hiddenTearDownClass() { }
+                @org.junit.Before public void setUp() { }
+                @org.junit.Before public int setUpWithValue() { return 1; }
+                @org.junit.After public static void staticTearDown() { }
+
+                @org.junit.Test public void accepted() { Runnable r = () -> { }; r.run(); }
+                @Deprecated @org.junit.Test(timeout = 5) public void acceptedWithArguments() { }
+                @org.junit.Test(expected = IllegalStateException.class) public int value() { return 1; }
+                @org.junit.Test public Object withParameter(int x) { return null; }
+                @org.junit.Test void hidden() { }
+                @org.junit.Test public static void shared() { }
+                public int notATest() { return 1; }
+            }
+
+            class Base {
+                @org.junit.Before public Object inheritedSetUp() { return null; }
+            }
+
+            class Derived extends Base {
+                @org.junit.Test public void test() { }
+            }
+
+            /** No test class, so JUnit never validates it: like the companion copy of a Kotlin @JvmStatic method. */
+            class NotATestClass {
+                @org.junit.BeforeClass public void ignored() { }
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(
+            listOf(
+                "planted.Base.inheritedSetUp: @Before does not return Unit",
+                "planted.Planted.getHiddenRuleByGetter: @Rule is not public",
+                "planted.Planted.hidden: @Test is not public",
+                "planted.Planted.hiddenRule: @Rule is not public",
+                "planted.Planted.hiddenTearDownClass: @AfterClass is not public",
+                "planted.Planted.instanceClassRule: @ClassRule is not static",
+                "planted.Planted.notStaticSetUpClass: @BeforeClass is not static",
+                "planted.Planted.setUpWithValue: @Before does not return Unit",
+                "planted.Planted.shared: @Test is static",
+                "planted.Planted.staticTearDown: @After is static",
+                "planted.Planted.value: @Test does not return Unit",
+                "planted.Planted.withParameter: @Test does not return Unit, takes parameters",
+            ),
+            TestMethodRule.check(planted).sorted(),
+        )
+    }
+
     private fun assertClean(rule: (KotlinSource) -> List<Violation>) {
         val violations = sources.flatMap(rule)
         assertTrue(violations.joinToString("\n", prefix = "Boundary test (architecture.md):\n"), violations.isEmpty())
@@ -404,6 +490,20 @@ class ArchitectureTest {
         val packageName = (listOf(Layer.APP_PACKAGE) + relative.split('/').dropLast(1)).joinToString(".")
         val text = "package $packageName\n\n${body.trimIndent()}\n"
         return KotlinSource("src/$sourceSet/java/com/doro/organizer/$relative", sourceSet, text)
+    }
+
+    /** [source] compiled as [fileName] by the JDK's compiler into a temporary directory; every class it declares. */
+    private fun compileJava(fileName: String, source: String): List<ClassFile> {
+        val compiler = checkNotNull(ToolProvider.getSystemJavaCompiler()) { "the JVM tests need a JDK, not a JRE" }
+        val dir = Files.createTempDirectory("planted").toFile()
+        try {
+            val file = File(dir, fileName).apply { writeText(source) }
+            val classpath = System.getProperty("java.class.path")
+            check(compiler.run(null, null, null, "-classpath", classpath, "-d", dir.path, file.path) == 0) { "javac failed" }
+            return ClassFile.readAll(listOf(dir))
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     private companion object {

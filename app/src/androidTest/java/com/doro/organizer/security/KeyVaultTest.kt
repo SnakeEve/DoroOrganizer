@@ -10,6 +10,7 @@ import com.doro.organizer.testing.FaultyKekKeystore
 import com.doro.organizer.testing.KekOp
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.SecretRecorder
+import com.doro.organizer.testing.TEST_SLOT_KEY_ALIAS
 import com.doro.organizer.testing.TestKdf
 import com.doro.organizer.testing.assertThrowsSuspending
 import com.doro.organizer.testing.testDispatchers
@@ -90,7 +91,7 @@ class KeyVaultTest {
     fun commit_writesExactlyItsInputs_andReadStateReturnsThem() = runVaultTest {
         val vault = vault()
         val prepared = vault.prepare(KeyMode.PASSWORD, password.copyOf())
-        val bio = BioSlot(ByteArray(12) { 1 }, ByteArray(48) { 2 })
+        val bio = BioSlot(TEST_SLOT_KEY_ALIAS, ByteArray(12) { 1 }, ByteArray(48) { 2 })
 
         vault.commit(7, prepared.slot, bio)
         val withBio = requireNotNull(vault.readState())
@@ -113,7 +114,21 @@ class KeyVaultTest {
         val before = rule.stateFile.readBytes()
         val device = requireNotNull(vault.readState()).slot
 
-        assertThrowsSuspending<IllegalArgumentException> { vault.commit(2, device, BioSlot(ByteArray(12), ByteArray(48))) }
+        assertThrowsSuspending<IllegalArgumentException> { vault.commit(2, device, BioSlot(TEST_SLOT_KEY_ALIAS, ByteArray(12), ByteArray(48))) }
+
+        assertArrayEquals(before, rule.stateFile.readBytes())
+    }
+
+    @Test
+    fun commit_aBiometricSlotNamingAKeyOutsideTheSlotAliasForm_isRefusedBeforeWriting() = runVaultTest {
+        val vault = vault()
+        val slot = vault.install(KeyMode.PASSWORD, password).slot
+        val before = rule.stateFile.readBytes()
+
+        // The parse-back check (security.md § 3.5): the strict parser would drop such a slot, so it is never written.
+        for (alias in listOf(KEK_ALIAS, "doro_bio_v1")) {
+            assertThrowsSuspending<IllegalStateException> { vault.commit(1, slot, BioSlot(alias, ByteArray(12), ByteArray(48))) }
+        }
 
         assertArrayEquals(before, rule.stateFile.readBytes())
     }
@@ -564,7 +579,7 @@ class KeyVaultTest {
         val slot = vault.install(KeyMode.PASSWORD, password).slot
         settings.setBackoff(failures = 5, retryAtElapsedMs = 99_000)
 
-        vault.commit(1, slot, BioSlot(ByteArray(12), ByteArray(48))) // a biometric slot commit
+        vault.commit(1, slot, BioSlot(TEST_SLOT_KEY_ALIAS, ByteArray(12), ByteArray(48))) // a biometric slot commit
         vault.commit(2, slot, null) // a restore that keeps the slot
         assertEquals(Settings(unlockFailures = 5, unlockRetryAtElapsedMs = 99_000, passwordVerifiedAt = time.nowMillis()), settings.snapshot())
 

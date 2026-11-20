@@ -7,6 +7,7 @@ import com.doro.organizer.testing.FakeSettingsStore
 import com.doro.organizer.testing.FaultyKekKeystore
 import com.doro.organizer.testing.KekOp
 import com.doro.organizer.testing.KeyVaultRule
+import com.doro.organizer.testing.TEST_SLOT_KEY_ALIAS
 import com.doro.organizer.testing.TestKdf
 import com.doro.organizer.testing.assertThrowsSuspending
 import com.doro.organizer.testing.testDispatchers
@@ -236,7 +237,7 @@ class KeyVaultKeyUnavailableTest {
     fun l05n_aMalformedBioSlot_leavesThePasswordRoute() = runVaultTest {
         val vault = vault()
         val prepared = vault.install(KeyMode.PASSWORD)
-        editState { put("bioSlot", JSONObject().put("keyAlias", "doro_bio_v1").put("iv", "*").put("wrappedDek", "x")) }
+        editState { put("bioSlot", JSONObject().put("keyAlias", TEST_SLOT_KEY_ALIAS).put("iv", "*").put("wrappedDek", "x")) }
 
         val state = requireNotNull(vault.readState())
 

@@ -1,6 +1,7 @@
 package com.doro.organizer.security
 
 import com.doro.organizer.model.KeyMode
+import com.doro.organizer.testing.TEST_SLOT_KEY_ALIAS
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -46,11 +47,16 @@ class KeyStateTypesTest {
     }
 
     @Test
-    fun bioSlot_comparesBothArrays() {
-        val slot = BioSlot(bytes(12, 1), bytes(48, 2))
+    fun bioSlot_comparesTheAliasAndBothArrays() {
+        val slot = BioSlot(TEST_SLOT_KEY_ALIAS, bytes(12, 1), bytes(48, 2))
 
-        assertTrue(slot.sameAs(BioSlot(bytes(12, 1), bytes(48, 2))))
-        assertFalse(slot.sameAs(BioSlot(bytes(12, 9), bytes(48, 2))))
-        assertFalse(slot.sameAs(BioSlot(bytes(12, 1), bytes(48, 9))))
+        assertTrue(slot.sameAs(BioSlot(TEST_SLOT_KEY_ALIAS, bytes(12, 1), bytes(48, 2))))
+        assertFalse(slot.sameAs(BioSlot(OTHER_ALIAS, bytes(12, 1), bytes(48, 2)))) // each slot has its own key (DEC-98)
+        assertFalse(slot.sameAs(BioSlot(TEST_SLOT_KEY_ALIAS, bytes(12, 9), bytes(48, 2))))
+        assertFalse(slot.sameAs(BioSlot(TEST_SLOT_KEY_ALIAS, bytes(12, 1), bytes(48, 9))))
+    }
+
+    private companion object {
+        const val OTHER_ALIAS = "doro_bio_v1_fedcba9876543210fedcba9876543210"
     }
 }

@@ -54,6 +54,7 @@ import com.doro.organizer.security.KeyVaultException
 import com.doro.organizer.security.PreparedKey
 import com.doro.organizer.security.UnlockResult
 import com.doro.organizer.testing.SENTINEL
+import com.doro.organizer.testing.TEST_SLOT_KEY_ALIAS
 import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -310,8 +311,8 @@ class RedactionTest {
         val printed = listOf(
             slot,
             slot.kdf,
-            BioSlot(secret, secret),
-            KeyState(4, slot, BioSlot(secret, secret)),
+            BioSlot(TEST_SLOT_KEY_ALIAS, secret, secret),
+            KeyState(4, slot, BioSlot(TEST_SLOT_KEY_ALIAS, secret, secret)),
             PreparedKey(slot, secret),
             UnlockResult.Key(secret),
         ).map { it.toString() }
@@ -355,7 +356,8 @@ class RedactionTest {
     @Test
     fun maintenanceTypes_printEnumsAndIdsOnly() {
         val secret = SENTINEL.toByteArray()
-        val state = KeyState(4, KeySlot(KeyMode.PASSWORD, secret, secret, secret, Kdf(600_000, secret)), BioSlot(secret, secret))
+        val bio = BioSlot(TEST_SLOT_KEY_ALIAS, secret, secret)
+        val state = KeyState(4, KeySlot(KeyMode.PASSWORD, secret, secret, secret, Kdf(600_000, secret)), bio)
         val printed = listOf(
             MaintenanceStatus.Running(MaintenanceOp.Backup, PipelineStep.WRITE_DOCUMENT, 0.5f),
             MaintenanceStatus.Finished(MaintenanceOp.KeyChange, AppResult.Ok(MaintenanceResult.KeyChanged(KeyMode.PLAIN, KeyMode.PASSWORD))),

@@ -69,6 +69,31 @@ class BiometricSlotCommitTest {
         setup.changeKey(KeyMode.PASSWORD, new = PASSWORD)
     }
 
+    /** A committed biometric slot, created as Settings would; returns the alias of its own key. */
+    private suspend fun committedSlot(): String {
+        assertEquals(AppResult.Ok(Unit), setup.maintenance.createBiometricSlot(setup.armCipher()))
+        return requireNotNull(setup.state().bioSlot).keyAlias
+    }
+
+    /**
+     * DEC-98: runs [exit], a creation that does not commit, over the committed slot whose key is [alias] while that
+     * slot is live and then dead (its key gone, as after a new enrollment). Each time the key-state stays byte for
+     * byte, the slot keeps its status, and the only biometric key left is the committed slot's own while it lives.
+     */
+    private suspend fun assertLeavesTheCommittedSlot(alias: String, label: String = "", exit: suspend () -> Unit) {
+        for (expected in listOf(BioSlotStatus.Live, BioSlotStatus.Dead)) {
+            if (expected == BioSlotStatus.Dead) vaults.deleteBioAliases()
+            val state = vaults.stateFile.readBytes()
+
+            exit()
+
+            val case = "$label $expected"
+            assertArrayEquals(case, state, vaults.stateFile.readBytes())
+            assertEquals(case, expected, setup.vault.biometricSlotStatus())
+            assertEquals(case, if (expected == BioSlotStatus.Live) setOf(alias) else emptySet<String>(), vaults.bioAliases())
+        }
+    }
+
     @Test
     fun creation_addsOnlyTheSlot_whichReleasesTheLiveKey() = runSlotTest {
         passwordMode()
@@ -89,6 +114,38 @@ class BiometricSlotCommitTest {
         assertEquals(events, setup.listener.finished.size) // no Maintenance state, no gate event
     }
 
+    /** DEC-98: after the commit only the new slot's own key is left; the replaced slot's and every orphan are gone. */
+    @Test
+    fun creation_deletesEveryOtherBiometricKey_afterItsCommit() = runSlotTest {
+        passwordMode()
+        assertEquals(AppResult.Ok(Unit), setup.maintenance.createBiometricSlot(setup.armCipher()))
+        val replaced = setup.state().bioSlot?.keyAlias
+        setup.armCipher() // an arming whose prompt was cancelled
+        val cipher = setup.armCipher()
+
+        assertEquals(AppResult.Ok(Unit), setup.maintenance.createBiometricSlot(cipher))
+
+        val alias = requireNotNull(setup.state().bioSlot).keyAlias
+        assertEquals(cipher.keyAlias, alias)
+        assertTrue(alias != replaced)
+        assertEquals(setOf(alias), vaults.bioAliases())
+        assertEquals(BioSlotStatus.Live, setup.vault.biometricSlotStatus())
+    }
+
+    /**
+     * DEC-98 (CS-29 without a crash): a creation that does not commit leaves the previous slot as it was, a live one
+     * live and a dead one dead, and deletes only the prompt's key.
+     */
+    @Test
+    fun aCreationThatDoesNotCommit_leavesThePreviousSlotAsItWas() = runSlotTest {
+        passwordMode()
+        assertLeavesTheCommittedSlot(committedSlot()) {
+            checkNotNull(scripted).failNextCommit = IOException("injected", ErrnoException("write", OsConstants.ENOSPC))
+
+            assertEquals(AppResult.Err(AppError.StorageFull), setup.maintenance.createBiometricSlot(setup.armCipher()))
+        }
+    }
+
     @Test
     fun creation_outsidePasswordMode_writesNothing_andDeletesThePromptsKey() = runSlotTest {
         passwordMode()
@@ -103,16 +160,29 @@ class BiometricSlotCommitTest {
     }
 
     @Test
-    fun creation_withRoomClosed_isDatabaseUnavailable_andDeletesThePromptsKey() = runSlotTest {
+    fun creation_withRoomClosed_isDatabaseUnavailable_andDeletesOnlyThePromptsKey() = runSlotTest {
         passwordMode()
-        val cipher = setup.armCipher()
+        val alias = committedSlot()
         setup.holder.close()
+
+        assertLeavesTheCommittedSlot(alias) {
+            assertEquals(AppResult.Err(AppError.DatabaseUnavailable), setup.maintenance.createBiometricSlot(setup.armCipher()))
+        }
+    }
+
+    /** No file can name the prompt's fresh key, so it goes even though nothing is acted on over the file (DEC-86). */
+    @Test
+    fun creation_overAnInvalidKeyState_isKeyUnavailable_writesNothing_andDeletesOnlyThePromptsKey() = runSlotTest {
+        passwordMode()
+        val alias = committedSlot()
+        val cipher = setup.armCipher()
+        vaults.stateFile.writeText("{\"formatVersion\":")
         val state = vaults.stateFile.readBytes()
 
-        assertEquals(AppResult.Err(AppError.DatabaseUnavailable), setup.maintenance.createBiometricSlot(cipher))
+        assertEquals(AppResult.Err(AppError.KeyUnavailable), setup.maintenance.createBiometricSlot(cipher))
 
         assertArrayEquals(state, vaults.stateFile.readBytes())
-        assertFalse(vaults.bioKeyExists())
+        assertEquals(setOf(alias), vaults.bioAliases())
     }
 
     @Test
@@ -131,18 +201,18 @@ class BiometricSlotCommitTest {
         assertNull(setup.state().bioSlot)
     }
 
+    /** The in-process twin of CS-29: a creation that fails at either slot step leaves the committed slot as it was. */
     @Test
-    fun aHookFailureDuringCreation_isUnexpected_leavesTheKeyStateByteIdentical_andDeletesThePromptsKey() = runSlotTest {
+    fun aHookFailureDuringCreation_isUnexpected_leavesTheKeyStateByteIdentical_andDeletesOnlyThePromptsKey() = runSlotTest {
         passwordMode()
         for (step in listOf(PipelineStep.PREPARE_BIO_SLOT, PipelineStep.COMMIT_BIO_SLOT)) {
-            val state = vaults.stateFile.readBytes()
-            setup.hook.throwAt(null, step, IOException("injected"))
+            assertLeavesTheCommittedSlot(committedSlot(), "$step") {
+                setup.hook.throwAt(null, step, IOException("injected"))
 
-            assertEquals("$step", AppResult.Err(AppError.Unexpected), setup.maintenance.createBiometricSlot(setup.armCipher()))
+                assertEquals("$step", AppResult.Err(AppError.Unexpected), setup.maintenance.createBiometricSlot(setup.armCipher()))
 
-            assertArrayEquals("$step", state, vaults.stateFile.readBytes())
-            assertFalse("$step", vaults.bioKeyExists())
-            setup.hook.clear()
+                setup.hook.clear()
+            }
         }
     }
 
@@ -222,33 +292,31 @@ class BiometricSlotCommitTest {
     }
 
     @Test
-    fun creation_whenTheWrapFails_isAuthFailed_writesNothing_andLeavesNoKey() = runSlotTest {
+    fun creation_whenTheWrapFails_isAuthFailed_writesNothing_andDeletesOnlyThePromptsKey() = runSlotTest {
         passwordMode()
-        val cipher = setup.armCipher()
-        setup.bio.failNext(BioOp.DoFinal, ProviderException("injected"))
-        val state = vaults.stateFile.readBytes()
-        val committed = commits // the setup's own: the fresh database and the key change
+        assertLeavesTheCommittedSlot(committedSlot()) {
+            val cipher = setup.armCipher()
+            setup.bio.failNext(BioOp.DoFinal, ProviderException("injected"))
+            val committed = commits
 
-        assertEquals(AppResult.Err(AppError.AuthFailed), setup.maintenance.createBiometricSlot(cipher))
+            assertEquals(AppResult.Err(AppError.AuthFailed), setup.maintenance.createBiometricSlot(cipher))
 
-        assertArrayEquals(state, vaults.stateFile.readBytes())
-        assertEquals(committed, commits)
-        assertFalse(vaults.bioKeyExists())
+            assertEquals(committed, commits)
+        }
     }
 
     @Test
     fun creation_withACipherPreparedForAnotherGeneration_isAuthFailed_andWritesNothing() = runSlotTest {
         passwordMode()
-        val cipher = setup.armCipher()
+        val stale = setup.armCipher()
         setup.changeKey(KeyMode.PASSWORD, current = PASSWORD, new = OTHER_PASSWORD)
-        val state = vaults.stateFile.readBytes()
-        val committed = commits
+        assertLeavesTheCommittedSlot(committedSlot()) {
+            val committed = commits
 
-        assertEquals(AppResult.Err(AppError.AuthFailed), setup.maintenance.createBiometricSlot(cipher))
+            assertEquals(AppResult.Err(AppError.AuthFailed), setup.maintenance.createBiometricSlot(stale))
 
-        assertArrayEquals(state, vaults.stateFile.readBytes())
-        assertEquals(committed, commits)
-        assertFalse(vaults.bioKeyExists())
+            assertEquals(committed, commits)
+        }
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.doro.organizer.security
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.model.KeyMode
+import com.doro.organizer.testing.TEST_SLOT_KEY_ALIAS
 import java.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,7 +27,7 @@ class KeyStateJsonTest {
     private val plain = KeySlot(KeyMode.PLAIN, null, null, null, null)
     private val device = KeySlot(KeyMode.DEVICE, bytes(12, 1), bytes(48, 2), null, null)
     private val password = KeySlot(KeyMode.PASSWORD, bytes(12, 1), bytes(64, 2), bytes(12, 3), Kdf(820_000, bytes(16, 4)))
-    private val bio = BioSlot(bytes(12, 5), bytes(48, 6))
+    private val bio = BioSlot(TEST_SLOT_KEY_ALIAS, bytes(12, 5), bytes(48, 6))
 
     private fun json(slot: KeySlot = password, bio: BioSlot? = null) =
         JSONObject(String(KeyStateJson.serialize(4, slot, bio), Charsets.UTF_8))
@@ -69,7 +70,7 @@ class KeyStateJsonTest {
         assertEquals(encode(password.wrappedDek!!), o.slot().getString("wrappedDek"))
         assertEquals("PBKDF2-HMAC-SHA256", o.slot().getJSONObject("kdf").getString("algorithm"))
         assertEquals(820_000, o.slot().getJSONObject("kdf").get("iterations"))
-        assertEquals("doro_bio_v1", o.getJSONObject("bioSlot").getString("keyAlias"))
+        assertEquals(TEST_SLOT_KEY_ALIAS, o.getJSONObject("bioSlot").getString("keyAlias")) // the slot's own key (DEC-98)
         assertFalse(json(plain).slot().has("kekAlias"))
         assertFalse(json(device).slot().has("kdf"))
     }
@@ -216,6 +217,7 @@ class KeyStateJsonTest {
             { it.getJSONObject("bioSlot").put("iv", "*" + encode(bio.iv).drop(1)) }, // a flipped base64 character
             { it.getJSONObject("bioSlot").put("wrappedDek", encode(bytes(47, 6))) },
             { it.getJSONObject("bioSlot").put("keyAlias", "doro_bio_v2") },
+            { it.getJSONObject("bioSlot").put("keyAlias", 7) },
             { it.getJSONObject("bioSlot").remove("iv") },
             { it.getJSONObject("bioSlot").put("wrappedDek", 48) },
             { it.put("bioSlot", JSONObject.NULL) },
@@ -228,6 +230,33 @@ class KeyStateJsonTest {
             assertTrue("variant $i", state.slot.sameAs(password))
             assertNull("variant $i", state.bioSlot)
             assertTrue("variant $i", state.deadBioSlot)
+        }
+    }
+
+    /** DEC-98: only the fresh-alias form, so a slot can never name the KEK, a pre-DEC-98 key or any other key. */
+    @Test
+    fun keyAlias_mustHaveTheFreshAliasForm() {
+        val accepted = listOf(TEST_SLOT_KEY_ALIAS, "doro_bio_v1_" + "0".repeat(32), "doro_bio_v1_" + "f".repeat(32))
+        val rejected = listOf(
+            "doro_bio_v1", // the constant of the builds before DEC-98
+            KEK_ALIAS,
+            "doro_bio_v1_" + "0".repeat(31),
+            "doro_bio_v1_" + "0".repeat(33),
+            "doro_bio_v1_" + "A".repeat(32),
+            "doro_bio_v1_" + "g".repeat(32),
+            "doro_bio_v2_" + "0".repeat(32),
+            " " + TEST_SLOT_KEY_ALIAS,
+            TEST_SLOT_KEY_ALIAS + "\n",
+        )
+
+        for (alias in accepted) {
+            val state = parse(json(password, bio).apply { getJSONObject("bioSlot").put("keyAlias", alias) }.toString())
+            assertEquals(alias, requireNotNull(state.bioSlot).keyAlias)
+        }
+        for (alias in rejected) {
+            val state = parse(json(password, bio).apply { getJSONObject("bioSlot").put("keyAlias", alias) }.toString())
+            assertNull(alias, state.bioSlot)
+            assertTrue(alias, state.deadBioSlot)
         }
     }
 

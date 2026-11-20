@@ -66,7 +66,7 @@ class ReconcileLockTest : GateTest() {
     @Test
     fun c_deadSlot_showsFingerprintChanged_atEveryPasswordUnlock_untilTheOfferSucceeds() = runBlocking {
         scene.plant(KeyMode.PASSWORD, PASSWORD, lock = true, slot = true)
-        vaults.deleteBioAlias()
+        vaults.deleteBioAliases()
         scene.coldStart()
         val state = scene.awaitGate { it is GateState.NeedsPassword } as GateState.NeedsPassword
         assertEquals(PasswordReason.FingerprintChanged, state.reason)
@@ -103,7 +103,7 @@ class ReconcileLockTest : GateTest() {
     @Test
     fun e_aDeadSlotLeftByASkippedRewrite_isDroppedByTheNextRemoval() = runBlocking {
         scene.plant(KeyMode.PASSWORD, PASSWORD, lock = true, slot = true)
-        vaults.deleteBioAlias() // the key gone, the slot still in the file: what a removal under opMutex leaves
+        vaults.deleteBioAliases() // the key gone, the slot still in the file: what a removal under opMutex leaves
         scene.coldStart()
         scene.awaitGate { it is GateState.NeedsPassword }
         scene.submit(PASSWORD)

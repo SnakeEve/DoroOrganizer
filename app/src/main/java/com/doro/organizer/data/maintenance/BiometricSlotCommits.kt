@@ -22,30 +22,33 @@ internal class BiometricSlotCommits(private val deps: MaintenanceDeps) {
     private val keyVault get() = deps.keyVault
 
     /**
-     * Creation, under the operation mutex. A hook failure or a bug is `Unexpected`, leaves the key-state untouched and,
-     * like every early exit, deletes the key the prompt's cipher was created on: it wraps nothing committed.
+     * Creation, under the operation mutex. A hook failure or a bug is `Unexpected` and leaves the key-state untouched.
+     * Every exit that does not commit the new slot deletes the key the prompt's cipher was created on, over an invalid
+     * key-state too (after a failed wrap, KeyVault does): it wraps nothing committed. Only a file that names the new
+     * slot after an `Unknown` outcome keeps it. The committed slot's own key is never deleted before the commit
+     * (DEC-98), so a creation that does not commit leaves that slot as it was.
      */
     suspend fun create(cipher: SlotCipher): AppResult<Unit> = try {
         createLocked(cipher)
     } catch (e: CancellationException) {
         throw e
     } catch (t: Throwable) {
-        dropKey(AppError.Unexpected)
+        dropKey(cipher, AppError.Unexpected)
     }
 
     private suspend fun createLocked(cipher: SlotCipher): AppResult<Unit> {
         deps.faultHook.before(null, PipelineStep.PREPARE_BIO_SLOT)
-        val state = deps.committedState() ?: return dropKey(AppError.KeyUnavailable)
+        val state = deps.committedState() ?: return dropKey(cipher, AppError.KeyUnavailable)
         if ((deps.holder.state.value as? HolderState.Open)?.generation != state.generation) {
-            return dropKey(AppError.DatabaseUnavailable)
+            return dropKey(cipher, AppError.DatabaseUnavailable)
         }
         if (state.slot.mode != KeyMode.PASSWORD) {
-            deleteKey() // a stale prompt after a key change: only PASSWORD mode has a slot
+            discardKey(cipher) // a stale prompt after a key change: only PASSWORD mode has a slot
             return AppResult.Ok(Unit)
         }
         // The holder opened exactly the generation the key-state names, and only holders of the mutex change either,
         // so the live key is the DEK of state.slot.
-        val live = deps.holder.copyLiveKey() ?: return dropKey(AppError.DatabaseUnavailable)
+        val live = deps.holder.copyLiveKey() ?: return dropKey(cipher, AppError.DatabaseUnavailable)
         val wrap = try {
             deps.faultHook.before(null, PipelineStep.COMMIT_BIO_SLOT)
             keyVault.wrapForBiometric(cipher, live)
@@ -54,7 +57,7 @@ internal class BiometricSlotCommits(private val deps: MaintenanceDeps) {
         }
         val bio = when (wrap) {
             is WrapResult.Wrapped -> wrap.bioSlot
-            WrapResult.BiometricUnusable -> return AppResult.Err(AppError.AuthFailed) // KeyVault deleted the alias
+            WrapResult.BiometricUnusable -> return AppResult.Err(AppError.AuthFailed) // KeyVault deleted the cipher's key
         }
         var writeError: Throwable? = null
         val readBack = try {
@@ -63,24 +66,30 @@ internal class BiometricSlotCommits(private val deps: MaintenanceDeps) {
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
-            return repair(state) // the directory sync or the read-back failed: the outcome is unknown
+            return repair(state, cipher) // the directory sync or the read-back failed: the outcome is unknown
         }
         return when {
-            readBack != null && readBack.matches(state.generation, state.slot, bio) -> AppResult.Ok(Unit)
-            readBack != null && readBack.generation == state.generation && readBack.slot.sameAs(state.slot) -> {
-                // The write did not land; an older slot was already dead because preparing the cipher replaced its key.
-                dropKey(if (writeError?.isStorageFull() == true) AppError.StorageFull else AppError.AuthFailed)
+            readBack != null && readBack.matches(state.generation, state.slot, bio) -> {
+                // The replaced slot's key and any orphan of an earlier arming (DEC-98). Best effort: a key left behind
+                // wraps nothing committed and goes with the next arming or startup sweep.
+                deps.bestEffort("bio key delete") { keyVault.deleteUnreferencedBiometricKeys() }
+                AppResult.Ok(Unit)
             }
-            else -> repair(state)
+            readBack != null && readBack.generation == state.generation && readBack.slot.sameAs(state.slot) -> {
+                // The write did not land: the previous state, and with it any older slot and its key, stays in force.
+                dropKey(cipher, if (writeError?.isStorageFull() == true) AppError.StorageFull else AppError.AuthFailed)
+            }
+            else -> repair(state, cipher)
         }
     }
 
     /**
      * The `Unknown` read-back of a creation: one rewrite of the key-state this operation read as valid moments ago,
      * without the biometric slot (DEC-80); never of one that was missing or invalid before. The database stays open
-     * and nothing restarts: the next cold start decides from the file on disk.
+     * and nothing restarts: the next cold start decides from the file on disk. A failed repair that left the new slot
+     * in the file keeps its key, so that slot stays live.
      */
-    private suspend fun repair(state: KeyState): AppResult<Unit> {
+    private suspend fun repair(state: KeyState, cipher: SlotCipher): AppResult<Unit> {
         try {
             commitSlot(state, null)
             keyVault.readState()
@@ -89,7 +98,7 @@ internal class BiometricSlotCommits(private val deps: MaintenanceDeps) {
         } catch (t: Throwable) {
             AppLog.d("bio slot repair failed: ${t.javaClass.simpleName}")
         }
-        return dropKey(AppError.OutcomeUnknown)
+        return dropKey(cipher, AppError.OutcomeUnknown)
     }
 
     /**
@@ -142,11 +151,12 @@ internal class BiometricSlotCommits(private val deps: MaintenanceDeps) {
         return error
     }
 
-    private suspend fun dropKey(error: AppError): AppResult<Unit> {
-        deleteKey()
+    private suspend fun dropKey(cipher: SlotCipher, error: AppError): AppResult<Unit> {
+        discardKey(cipher)
         return AppResult.Err(error)
     }
 
-    /** Best effort: a key left behind wraps nothing committed and is replaced by the next arm cipher. */
-    private suspend fun deleteKey() = deps.bestEffort("bio key delete") { keyVault.deleteBiometricKey() }
+    /** The prompt's key, best effort: a key left behind wraps nothing committed and goes with the next arming. */
+    private suspend fun discardKey(cipher: SlotCipher) =
+        deps.bestEffort("bio key delete") { keyVault.discardArmCipher(cipher) }
 }

@@ -5,6 +5,7 @@ import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import com.doro.organizer.gates.dependencies.CheckBannedDependenciesTask
 import com.doro.organizer.gates.dependencies.ModuleGraph
+import com.doro.organizer.gates.devicetests.CheckDeviceTestResultsTask
 import com.doro.organizer.gates.logs.CheckReleaseLogsTask
 import com.doro.organizer.gates.manifest.CheckManifestTask
 import com.doro.organizer.gates.pagesize.CheckPageSizeTask
@@ -17,7 +18,9 @@ import org.gradle.language.base.plugins.LifecycleBasePlugin
 /**
  * Registers the local verification gates of testing.md § 9 (DEC-14, DEC-15) on the `:app` module:
  * `checkReleaseManifestPolicy`, `checkReleasePageSize`, `checkBannedDependencies`, `checkReleaseLogs`, and
- * `verificationGates`, which runs all four. Their lists live in the root `config/` directory.
+ * `verificationGates`, which runs all four. Their lists live in the root `config/` directory. The result check of the
+ * `device-tests` job, `checkDeviceTestResults`, needs a phone run instead: it finalizes the connected test task of
+ * the test build type.
  */
 class VerificationGatesPlugin : Plugin<Project> {
     override fun apply(project: Project) {
@@ -52,6 +55,7 @@ class VerificationGatesPlugin : Plugin<Project> {
             description = "Runs the manifest, page-size, release-logs and dependencies gates (testing.md § 9)."
             dependsOn(gates)
         }
+        registerDeviceTestResultsCheck(project, android)
 
         components.onVariants { variant ->
             manifest.configure { applicationIds.put(checkNotNull(variant.buildType), variant.applicationId) }
@@ -82,6 +86,23 @@ class VerificationGatesPlugin : Plugin<Project> {
                 mappingFile.set(mapping)
                 r8Configuration.set(mapping.map { it.asFile.resolveSibling("configuration.txt") }.let(project.layout::file))
             }
+        }
+    }
+
+    /**
+     * `checkDeviceTestResults` over AGP's results folder of `connected<TestBuildType>AndroidTest` (testing.md § 9),
+     * which it finalizes.
+     */
+    private fun registerDeviceTestResultsCheck(project: Project, android: ApplicationExtension) {
+        val testBuildType = project.provider { android.testBuildType ?: "debug" }
+        val check = project.tasks.register("checkDeviceTestResults", CheckDeviceTestResultsTask::class.java) {
+            group = LifecycleBasePlugin.VERIFICATION_GROUP
+            description = "Checks the last connected run for test classes JUnit rejected (testing.md § 9)."
+            resultsDirectory.set(project.layout.buildDirectory.dir(testBuildType.map { "outputs/androidTest-results/connected/$it" }))
+        }
+        // configureEach realizes no task; the name is compared when AGP's task is realized, after the script ran.
+        project.tasks.configureEach {
+            if (name == "connected${testBuildType.get().replaceFirstChar(Char::uppercaseChar)}AndroidTest") finalizedBy(check)
         }
     }
 

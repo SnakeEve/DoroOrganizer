@@ -4,6 +4,7 @@ import android.os.Build
 import android.security.keystore.KeyProperties
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
+import java.security.SecureRandom
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -19,11 +20,13 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 class BiometricKeySpecTest {
-    private val spec = bioKeySpec()
+    private val alias = newBioKeyAlias(SecureRandom())
+    private val spec = bioKeySpec(alias)
 
     @Test
-    fun aes256Gcm_noPadding_forEncryptAndDecrypt_underItsOwnAlias() {
-        assertEquals("doro_bio_v1", spec.keystoreAlias)
+    fun aes256Gcm_noPadding_forEncryptAndDecrypt_underTheSlotsOwnAlias() {
+        assertEquals(alias, spec.keystoreAlias) // each slot has its own key (DEC-98)
+        assertTrue(isSlotKeyAlias(spec.keystoreAlias))
         assertNotEquals(KEK_ALIAS, spec.keystoreAlias)
         assertEquals(KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT, spec.purposes)
         assertArrayEquals(arrayOf(KeyProperties.BLOCK_MODE_GCM), spec.blockModes)

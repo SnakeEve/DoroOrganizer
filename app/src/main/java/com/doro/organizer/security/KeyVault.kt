@@ -44,7 +44,7 @@ interface KeyVault {
     suspend fun commit(generation: Long, slot: KeySlot, bio: BioSlot?)
 
     /**
-     * Erase (security.md § 5.4): deletes the key-state file, then the KEK, then the biometric key; failed deletes
+     * Erase (security.md § 5.4): deletes the key-state file, then the KEK, then every biometric key; failed deletes
      * are ignored.
      */
     suspend fun eraseState()
@@ -56,9 +56,10 @@ interface KeyVault {
     // rewrite the key-state file, and answer a Keystore failure of the biometric key with a result, never a throw.
 
     /**
-     * The committed slot's condition. Asks the Keystore only whether the alias exists (no operation, no
-     * authentication): the single slot query of `UnlockPolicy`, availability and `reconcileLock`. An alias check that
-     * fails twice (retried after 1 s, § 5.2) is `Dead`: a slot that cannot be looked up is not live.
+     * The committed slot's condition: `Live` only while its own key (`bioSlot.keyAlias`, DEC-98) exists. Asks the
+     * Keystore only whether that alias exists (no operation, no authentication): the single slot query of
+     * `UnlockPolicy`, availability and `reconcileLock`. An alias check that fails twice (retried after 1 s, § 5.2) is
+     * `Dead`: a slot that cannot be looked up is not live.
      */
     suspend fun biometricSlotStatus(): BioSlotStatus
 
@@ -77,7 +78,10 @@ interface KeyVault {
     /** As [unlockWithBiometric] but builds no raw key: `Verified(kekBroken)`. Return from background, lock off. */
     suspend fun verifyBiometric(cipher: SlotCipher): UnlockResult
 
-    /** A new biometric key and its ENCRYPT cipher (security.md § 3.7.2); `NoSlot` unless the mode is `PASSWORD`. */
+    /**
+     * A new biometric key under a fresh alias and its ENCRYPT cipher (security.md § 3.7.2, DEC-98); the committed slot's
+     * key is left alone. `NoSlot` unless the mode is `PASSWORD`.
+     */
     suspend fun biometricArmCipher(): SlotCipherResult
 
     /**
@@ -86,8 +90,26 @@ interface KeyVault {
      */
     suspend fun wrapForBiometric(cipher: SlotCipher, liveRawKey: ByteArray): WrapResult
 
-    /** Deletes the alias `doro_bio_v1`, best effort and idempotent; never touches the file. */
+    /**
+     * Deletes the key an `Arm` [cipher] was created on unless the committed `bioSlot` names it (DEC-98), best effort;
+     * never touches the file. A slot creation that ends without committing that slot; over an invalid key-state too,
+     * because no file can name a fresh alias that no commit wrote.
+     */
+    suspend fun discardArmCipher(cipher: SlotCipher)
+
+    /**
+     * Deletes every biometric key, the committed slot's included (that one even when the Keystore cannot list its
+     * keys), best effort and idempotent; never touches the file. Slot removal, the `DELETE_BIO_KEY` step after a
+     * new-DEK commit, and a slot found dead outside the vault.
+     */
     suspend fun deleteBiometricKey()
+
+    /**
+     * Deletes every biometric key that the committed `bioSlot` does not name (DEC-98), best effort; never touches the
+     * file. A missing key-state names none; an invalid one deletes nothing. After a slot creation's commit and at
+     * startup reconciliation; every arming does the same inside the vault.
+     */
+    suspend fun deleteUnreferencedBiometricKeys()
 
     /** Whether the 14-day reminder is due (DEC-74, security.md § 5.6). */
     suspend fun isPasswordReminderDue(): Boolean

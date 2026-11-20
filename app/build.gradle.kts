@@ -1,4 +1,5 @@
 import com.android.build.api.dsl.ManagedVirtualDevice
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     alias(libs.plugins.android.application) // Kotlin is built into AGP 9: no org.jetbrains.kotlin.android (DEC-02)
@@ -98,6 +99,14 @@ android {
             it.inputs.files(fileTree("schemas"))
                 .withPathSensitivity(PathSensitivity.RELATIVE)
                 .withPropertyName("doroSchemas")
+            // ArchitectureTest's TestMethodRule reads the compiled instrumented tests, so that a test class JUnit would
+            // reject fails here and not silently on the phone (testing.md § 1). Only the class output, not the compiler's
+            // incremental caches. Resolved lazily: AGP registers the task later.
+            val androidTestCompile = "compile${testType.replaceFirstChar(Char::uppercaseChar)}AndroidTestKotlin"
+            it.dependsOn(androidTestCompile)
+            it.jvmArgumentProviders += AndroidTestClasses(
+                files(provider { tasks.named<KotlinCompile>(androidTestCompile).get().destinationDirectory }),
+            )
         }
         managedDevices { // optional emulator jobs only; no gate depends on them (DEC-15)
             allDevices {
@@ -159,4 +168,9 @@ dependencies {
 // The gates are only as strong as their rules, so the aggregate also runs the build-logic unit tests that pin them.
 tasks.named("verificationGates") {
     dependsOn(gradle.includedBuild("build-logic").task(":test"))
+}
+
+/** The compiled instrumented tests, as an input of the unit tests and the system property ArchitectureTest reads. */
+class AndroidTestClasses(@get:Classpath val roots: FileCollection) : CommandLineArgumentProvider {
+    override fun asArguments() = listOf("-Ddoro.androidTestClasses=" + roots.files.joinToString(File.pathSeparator))
 }

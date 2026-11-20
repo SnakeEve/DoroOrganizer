@@ -63,7 +63,7 @@ internal object KeyStateJson {
             w.endObject()
             bio?.let {
                 w.name("bioSlot").beginObject()
-                w.name("keyAlias").value(BIO_ALIAS)
+                w.name("keyAlias").value(it.keyAlias)
                 w.name("iv").value(encode(it.iv))
                 w.name("wrappedDek").value(encode(it.wrappedDek))
                 w.endObject()
@@ -203,10 +203,12 @@ internal object KeyStateJson {
             }
         }
         reader.endObject()
-        if (malformed || strings["keyAlias"] != BIO_ALIAS) return null
+        // Only the fresh-alias form (DEC-98): a slot can never name the KEK or any other key.
+        val keyAlias = strings["keyAlias"]?.takeIf(::isSlotKeyAlias)
+        if (malformed || keyAlias == null) return null
         val iv = decodeOrNull(strings["iv"], IV_SIZE) ?: return null
         val wrappedDek = decodeOrNull(strings["wrappedDek"], SECRET_SIZE + GCM_TAG_SIZE) ?: return null
-        return BioSlot(iv, wrappedDek)
+        return BioSlot(keyAlias, iv, wrappedDek)
     }
 
     private fun readInteger(reader: JsonReader): Long {

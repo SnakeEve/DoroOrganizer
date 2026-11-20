@@ -28,7 +28,6 @@ import com.doro.organizer.debug.awaitBackupInputs
 import com.doro.organizer.debug.runCrashRequest
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.PasswordReason
-import com.doro.organizer.security.BIO_ALIAS
 import com.doro.organizer.security.KEK_ALIAS
 import com.doro.organizer.security.SlotCipherResult
 import com.doro.organizer.security.UnlockResult
@@ -304,7 +303,7 @@ class CrashScene {
     /** The data before the operation ([oldDump]) and that of the planted backup ([backupDump]). */
     class Planted(val oldDump: Map<String, List<List<String?>>>?, val backupDump: Map<String, List<List<String?>>>?, val dataEpoch: Int)
 
-    /** Empties every location the app writes and both Keystore aliases. */
+    /** Empties every location the app writes, the KEK and every biometric key. */
     fun wipe() {
         app.getDatabasePath("x").parentFile?.listFiles()?.filter { it.name.startsWith("doro-") }?.forEach { it.delete() }
         app.noBackupFilesDir.listFiles()?.forEach { it.deleteRecursively() }
@@ -313,7 +312,7 @@ class CrashScene {
         app.preferencesDataStoreFile("settings").delete()
         androidKeyStore().run {
             deleteEntry(KEK_ALIAS)
-            deleteEntry(BIO_ALIAS)
+            bioKeyAliases().forEach(::deleteEntry)
         }
     }
 
@@ -343,8 +342,10 @@ class CrashScene {
                 val cipher = (c.keyVault.biometricArmCipher() as SlotCipherResult.Ready).slotCipher
                 check(maintenance.createBiometricSlot(cipher) == AppResult.Ok(Unit)) { "the planted slot" }
             }
-            // The key behind the slot is gone, as after a new enrollment: the slot is Dead.
-            if (plant == Plant.PasswordWithDeadSlot) androidKeyStore().deleteEntry(BIO_ALIAS)
+            // The slot's own key is gone, as after a new enrollment: the slot is Dead.
+            if (plant == Plant.PasswordWithDeadSlot) {
+                androidKeyStore().deleteEntry(checkNotNull(checkNotNull(c.keyVault.readState()).bioSlot).keyAlias)
+            }
             val oldDump = dump(c)
             val live = c.files.live(checkNotNull(c.keyVault.readState()).generation)
             c.databaseHolder.close()
@@ -407,9 +408,11 @@ class CrashScene {
             assertTrue("$case: one slot prompt", c.biometricGateway.prompts.single().withCrypto)
         }
         if (state is GateState.NeedsPassword) {
-            // A slot creation over a key-state without a slot leaves none in force: cause SlotMissing (CS-29, CS-38).
-            if (case.flow.op == CrashOp.CreateBioSlot && case.flow.plant == Plant.Password) {
-                assertEquals("$case: the password reason", PasswordReason.None, state.reason)
+            // A slot creation that did not commit leaves the previous slot in force (CS-29, CS-38): none gives cause
+            // SlotMissing; a dead one stays dead (DEC-98, SPEC §B B3) and gives FingerprintChanged.
+            if (case.flow.op == CrashOp.CreateBioSlot) {
+                val reason = if (case.flow.plant == Plant.PasswordWithDeadSlot) PasswordReason.FingerprintChanged else PasswordReason.None
+                assertEquals("$case: the password reason", reason, state.reason)
             }
             val password = checkNotNull(expectedPassword(case)) { "$case: unexpected password screen" }
             GateScene.onMain { c.sessionGate.dispatch(GateEvent.PasswordSubmitted(password.toCharArray())) }
@@ -449,6 +452,11 @@ class CrashScene {
             CrashOp.CreateBioSlot -> assertTrue("$case: lock on", c.settingsStore.snapshot().biometricLock)
             CrashOp.RemoveBioSlot -> assertFalse("$case: lock off", c.settingsStore.snapshot().biometricLock)
             else -> Unit
+        }
+        // DEC-98: startup reconciliation swept every biometric key that no committed slot names. A subset, because a
+        // removal after the unlock (reconcileLock, E5) may still delete the slot's own key; nothing arms here.
+        committed?.let {
+            assertEquals("$case: unreferenced biometric keys", emptySet<String>(), bioKeyAliases() - setOfNotNull(it.bioSlot?.keyAlias))
         }
         // Invariant 2: nothing but temporary files and unreferenced generations was deleted: the data above, and the
         // committed generation's file exists.

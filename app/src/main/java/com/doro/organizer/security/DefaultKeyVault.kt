@@ -51,7 +51,7 @@ class DefaultKeyVault(
     private val mutex = Mutex()
     private val atomicFile = AtomicFile(stateFile)
     private val random = SecureRandom()
-    private val biometric = BioSlotCrypto(bio, dispatchers, newSecret)
+    private val biometric = BioSlotCrypto(bio, dispatchers, newSecret, random)
 
     /**
      * The generation whose `PASSWORD` slot failed its KEK check during a fingerprint unlock (security.md § 3.7.3).
@@ -148,12 +148,13 @@ class DefaultKeyVault(
         freshSlot = null
         memoryBackoff = null
         brokenKekGeneration = null
+        val committed = committedStateOrNullLocked() // read before the file goes: it names the slot's key
         withContext(dispatchers.io) {
             atomicFile.delete() // the encrypted data is unreadable from here on
             stateFile.parentFile?.let(::syncDirectory)
             deleteKekLocked()
         }
-        biometric.deleteBioKeyLocked()
+        biometric.deleteAllBioKeysLocked(committed)
     }
 
     override suspend fun deleteKek() = locked { withContext(dispatchers.io) { deleteKekLocked() } }
@@ -205,7 +206,22 @@ class DefaultKeyVault(
         return locked { biometric.wrapLocked(committedStateOrNullLocked(), cipher, liveRawKey) }
     }
 
-    override suspend fun deleteBiometricKey() = locked { biometric.deleteBioKeyLocked() }
+    override suspend fun discardArmCipher(cipher: SlotCipher) {
+        require(cipher.use == SlotUse.Arm) { "not an arm cipher" }
+        locked { biometric.discardArmKeyLocked(committedStateOrNullLocked(), cipher) }
+    }
+
+    override suspend fun deleteBiometricKey() = locked { biometric.deleteAllBioKeysLocked(committedStateOrNullLocked()) }
+
+    override suspend fun deleteUnreferencedBiometricKeys() = locked {
+        // An invalid file names nothing that can be trusted, so nothing is deleted on its account (DEC-86).
+        val state = try {
+            readStateLocked()
+        } catch (e: KeyVaultException) {
+            return@locked
+        }
+        biometric.deleteUnreferencedBioKeysLocked(state)
+    }
 
     override suspend fun isPasswordReminderDue(): Boolean = locked {
         // A timestamp that cannot be read counts as lost, and a lost timestamp counts as due (security.md § 5.6).

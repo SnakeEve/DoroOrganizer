@@ -25,6 +25,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -65,18 +66,23 @@ class KeyVaultBiometricTest {
     }
 
     private suspend fun KeyVault.armSlot(liveRawKey: ByteArray): BioSlot {
-        val cipher = (biometricArmCipher() as SlotCipherResult.Ready).slotCipher
+        val cipher = armCipher()
         return (wrapForBiometric(cipher, liveRawKey) as WrapResult.Wrapped).bioSlot
     }
 
     private suspend fun KeyVault.unlockCipher(): SlotCipher = (biometricUnlockCipher() as SlotCipherResult.Ready).slotCipher
+
+    private suspend fun KeyVault.armCipher(): SlotCipher = (biometricArmCipher() as SlotCipherResult.Ready).slotCipher
+
+    /** The alias of the committed slot's own key. */
+    private suspend fun KeyVault.slotAlias(): String = requireNotNull(requireNotNull(readState()).bioSlot).keyAlias
 
     /** Rewrites the committed biometric slot with one byte of its wrapped DEK flipped. */
     private suspend fun KeyVault.flipWrappedDekByte() {
         val state = requireNotNull(readState())
         val slot = requireNotNull(state.bioSlot)
         val damaged = slot.wrappedDek.copyOf().also { it[5] = (it[5].toInt() xor 0x01).toByte() }
-        commit(state.generation, state.slot, BioSlot(slot.iv, damaged))
+        commit(state.generation, state.slot, BioSlot(slot.keyAlias, slot.iv, damaged))
     }
 
     /** Makes the next [times] KEK decryptions fail with a Keystore exception. */
@@ -136,8 +142,21 @@ class KeyVaultBiometricTest {
         vault.installWithSlot()
         assertEquals(BioSlotStatus.Live, vault.biometricSlotStatus())
 
-        rule.deleteBioAlias()
+        rule.deleteBioAliases()
 
+        assertEquals(BioSlotStatus.Dead, vault.biometricSlotStatus())
+    }
+
+    /** SPEC §B B3: another biometric key, such as an arming's, never makes a slot whose own key is gone read `Live`. */
+    @Test
+    fun status_isDeadWithoutTheSlotsOwnKey_evenWhileAnotherBiometricKeyExists() = runVaultTest {
+        val vault = vault()
+        vault.installWithSlot()
+        rule.deleteBioAliases()
+
+        vault.armCipher()
+
+        assertTrue(rule.bioKeyExists())
         assertEquals(BioSlotStatus.Dead, vault.biometricSlotStatus())
     }
 
@@ -185,14 +204,59 @@ class KeyVaultBiometricTest {
     }
 
     @Test
-    fun arm_alwaysStartsFromANewKey_soAnOlderSlotIsDead() = runVaultTest {
+    fun arm_generatesAKeyUnderAFreshAlias_thatTheWrappedSlotNames() = runVaultTest {
+        val vault = vault()
+        val prepared = vault.prepare(KeyMode.PASSWORD, password.copyOf())
+        vault.commit(1, prepared.slot, null)
+
+        val first = vault.armCipher()
+        val second = vault.armCipher()
+
+        assertTrue(isSlotKeyAlias(first.keyAlias))
+        assertTrue(isSlotKeyAlias(second.keyAlias))
+        assertNotEquals(first.keyAlias, second.keyAlias)
+        assertEquals(second.keyAlias, (vault.wrapForBiometric(second, prepared.rawKey) as WrapResult.Wrapped).bioSlot.keyAlias)
+    }
+
+    /** security.md § 3.7.5: an unused key of a cancelled arming goes with the next arming; the slot's key never does. */
+    @Test
+    fun arm_deletesTheUnusedKeysOfEarlierArmings_butNeverTheCommittedSlotsKey() = runVaultTest {
         val vault = vault()
         vault.installWithSlot()
+        val alias = vault.slotAlias()
 
-        vault.biometricArmCipher() // a cancelled arming: a new key, nothing committed
+        vault.armCipher() // a cancelled arming
+        val second = vault.armCipher()
 
-        assertEquals(UnlockResult.SlotFailed(invalidated = true), vault.unlockWithBiometric(vault.unlockCipher()))
+        assertEquals(setOf(alias, second.keyAlias), rule.bioAliases())
+        assertEquals(BioSlotStatus.Live, vault.biometricSlotStatus())
+    }
+
+    /** DEC-98: a cancelled or interrupted arming leaves the committed slot exactly as it was. */
+    @Test
+    fun arm_leavesTheCommittedSlotsKey_soALiveSlotStaysLive() = runVaultTest {
+        val vault = vault()
+        val prepared = vault.installWithSlot()
+        val alias = vault.slotAlias()
+
+        vault.armCipher() // a cancelled arming: a new key, nothing committed
+
+        assertTrue(alias in rule.bioAliases())
+        assertEquals(BioSlotStatus.Live, vault.biometricSlotStatus())
+        assertArrayEquals(prepared.rawKey, (vault.unlockWithBiometric(vault.unlockCipher()) as UnlockResult.Key).rawKey)
+    }
+
+    /** SPEC §B B3 (CS-29): arming over a dead slot keeps it dead, so the next start asks for the password. */
+    @Test
+    fun arm_overADeadSlot_leavesItDead() = runVaultTest {
+        val vault = vault()
+        vault.installWithSlot()
+        rule.deleteBioAliases() // as after a new enrollment
+
+        vault.armCipher()
+
         assertEquals(BioSlotStatus.Dead, vault.biometricSlotStatus())
+        assertEquals(SlotCipherResult.Invalidated, vault.biometricUnlockCipher())
     }
 
     @Test
@@ -210,7 +274,7 @@ class KeyVaultBiometricTest {
         val vault = vault()
         val prepared = vault.prepare(KeyMode.PASSWORD, password.copyOf())
         vault.commit(1, prepared.slot, null)
-        val cipher = (vault.biometricArmCipher() as SlotCipherResult.Ready).slotCipher
+        val cipher = vault.armCipher()
         bio.failNext(BioOp.DoFinal, ProviderException("injected"))
 
         assertEquals(WrapResult.BiometricUnusable, vault.wrapForBiometric(cipher, prepared.rawKey))
@@ -218,11 +282,25 @@ class KeyVaultBiometricTest {
     }
 
     @Test
+    fun wrap_aFailure_deletesOnlyTheCiphersKey_andTheCommittedSlotStaysLive() = runVaultTest {
+        val vault = vault()
+        val prepared = vault.installWithSlot()
+        val alias = vault.slotAlias()
+        val cipher = vault.armCipher()
+        bio.failNext(BioOp.DoFinal, ProviderException("injected"))
+
+        assertEquals(WrapResult.BiometricUnusable, vault.wrapForBiometric(cipher, prepared.rawKey))
+
+        assertEquals(setOf(alias), rule.bioAliases())
+        assertEquals(BioSlotStatus.Live, vault.biometricSlotStatus())
+    }
+
+    @Test
     fun wrap_afterAKeyChangeWasCommitted_isBiometricUnusable_withoutUsingTheCipher() = runVaultTest {
         val vault = vault()
         val prepared = vault.prepare(KeyMode.PASSWORD, password.copyOf())
         vault.commit(1, prepared.slot, null)
-        val cipher = (vault.biometricArmCipher() as SlotCipherResult.Ready).slotCipher
+        val cipher = vault.armCipher()
         val changed = vault.prepare(KeyMode.PASSWORD, password.copyOf())
         vault.commit(2, changed.slot, null)
 
@@ -238,7 +316,7 @@ class KeyVaultBiometricTest {
         vault.commit(1, prepared.slot, null)
         val before = rule.stateFile.readBytes()
         val live = prepared.rawKey.copyOf()
-        val cipher = (vault.biometricArmCipher() as SlotCipherResult.Ready).slotCipher
+        val cipher = vault.armCipher()
         secrets.clear()
 
         val wrapped = vault.wrapForBiometric(cipher, live) as WrapResult.Wrapped
@@ -256,7 +334,7 @@ class KeyVaultBiometricTest {
         val vault = vault()
         val prepared = vault.prepare(KeyMode.PASSWORD, password.copyOf())
         vault.commit(1, prepared.slot, null)
-        val cipher = (vault.biometricArmCipher() as SlotCipherResult.Ready).slotCipher
+        val cipher = vault.armCipher()
         check(rule.stateFile.delete())
 
         assertEquals(WrapResult.BiometricUnusable, vault.wrapForBiometric(cipher, prepared.rawKey))
@@ -269,12 +347,13 @@ class KeyVaultBiometricTest {
         val vault = vault()
         val prepared = vault.installWithSlot()
         val unlock = vault.unlockCipher()
-        val arm = (vault.biometricArmCipher() as SlotCipherResult.Ready).slotCipher
+        val arm = vault.armCipher()
         val before = bio.totalCalls()
 
         assertThrowsSuspending<IllegalArgumentException> { vault.unlockWithBiometric(arm) }
         assertThrowsSuspending<IllegalArgumentException> { vault.verifyBiometric(arm) }
         assertThrowsSuspending<IllegalArgumentException> { vault.wrapForBiometric(unlock, prepared.rawKey) }
+        assertThrowsSuspending<IllegalArgumentException> { vault.discardArmCipher(unlock) }
 
         assertEquals(before, bio.totalCalls())
     }
@@ -376,7 +455,7 @@ class KeyVaultBiometricTest {
         val vault = vault()
         vault.installWithSlot()
         val before = rule.stateFile.readBytes()
-        rule.deleteBioAlias()
+        rule.deleteBioAliases()
 
         assertEquals(SlotCipherResult.Invalidated, vault.biometricUnlockCipher())
 
@@ -757,9 +836,10 @@ class KeyVaultBiometricTest {
     // --- deletion ---
 
     @Test
-    fun deleteBiometricKey_isIdempotent_andNeverTouchesTheFile() = runVaultTest {
+    fun deleteBiometricKey_deletesEveryBiometricKey_isIdempotent_andNeverTouchesTheFile() = runVaultTest {
         val vault = vault()
         vault.installWithSlot()
+        vault.armCipher() // an orphan next to the slot's key
         val before = rule.stateFile.readBytes()
 
         vault.deleteBiometricKey()
@@ -771,16 +851,153 @@ class KeyVaultBiometricTest {
     }
 
     @Test
-    fun eraseState_deletesTheFileTheKekAndTheBiometricKey() = runVaultTest {
+    fun deleteUnreferencedBiometricKeys_keepsOnlyTheCommittedSlotsKey_andNeverTouchesTheFile() = runVaultTest {
         val vault = vault()
         vault.installWithSlot()
-        assertTrue(rule.bioKeyExists())
+        val alias = vault.slotAlias()
+        vault.armCipher() // the orphan of an arming that never committed
+        val before = rule.stateFile.readBytes()
+
+        vault.deleteUnreferencedBiometricKeys()
+
+        assertEquals(setOf(alias), rule.bioAliases())
+        assertEquals(BioSlotStatus.Live, vault.biometricSlotStatus())
+        assertArrayEquals(before, rule.stateFile.readBytes())
+    }
+
+    @Test
+    fun deleteUnreferencedBiometricKeys_withoutABioSlot_orWithoutAFile_deletesEveryKey() = runVaultTest {
+        val vault = vault()
+        vault.commit(1, vault.prepare(KeyMode.PASSWORD, password.copyOf()).slot, null)
+        vault.armCipher()
+
+        vault.deleteUnreferencedBiometricKeys()
+        assertFalse(rule.bioKeyExists())
+
+        vault.armCipher()
+        check(rule.stateFile.delete())
+
+        vault.deleteUnreferencedBiometricKeys()
+        assertFalse(rule.bioKeyExists())
+    }
+
+    @Test
+    fun deleteUnreferencedBiometricKeys_overAnInvalidFile_deletesNothing() = runVaultTest {
+        val vault = vault()
+        vault.installWithSlot()
+        vault.armCipher()
+        val aliases = rule.bioAliases()
+        rule.stateFile.writeText("{")
+
+        vault.deleteUnreferencedBiometricKeys()
+
+        assertEquals(aliases, rule.bioAliases())
+    }
+
+    @Test
+    fun aFailedKeyListing_isRetriedOnceAfterOneSecond() = runVaultTest {
+        val vault = vault()
+        vault.installWithSlot()
+        val alias = vault.slotAlias()
+        vault.armCipher()
+        bio.failNext(BioOp.Aliases, KeyStoreException("injected"))
+        val start = currentTime
+
+        vault.deleteUnreferencedBiometricKeys()
+
+        assertEquals(1_000L, currentTime - start)
+        assertEquals(setOf(alias), rule.bioAliases())
+    }
+
+    /** A slot found dead outside the vault dies even when the Keystore cannot list its keys (§ 3.7.4). */
+    @Test
+    fun aKeyListingThatKeepsFailing_isNoError_andStillDeletesTheCommittedSlotsKey() = runVaultTest {
+        val vault = vault()
+        vault.installWithSlot()
+        val alias = vault.slotAlias()
+        val orphan = vault.armCipher().keyAlias
+        repeat(2) { bio.failNext(BioOp.Aliases, KeyStoreException("injected")) }
+
+        vault.deleteUnreferencedBiometricKeys()
+        assertEquals(setOf(alias, orphan), rule.bioAliases()) // only the listing could name the orphan
+
+        repeat(2) { bio.failNext(BioOp.Aliases, KeyStoreException("injected")) }
+        vault.deleteBiometricKey()
+
+        assertEquals(setOf(orphan), rule.bioAliases())
+        assertEquals(BioSlotStatus.Dead, vault.biometricSlotStatus())
+    }
+
+    @Test
+    fun aKeyListingBug_isACrash_notASkippedDeletion() = runVaultTest {
+        val vault = vault()
+        vault.installWithSlot()
+        bio.failNext(BioOp.Aliases, IllegalStateException("a bug"))
+
+        assertThrowsSuspending<IllegalStateException> { vault.deleteUnreferencedBiometricKeys() }
+    }
+
+    @Test
+    fun discardArmCipher_deletesOnlyThePromptsKey_overALiveSlot_anInvalidFile_orNone() = runVaultTest {
+        val vault = vault()
+        vault.installWithSlot()
+        val alias = vault.slotAlias()
+        val before = rule.stateFile.readBytes()
+
+        vault.discardArmCipher(vault.armCipher())
+        assertEquals(setOf(alias), rule.bioAliases())
+        assertEquals(BioSlotStatus.Live, vault.biometricSlotStatus())
+        assertArrayEquals(before, rule.stateFile.readBytes())
+
+        // No file names a fresh alias that no commit wrote, so an invalid file keeps nothing alive but the slot's key.
+        val overInvalid = vault.armCipher()
+        rule.stateFile.writeText("{")
+        vault.discardArmCipher(overInvalid)
+        assertEquals(setOf(alias), rule.bioAliases())
+
+        check(rule.stateFile.delete())
+        vault.discardArmCipher(overInvalid) // idempotent, also without a file
+        assertEquals(setOf(alias), rule.bioAliases())
+    }
+
+    @Test
+    fun discardArmCipher_keepsTheKeyOfTheCommittedSlot() = runVaultTest {
+        val vault = vault()
+        val prepared = vault.prepare(KeyMode.PASSWORD, password.copyOf())
+        vault.commit(1, prepared.slot, null)
+        val cipher = vault.armCipher()
+        vault.commit(1, prepared.slot, (vault.wrapForBiometric(cipher, prepared.rawKey) as WrapResult.Wrapped).bioSlot)
+
+        vault.discardArmCipher(cipher) // a creation whose read-back failed after its write landed
+
+        assertEquals(setOf(cipher.keyAlias), rule.bioAliases())
+        assertEquals(BioSlotStatus.Live, vault.biometricSlotStatus())
+    }
+
+    @Test
+    fun eraseState_deletesTheFileTheKekAndEveryBiometricKey() = runVaultTest {
+        val vault = vault()
+        vault.installWithSlot()
+        vault.armCipher()
+        assertEquals(2, rule.bioAliases().size)
 
         vault.eraseState()
 
         assertFalse(rule.stateFile.exists())
         assertFalse(rule.kekExists())
         assertFalse(rule.bioKeyExists())
+    }
+
+    @Test
+    fun eraseState_deletesTheCommittedSlotsKey_evenWhenTheKeystoreCannotListItsKeys() = runVaultTest {
+        val vault = vault()
+        vault.installWithSlot()
+        val alias = vault.slotAlias()
+        repeat(2) { bio.failNext(BioOp.Aliases, KeyStoreException("injected")) }
+
+        vault.eraseState()
+
+        assertFalse(alias in rule.bioAliases())
     }
 
     @Test

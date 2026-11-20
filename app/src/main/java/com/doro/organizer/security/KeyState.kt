@@ -30,9 +30,13 @@ class KeySlot(
     override fun toString() = "KeySlot(mode=$mode)"
 }
 
-/** The biometric slot (security.md § 3.7); `keyAlias` is the validated constant `doro_bio_v1`. */
-class BioSlot(val iv: ByteArray, val wrappedDek: ByteArray) {
-    fun sameAs(other: BioSlot): Boolean = iv.contentEquals(other.iv) && wrappedDek.contentEquals(other.wrappedDek)
+/**
+ * The biometric slot (security.md § 3.7). [keyAlias] names the Keystore key its DEK was wrapped with, an alias of the
+ * validated fresh-alias form ([isSlotKeyAlias]); each slot has its own key (DEC-98).
+ */
+class BioSlot(val keyAlias: String, val iv: ByteArray, val wrappedDek: ByteArray) {
+    fun sameAs(other: BioSlot): Boolean =
+        keyAlias == other.keyAlias && iv.contentEquals(other.iv) && wrappedDek.contentEquals(other.wrappedDek)
 
     override fun toString() = "BioSlot"
 }

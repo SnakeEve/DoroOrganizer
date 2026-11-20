@@ -5,6 +5,7 @@ import com.doro.organizer.security.BioSlot
 import com.doro.organizer.security.Kdf
 import com.doro.organizer.security.KeySlot
 import com.doro.organizer.security.KeyState
+import com.doro.organizer.testing.TEST_SLOT_KEY_ALIAS
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,7 +15,7 @@ class KeyStateMatchTest {
     private fun slot(iterations: Int = 600_000, salt: Byte = 1) =
         KeySlot(KeyMode.PASSWORD, ByteArray(12) { 2 }, ByteArray(60) { 3 }, ByteArray(12) { 4 }, Kdf(iterations, ByteArray(16) { salt }))
 
-    private fun bio(fill: Byte = 5) = BioSlot(ByteArray(12) { fill }, ByteArray(48) { 6 })
+    private fun bio(fill: Byte = 5) = BioSlot(TEST_SLOT_KEY_ALIAS, ByteArray(12) { fill }, ByteArray(48) { 6 })
 
     @Test
     fun equalGenerationSlotAndBioSlot_match_byContentNotIdentity() {

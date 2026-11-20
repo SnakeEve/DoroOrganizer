@@ -5,12 +5,12 @@ import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.debug.testBioKeySpec
 import com.doro.organizer.security.AndroidBioKeystore
 import com.doro.organizer.security.AndroidKekKeystore
-import com.doro.organizer.security.BIO_ALIAS
 import com.doro.organizer.security.BioKeystore
 import com.doro.organizer.security.CALIBRATION_ITERATIONS
 import com.doro.organizer.security.DefaultKeyVault
 import com.doro.organizer.security.KEK_ALIAS
 import com.doro.organizer.security.KekKeystore
+import com.doro.organizer.security.isBioKeyAlias
 import com.doro.organizer.security.pbkdf2Sha256
 import com.doro.organizer.settings.SettingsStore
 import java.io.File
@@ -35,7 +35,7 @@ class KeyVaultRule : ExternalResource() {
 
     override fun before() {
         deleteKekAlias()
-        deleteBioAlias()
+        deleteBioAliases()
         val root = File(context.noBackupFilesDir, "test-key-vaults")
         check(root.isDirectory || root.mkdirs()) { "cannot create the key-state test root" }
         stateFile = File(Files.createTempDirectory(root.toPath(), "kv").toFile(), DefaultKeyVault.STATE_FILE_NAME)
@@ -44,7 +44,7 @@ class KeyVaultRule : ExternalResource() {
     override fun after() {
         stateFile.parentFile?.deleteRecursively()
         deleteKekAlias()
-        deleteBioAlias()
+        deleteBioAliases()
     }
 
     /** The production vault on [stateFile] with the given seams. */
@@ -62,12 +62,21 @@ class KeyVaultRule : ExternalResource() {
 
     fun deleteKekAlias() = androidKeyStore().deleteEntry(KEK_ALIAS)
 
-    fun bioKeyExists(): Boolean = androidKeyStore().containsAlias(BIO_ALIAS)
+    /** Every biometric key alias in the Keystore (each slot and each arming has its own, DEC-98). */
+    fun bioAliases(): Set<String> = bioKeyAliases()
 
-    fun deleteBioAlias() = androidKeyStore().deleteEntry(BIO_ALIAS)
+    /** Whether any biometric key exists. */
+    fun bioKeyExists(): Boolean = bioAliases().isNotEmpty()
+
+    /** Deletes every biometric key, as an enrollment change kills the committed slot's. */
+    fun deleteBioAliases() = androidKeyStore().run { bioAliases().forEach(::deleteEntry) }
 
     private fun androidKeyStore() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 }
+
+/** Every biometric key alias in the app's AndroidKeyStore, in any form ever written (DEC-98). */
+fun bioKeyAliases(): Set<String> =
+    KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.aliases().toList().filterTo(mutableSetOf(), ::isBioKeyAlias)
 
 /** Every dispatcher of the vault on the test scheduler, so the 1 s Keystore retry runs in virtual time. */
 fun TestScope.testDispatchers(): AppDispatchers = StandardTestDispatcher(testScheduler).let { AppDispatchers(it, it, it) }
@@ -174,7 +183,7 @@ class FaultyKekKeystore(
 }
 
 /** The operations of [BioKeystore], for scripting failures. */
-enum class BioOp { ContainsAlias, Generate, Delete, InitEncrypt, InitDecrypt, UpdateAad, DoFinal }
+enum class BioOp { Aliases, ContainsAlias, Generate, Delete, InitEncrypt, InitDecrypt, UpdateAad, DoFinal }
 
 /**
  * The biometric seam of security.md § 3.6 over the real AndroidKeyStore in the test configuration, with scripted
@@ -201,15 +210,18 @@ class FaultyBioKeystore(private val delegate: BioKeystore = AndroidBioKeystore(:
 
     fun doFinalOutputs(): List<ByteArray> = synchronized(this) { outputs.toList() }
 
-    override fun containsAlias(): Boolean = call(BioOp.ContainsAlias) { delegate.containsAlias() }
+    override fun aliases(): List<String> = call(BioOp.Aliases) { delegate.aliases() }
 
-    override fun generate() = call(BioOp.Generate) { delegate.generate() }
+    override fun containsAlias(alias: String): Boolean = call(BioOp.ContainsAlias) { delegate.containsAlias(alias) }
 
-    override fun delete() = call(BioOp.Delete) { delegate.delete() }
+    override fun generate(alias: String) = call(BioOp.Generate) { delegate.generate(alias) }
 
-    override fun initEncrypt(): Cipher = call(BioOp.InitEncrypt) { delegate.initEncrypt() }
+    override fun delete(alias: String) = call(BioOp.Delete) { delegate.delete(alias) }
 
-    override fun initDecrypt(iv: ByteArray): Cipher = call(BioOp.InitDecrypt) { delegate.initDecrypt(iv) }
+    override fun initEncrypt(alias: String): Cipher = call(BioOp.InitEncrypt) { delegate.initEncrypt(alias) }
+
+    override fun initDecrypt(alias: String, iv: ByteArray): Cipher =
+        call(BioOp.InitDecrypt) { delegate.initDecrypt(alias, iv) }
 
     override fun updateAad(cipher: Cipher, aad: ByteArray) = call(BioOp.UpdateAad) { delegate.updateAad(cipher, aad) }
 

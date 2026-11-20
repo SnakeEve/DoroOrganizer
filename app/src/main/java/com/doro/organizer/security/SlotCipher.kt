@@ -15,6 +15,8 @@ enum class SlotUse { Unlock, Arm }
 class SlotCipher internal constructor(
     val use: SlotUse,
     internal val cipher: Cipher,
+    /** The alias of the key the cipher was initialized on: the committed slot's (`Unlock`) or a fresh one (`Arm`). */
+    internal val keyAlias: String,
     /** The committed generation the cipher was prepared for. */
     internal val generation: Long,
     /** A copy of that state's `slot.outerIv`, the AAD binding of the biometric slot (§ 3.7.2). */
@@ -37,7 +39,7 @@ sealed interface SlotCipherResult {
     /** The committed mode is not `PASSWORD`, or (unlock only) there is no usable `bioSlot`. */
     data object NoSlot : SlotCipherResult
 
-    /** The key was invalidated, its alias is missing or the slot was judged dead (§ 3.7.4); the alias is gone. */
+    /** The key was invalidated, its alias is missing or the slot was judged dead (§ 3.7.4); the slot's key is gone. */
     data object Invalidated : SlotCipherResult
 
     /** Any other Keystore failure, after one retry for an unlock cipher; the slot is kept. */
@@ -50,7 +52,7 @@ sealed interface WrapResult {
         override fun toString() = "Wrapped"
     }
 
-    /** The cipher failed, or a key change was committed since it was prepared; the alias is deleted. */
+    /** The cipher failed, or a key change was committed since it was prepared; the cipher's key is deleted. */
     data object BiometricUnusable : WrapResult
 }
 
@@ -59,12 +61,12 @@ enum class BioSlotStatus {
     /** No file, an invalid file, a mode other than `PASSWORD`, or no usable `bioSlot` (a malformed one included). */
     None,
 
-    /** A `bioSlot` and the alias `doro_bio_v1`. */
+    /** A `bioSlot` whose own key, named by `bioSlot.keyAlias`, is present (DEC-98). */
     Live,
 
     /**
-     * A `bioSlot` without the alias, or whose alias check failed twice: the password unlocks and the re-creation offer
-     * is due.
+     * A `bioSlot` whose key is missing, or whose alias check failed twice: the password unlocks and the re-creation
+     * offer is due.
      */
     Dead,
 }

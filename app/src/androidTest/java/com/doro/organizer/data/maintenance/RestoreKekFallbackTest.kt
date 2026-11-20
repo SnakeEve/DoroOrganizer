@@ -174,7 +174,7 @@ class RestoreKekFallbackTest {
     @Test
     fun withADeadSlot_aKekFailureIsKeyUnavailable_rightAfterThePassword() = runFallbackTest {
         kekFailsInCorrupt()
-        vaults.deleteBioAlias()
+        vaults.deleteBioAliases()
 
         assertKeyUnavailableRightAfterThePassword()
     }

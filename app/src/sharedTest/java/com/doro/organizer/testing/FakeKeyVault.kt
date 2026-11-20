@@ -68,7 +68,7 @@ class FakeKeyVault(private val dek: ByteArray = ByteArray(32) { (it + 1).toByte(
 
     /** Commits a state of [mode] for [generation], with a biometric slot when [bio] is `Live` or `Dead`. */
     fun commitMode(mode: KeyMode, generation: Long = 1, bio: BioSlotStatus = BioSlotStatus.None) {
-        state = KeyState(generation, KeySlot(mode, null, null, null, null), if (bio == BioSlotStatus.None) null else BioSlot(ByteArray(12), ByteArray(48)))
+        state = KeyState(generation, KeySlot(mode, null, null, null, null), if (bio == BioSlotStatus.None) null else fakeBioSlot())
         bioStatus = bio
     }
 
@@ -78,7 +78,7 @@ class FakeKeyVault(private val dek: ByteArray = ByteArray(32) { (it + 1).toByte(
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
             if (use == SlotUse.Unlock) init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, ByteArray(12))) else init(Cipher.ENCRYPT_MODE, key)
         }
-        return SlotCipher(use, cipher, state?.generation ?: 1, ByteArray(12), if (use == SlotUse.Unlock) ByteArray(12) else null)
+        return SlotCipher(use, cipher, TEST_SLOT_KEY_ALIAS, state?.generation ?: 1, ByteArray(12), if (use == SlotUse.Unlock) ByteArray(12) else null)
     }
 
     override suspend fun readState(): KeyState? {
@@ -166,13 +166,17 @@ class FakeKeyVault(private val dek: ByteArray = ByteArray(32) { (it + 1).toByte(
 
     override suspend fun wrapForBiometric(cipher: SlotCipher, liveRawKey: ByteArray): WrapResult {
         record("wrapForBiometric")
-        return nextWrap.removeFirstOrNull() ?: WrapResult.Wrapped(BioSlot(ByteArray(12), ByteArray(48)))
+        return nextWrap.removeFirstOrNull() ?: WrapResult.Wrapped(fakeBioSlot())
     }
+
+    override suspend fun discardArmCipher(cipher: SlotCipher) = record("discardArmCipher")
 
     override suspend fun deleteBiometricKey() {
         record("deleteBiometricKey")
         if (bioStatus == BioSlotStatus.Live) bioStatus = BioSlotStatus.Dead
     }
+
+    override suspend fun deleteUnreferencedBiometricKeys() = record("deleteUnreferencedBiometricKeys")
 
     override suspend fun isPasswordReminderDue(): Boolean {
         record("isPasswordReminderDue")
@@ -183,6 +187,8 @@ class FakeKeyVault(private val dek: ByteArray = ByteArray(32) { (it + 1).toByte(
         val mode = state?.slot?.mode ?: return UnlockResult.KeyFailed
         return if (mode == KeyMode.PASSWORD && password == null) UnlockResult.PasswordNeeded else UnlockResult.Key(rawKeyOf(mode))
     }
+
+    private fun fakeBioSlot() = BioSlot(TEST_SLOT_KEY_ALIAS, ByteArray(12), ByteArray(48))
 
     private fun rawKeyOf(mode: KeyMode): ByteArray = if (mode == KeyMode.PLAIN) ByteArray(0) else sqlcipherRawKey(dek, ::ByteArray)
 

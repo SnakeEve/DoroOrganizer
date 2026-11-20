@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.PasswordReason
 import com.doro.organizer.testing.GateTest
+import com.doro.organizer.testing.TEST_SLOT_KEY_ALIAS
 import java.util.Base64
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -76,7 +77,7 @@ class KeyUnavailableTest : GateTest() {
     fun n_deviceMode_withABioSlot_opensThroughTheSlotlessLock() = runBlocking {
         scene.plant(KeyMode.DEVICE, lock = true)
         val generation = checkNotNull(app.container.keyVault.readState()).generation
-        editState { put("bioSlot", JSONObject().put("keyAlias", "doro_bio_v1").put("iv", base64(12)).put("wrappedDek", base64(48))) }
+        editState { put("bioSlot", JSONObject().put("keyAlias", TEST_SLOT_KEY_ALIAS).put("iv", base64(12)).put("wrappedDek", base64(48))) }
         scene.gateway.succeed()
         scene.coldStart()
         assertEquals(GateState.Ready, scene.awaitGate { it == GateState.Ready || it == GateState.KeyUnavailable })

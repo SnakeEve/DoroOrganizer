@@ -14,7 +14,9 @@ import kotlin.coroutines.cancellation.CancellationException
  * Startup reconciliation (effect E1) and its completion in `Opening` (effect E2), db-lifecycle.md § Startup
  * reconciliation and § Completing startup in Opening. The caller holds the operation mutex for every member.
  * Reconciliation opens no connection, needs no key, never writes `db-state.json` and deletes generation files only
- * when a valid key-state names an existing live file (DEC-86).
+ * when a valid key-state names an existing live file (DEC-86). It also deletes the biometric Keystore keys that no
+ * committed `bioSlot` names (DEC-98), except under the `KeyUnavailable` decision, whose keys go only with the user's
+ * Restore or Start fresh (DEC-86).
  */
 internal class StartupReconciler(
     private val deps: MaintenanceDeps,
@@ -58,6 +60,11 @@ internal class StartupReconciler(
         val liveUsable = live != null && live.isFile && live.length() > 0
         unreferencedAtStartup(read, onDisk, liveUsable).forEach { generation ->
             if (!files.deleteGeneration(generation)) AppLog.d("startup: a generation set was not deleted")
+        }
+        // DEC-98: biometric keys that no committed bioSlot names, left by an arming that never committed or by a crash
+        // before a sweep. Never under KeyUnavailable: DEC-86 deletes nothing automatically there.
+        if (decision != StartupDecision.KeyUnavailable) {
+            deps.bestEffort("startup biometric key sweep") { deps.keyVault.deleteUnreferencedBiometricKeys() }
         }
         if (decision == StartupDecision.FirstRun && resetFirstRunSettings) {
             // security.md § 5.4 step 4: completes an Erase interrupted after its files were deleted; a no-op otherwise.

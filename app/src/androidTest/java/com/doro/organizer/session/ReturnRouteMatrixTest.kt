@@ -99,7 +99,7 @@ class ReturnRouteMatrixTest : GateTest() {
     @Test
     fun c9_r7_deadSlot_fingerprintChanged_thenTheInvalidatedOffer() = runBlocking {
         scene.plant(KeyMode.PASSWORD, PASSWORD, lock = true, slot = true)
-        vaults.deleteBioAlias()
+        vaults.deleteBioAliases()
         coldStartPassword(PasswordReason.FingerprintChanged)
         scene.awaitOfferSetups(1)
         assertEquals(SlotOffer.Invalidated, offer.value)
