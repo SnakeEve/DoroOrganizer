@@ -75,11 +75,49 @@ Workflow({ scriptPath: "<repo>/dev/claude/workflows/doro-build-tasks.js",
 
 **The phone:** Android 16 (API 36), HyperOS 3.0, arm64-v8a, 4 KB pages. It has a secure lock screen and an enrolled fingerprint. In Developer options, three switches are on: **USB debugging**, **Install via USB** (needs a Mi account) and **USB debugging (Security settings)**.
 
-**Install popups:**
-- HyperOS asks to confirm **every** adb install and cancels it after about 12 seconds (`INSTALL_FAILED_USER_RESTRICTED`).
-- The system ignores injected taps on that popup, by design. **Never try to automate it.**
-- Each Gradle connected run installs four packages (the app, the test app, the orchestrator, test services), so it shows **four popups**. Tell the owner before each run; the owner taps *Install* within about 12 seconds.
-- Gradle uninstalls all four at the end.
+**Ask the owner before any phone action.** That covers installing, running tests and changing settings. The owner has to be at the phone anyway, to tap the install popups.
+
+### 4.1 Build, install, run and debug the app (the cumbuckets loop)
+
+This is the same loop as the owner's puja_android ("cumbuckets") project. adb is not on PATH; from Git Bash:
+
+```bash
+adb="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"     # Windows default SDK location
+"$adb" devices                                             # the phone must show as "device"
+./gradlew :app:assembleDebug
+"$adb" install -r app/build/outputs/apk/debug/app-debug.apk   # owner taps Install; retry if cancelled (below)
+"$adb" shell am start -n com.doro.organizer.debug/com.doro.organizer.MainActivity
+"$adb" logcat -c                                           # then use the app, then:
+"$adb" logcat -d --pid=$("$adb" shell pidof com.doro.organizer.debug)   # this app's log only
+```
+
+**Looking at the screen:**
+- Screenshot protection is off by default, so `"$adb" exec-out screencap -p > build/phone-screen.png` works. With protection on, screenshots come out black (`FLAG_SECURE`, DEC-67).
+- The UI tree works either way:
+  ```bash
+  MSYS_NO_PATHCONV=1 "$adb" shell uiautomator dump /sdcard/window_dump.xml && MSYS_NO_PATHCONV=1 "$adb" pull /sdcard/window_dump.xml build/window_dump.xml
+  ```
+  Its `bounds` give the coordinates to tap.
+- Use `build/` for these files, because it is git-ignored. Delete the dump on the phone afterwards: `MSYS_NO_PATHCONV=1 "$adb" shell rm /sdcard/window_dump.xml`.
+
+**Driving the app:**
+- `"$adb" shell input tap X Y`, `input text`, `input swipe` and `input keyevent KEYCODE_BACK` work, because "USB debugging (Security settings)" is on. HyperOS blocks injected taps only on its own install popup.
+- Check the effect of each tap. In cumbuckets, the first tap after a dump was sometimes lost.
+- A fingerprint prompt needs the owner's real finger.
+
+**Release checks without the phone:** `./gradlew :app:verificationGates` covers the merged-manifest permissions, 16 KB alignment, release log stripping and banned dependencies.
+
+### 4.2 Install popups and retries
+
+There are two HyperOS behaviors on this phone, and both end in `INSTALL_FAILED_USER_RESTRICTED`:
+- **This repo (2026-11-19/20):** a confirmation popup with about a 12 s countdown appears for every install. The owner taps *Install*.
+- **cumbuckets (2026-11-10/15):** the Security app sometimes cancelled an install within about 45 ms. Retrying `adb install -r` worked, after up to five tries. An *update* of an installed app once went through while the phone was locked, but a *new* package needed the phone unlocked.
+
+So: ask the owner to unlock the phone and watch it, then retry up to about five times. Never try to automate the popup: the system ignores injected taps on it, by design.
+
+### 4.3 Instrumented tests through Gradle (verified here)
+
+**Install popups:** each Gradle connected run installs four packages (the app, the test app, the Orchestrator, test services), so it shows **four popups** (section 4.2). Tell the owner before each run. Gradle uninstalls all four at the end, so the next run asks again; section 4.4 avoids that.
 
 **Full suite:** about 875 tests in about 46 minutes. The Orchestrator runs each test in its own process with `clearPackageData`.
 
@@ -105,6 +143,32 @@ Workflow({ scriptPath: "<repo>/dev/claude/workflows/doro-build-tasks.js",
 - Nobody opens the debug app during a run: it starts `MainActivity` inside the test process and fails the running test.
 - Activity tests need the screen on: `adb shell settings put global stay_on_while_plugged_in 7`. Set it back to `0` afterwards, the owner's default.
 - Touch only `com.doro.organizer.debug`, its test app and the two androidx.test helpers. `/data/local/tmp` holds the owner's own files (Shizuku, scripts); leave them alone.
+
+### 4.4 Instrumented tests without reinstalling (cumbuckets flow; try it, not yet verified here)
+
+`connectedDebugAndroidTest` installs four packages and uninstalls them at the end, so **every** run costs four popups. cumbuckets avoids that by keeping the packages installed and running tests with `am instrument`.
+
+This app needs two adaptations:
+- Its runner is `com.doro.organizer.testing.DoroTestRunner`.
+- Its tests expect the Orchestrator to clear the app's data after every test (`clearPackageData`). So run them through the Orchestrator, not straight through the runner.
+
+```bash
+adb="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+"$adb" install -r app/build/outputs/apk/debug/app-debug.apk
+"$adb" install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+# once per phone: the Orchestrator and its shell service (versions in gradle/libs.versions.toml and AGP's test-services)
+"$adb" install -r ~/.gradle/caches/modules-2/files-2.1/androidx.test/orchestrator/1.6.1/*/orchestrator-1.6.1.apk
+"$adb" install -r ~/.gradle/caches/modules-2/files-2.1/androidx.test.services/test-services/1.6.0/*/test-services-1.6.0.apk
+# run classes or Class#method, comma-separated; each test gets a fresh process and cleared data
+"$adb" shell 'CLASSPATH=$(pm path androidx.test.services) app_process / androidx.test.services.shellexecutor.ShellMain am instrument -r -w -e targetInstrumentation com.doro.organizer.debug.test/com.doro.organizer.testing.DoroTestRunner -e clearPackageData true -e class com.doro.organizer.data.db.NoteRowTest androidx.test.orchestrator/.AndroidTestOrchestrator'
+```
+
+**Verifying it before relying on it:**
+- Run one small class this way and through Gradle, and compare the results. The raw output (`-r`) ends with the test counts. Failures print in full, and `println` lines go to logcat (`-s System.out:I`).
+- Find out whether an `install -r` **update** of an installed package passes without a popup on HyperOS 3.0. If it does, a code change costs at most two popups, and test-only changes cost one.
+- Afterwards, uninstall what the owner doesn't want left on the phone: `"$adb" uninstall com.doro.organizer.debug.test`. Keep the app if the owner agrees.
+- Record the outcome here.
 
 ## 5. Machine setup
 
@@ -133,7 +197,7 @@ Workflow({ scriptPath: "<repo>/dev/claude/workflows/doro-build-tasks.js",
 ## 6. Pitfalls already solved
 
 **Windows and shell:**
-- **Git Bash path rewriting.** A bare argument like `/data/local/tmp/x` becomes a Windows path before adb sees it. Pass remote commands as one quoted string: `adb shell "cat /data/local/tmp/x"`.
+- **Git Bash path rewriting.** A bare argument like `/data/local/tmp/x` becomes a Windows path before adb sees it. Either pass the remote command as one quoted string (`adb shell "cat /data/local/tmp/x"`) or prefix the call with `MSYS_NO_PATHCONV=1`, which you need for `adb pull /sdcard/...` anyway.
 - **CRLF.** Python on Windows writes CRLF unless you open files with `newline=''`. The repo is LF (`.gitattributes`); check with `git ls-files --eol`.
 - **Lost backslashes.** Shell heredocs sent through the tool layer can lose backslashes. Write files with the file-writing tool instead.
 - **TaskStop and MSYS loops.** `TaskStop` on a background Bash task may leave an MSYS `sh` loop running. Check `ps -ef` and kill it.

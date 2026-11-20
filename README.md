@@ -1,5 +1,7 @@
 # Doro Organizer
 
+<p align="center"><img src="docs/images/doro.png" alt="Doro" width="220"></p>
+
 A fully offline Android notepad for analysts and team leads. Each note can be linked to any number of persons and projects, or to none, and the notes are browsed through five perspectives: **All**, **Individual**, **Project**, **Date** and **Orphan**.
 
 > **Status: in development.** The non-UI core is built and verified on a real phone (Poco F7, Android 16): data layer, encryption, fingerprint unlock, backup and restore, crash safety and the lock gate (tasks T1–T14). The screens (T15–T21) are next. [SPEC.md](SPEC.md) §T shows every task and its status.
@@ -81,6 +83,10 @@ What to expect:
 - The run installs four packages: the app, the test app and two test helpers. **HyperOS asks you to confirm each install and cancels it after about 12 seconds**, so watch the phone and tap *Install*. Automated taps are blocked by the system.
 - The full suite has about 875 tests and takes about 45 minutes. Each test runs in a fresh, cleared copy of the debug app, and only the debug app's data is wiped. Gradle uninstalls the test packages at the end.
 - Don't open the debug app while tests run.
+
+The handoff notes cover two more loops in [dev/claude/HANDOFF.md](dev/claude/HANDOFF.md) §4:
+- **By hand:** install, launch, read logs and inspect the screen over adb.
+- **Fewer install popups:** a test loop that keeps the packages installed.
 
 ## Project layout
 
