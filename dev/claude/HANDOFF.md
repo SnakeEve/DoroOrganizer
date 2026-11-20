@@ -2,6 +2,21 @@
 
 For Claude Code on any machine that continues this build, and for the owner. Read [CLAUDE.md](../../CLAUDE.md) (rules) and [SPEC.md](../../SPEC.md) (§T tasks) first; this file covers how the build has been run so far, the owner's working preferences, phone testing, and the pitfalls already solved. Last updated 2026-11-21.
 
+## 0. Start-up checklist (every session, every machine)
+
+1. **Sync.** Run `git pull`; the owner may have worked on another laptop. Then check that `git status` is clean, and read `git log --oneline -5`.
+2. **Read.** Read this whole file, SPEC.md §T and the parts of docs/decisions.md you need. CLAUDE.md is already loaded.
+3. **New machine?** Do the setup in section 5. Set this repo's `git config user.name` and `user.email` to match the existing commits: `git log -1 --format='%an <%ae>'`.
+4. **Check before changing anything.** Run the standard verification (section 3) and tell the owner the result.
+5. **Plan with the owner.** Propose the next tasks from section 1 ("Next") with an estimate, then follow the owner's go and stopping point. **Current plan:** T24 first (the phone is needed for its last step), then T15–T21 one after another (no phone).
+6. **Ground rules for the whole session:**
+   - Ask the owner before any phone action.
+   - Commit locally after each task, and push to GitHub only when the owner asks.
+   - When asked for progress, answer with a percentage, a per-step table and an ETA.
+   - Quality first: root cause before fixes, multi-lens review, never weaken or skip a test.
+7. **Multi-agent runs.** The `Workflow` tool needs the owner's opt-in (the word "ultracode" in a message, or ultracode switched on for the session). Without it, run the section 3 steps with subagents, one task at a time.
+8. **Before the session ends:** update section 1 to match reality (status, next steps, open items), commit, and push if the owner asks.
+
 ## 1. Where things stand
 
 - **Done:** T1–T14, built and committed. Together they are the whole non-UI core: data layer, KeyVault, fingerprint slot, DbMaintenance (backup, key changes, restore), the crash matrix and SessionGate.

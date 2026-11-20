@@ -4,6 +4,8 @@ Fully offline Android notepad for analysts and team leads. Notes link to any num
 
 **Status:** build in progress; [SPEC.md](SPEC.md) §T shows done (`x`) and open tasks.
 
+**Every session starts with the checklist in [dev/claude/HANDOFF.md](dev/claude/HANDOFF.md) §0**, before any other work, on any machine.
+
 ## Source of truth
 
 Precedence: [docs/decisions.md](docs/decisions.md) > [spec](stakeholder-notepad-spec.md) > other docs. If something is unclear or two sources conflict, do not guess: add or amend a `DEC-nn` entry in decisions.md first. Owner questions `Qn` and their answers are in decisions.md; if a new one opens, build on its stated default and keep it easy to change.
