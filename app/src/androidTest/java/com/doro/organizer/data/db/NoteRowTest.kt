@@ -23,7 +23,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * The row columns of the list query on SQLCipher (data-layer.md § Rows): the preview of DEC-24 and DEC-25
+ * The row columns of the list query on SQLCipher (data-layer.md § Rows): the preview of DEC-24 and DEC-25, which
+ * [TestRows] stores with [PREVIEW_EXPR] as the write path does (DEC-106; `NotePreviewTest` covers the write path)
  * (testing.md I-09: [WHITESPACE_CHARS] cuts what [TextWhitespace] calls whitespace, checked on ART where
  * `Char.isWhitespace()` differs) and the links' JSON, which
  * `json_group_array` writes and [toNoteRows] reads back (I-47). The JSON round trip also proves that the shipped

@@ -7,7 +7,8 @@ import com.doro.organizer.model.SearchText
 
 /**
  * The seed database writer of testing.md § 7: inserts [model] with its own ids in one bulk transaction, computing
- * `content_fold` with the production fold (DEC-29), then asserts the database invariants (I-01).
+ * `content_fold` with the production fold (DEC-29) and `preview` with the production `PREVIEW_EXPR` in SQLite
+ * ([RAW_NOTE_INSERT], INV-13), then asserts the database invariants (I-01).
  */
 fun AppDatabase.seed(model: SeedModel = SeedGenerator().generate()): SeedModel = openHelper.writableDatabase.seed(model)
 
@@ -22,10 +23,7 @@ fun SupportSQLiteDatabase.seed(model: SeedModel = SeedGenerator().generate()): S
         db.statement("INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)") { insert ->
             model.projects.forEach { insert.entity(it) }
         }
-        db.statement(
-            "INSERT INTO notes (id, date, checked, checked_at, created_at, updated_at, content, content_fold) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        ) { insert -> model.notes.forEach { insert.note(it) } }
+        db.statement(RAW_NOTE_INSERT) { insert -> model.notes.forEach { insert.note(it) } }
         db.statement("INSERT INTO note_persons (note_id, person_id) VALUES (?, ?)") { insert ->
             model.notes.forEach { note -> note.personIds.forEach { insert.link(note.id, it) } }
         }

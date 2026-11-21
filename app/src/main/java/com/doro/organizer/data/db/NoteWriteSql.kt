@@ -12,9 +12,19 @@ const val PERSON_IDS_OF_SQL = "SELECT person_id FROM note_persons WHERE note_id 
 /** The project ids linked to `:noteId`. */
 const val PROJECT_IDS_OF_SQL = "SELECT project_id FROM note_projects WHERE note_id = :noteId"
 
-/** An editor save with a change: content and its fold together, the single write path of DEC-29 (DEC-21). */
-const val UPDATE_NOTE_SQL =
-    "UPDATE notes SET content = :content, content_fold = :fold, date = :date, updated_at = :now WHERE id = :id"
+/**
+ * A new note (data-layer.md § Note save, step 5): content, its fold and its preview in one statement, the single write
+ * path of DEC-29 and DEC-106; SQLite computes the preview from the same bound content (INV-13). Returns the row id.
+ */
+const val INSERT_NOTE_SQL = """INSERT INTO notes (date, checked, checked_at, created_at, updated_at, preview, content,
+    content_fold) VALUES (:date, :checked, :checkedAt, :now, :now, $PREVIEW_OF_BOUND_CONTENT, :content, :fold)"""
+
+/**
+ * An editor save with a change: content, its fold and its preview together, the single write path of DEC-29 and
+ * DEC-106 (DEC-21). The preview comes from the bound `:content`, not from the old row ([PREVIEW_OF_BOUND_CONTENT]).
+ */
+const val UPDATE_NOTE_SQL = "UPDATE notes SET content = :content, content_fold = :fold, " +
+    "preview = $PREVIEW_OF_BOUND_CONTENT, date = :date, updated_at = :now WHERE id = :id"
 
 const val UNLINK_PERSONS_SQL = "DELETE FROM note_persons WHERE note_id = :noteId AND person_id IN (:personIds)"
 

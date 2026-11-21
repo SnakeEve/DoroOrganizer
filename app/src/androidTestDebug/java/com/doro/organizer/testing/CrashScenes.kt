@@ -508,9 +508,8 @@ class CrashScene {
     private suspend fun insertNote(c: CheckContainer, content: String) {
         c.databaseHolder.withDb {
             it.openHelper.writableDatabase.execSQL(
-                "INSERT INTO notes(content, content_fold, date, checked, checked_at, created_at, updated_at) " +
-                    "VALUES(?, ?, NULL, 0, NULL, 1, 1)",
-                arrayOf(content, content.lowercase()),
+                RAW_NOTE_INSERT,
+                arrayOf<Any?>(null, null, 0, null, 1, 1, content, content.lowercase()),
             )
         }
     }

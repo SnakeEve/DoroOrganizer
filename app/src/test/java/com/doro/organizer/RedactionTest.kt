@@ -93,6 +93,7 @@ class RedactionTest {
             checkedAt = 3,
             createdAt = 1,
             updatedAt = 2,
+            preview = SENTINEL,
             content = SENTINEL,
             contentFold = SENTINEL,
         )

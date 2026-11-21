@@ -2,7 +2,6 @@ package com.doro.organizer.data
 
 import com.doro.organizer.data.db.AppDatabase
 import com.doro.organizer.data.db.NoteDao
-import com.doro.organizer.data.db.NoteEntity
 import com.doro.organizer.data.db.NotePersonCrossRef
 import com.doro.organizer.data.db.NoteProjectCrossRef
 import com.doro.organizer.data.db.SaveProbe
@@ -23,16 +22,15 @@ internal suspend fun saveNote(db: AppDatabase, draft: NoteDraft, now: Long): Sav
 
 private suspend fun saveNewNote(db: AppDatabase, draft: NoteDraft, now: Long): SaveResult {
     val links = desiredLinks(db, draft, now)
-    val note = NoteEntity(
+    // SQLite computes the preview from the same content in the same statement (DEC-106, INV-13).
+    val noteId = db.noteDao().insertNote(
         date = draft.date,
         checked = draft.checked,
         checkedAt = if (draft.checked) now else null, // DEC-22: a note created checked has checked_at = created_at
-        createdAt = now,
-        updatedAt = now,
+        now = now,
         content = draft.content,
-        contentFold = SearchText.fold(draft.content),
+        fold = SearchText.fold(draft.content),
     )
-    val noteId = db.noteDao().insertNote(note)
     db.noteDao().link(noteId, links.persons, links.projects)
     return SaveResult.Saved(noteId, wrote = true, links.created.persons, links.created.projects)
 }

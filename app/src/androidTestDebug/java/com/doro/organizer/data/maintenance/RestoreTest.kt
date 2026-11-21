@@ -13,6 +13,7 @@ import com.doro.organizer.settings.Settings
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.MaintenanceSetup
+import com.doro.organizer.testing.RAW_NOTE_INSERT
 import com.doro.organizer.testing.RestoreAnswer.Companion.backupPassword
 import com.doro.organizer.testing.RestoreAnswer.Companion.confirm
 import com.doro.organizer.testing.SeedGenerator
@@ -106,7 +107,7 @@ class RestoreTest {
         assertEquals(listOf(false), setup.listener.startedFor(MaintenanceOp.Restore))
         assertEquals(MaintenanceOutcome.Reopened, setup.listener.finished.last())
         val restored = setup.holder.openDatabase().openHelper.writableDatabase
-        restored.execSQL("INSERT INTO notes (checked, created_at, updated_at, content, content_fold) VALUES (0, 1, 1, '', '')")
+        restored.execSQL(RAW_NOTE_INSERT, arrayOf<Any?>(null, null, 0, null, 1, 1, "", ""))
         assertTrue(restored.longOf("SELECT max(id) FROM notes") > highest) // INV-11
     }
 

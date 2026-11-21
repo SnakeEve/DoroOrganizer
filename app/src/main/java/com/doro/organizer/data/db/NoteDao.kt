@@ -65,9 +65,12 @@ interface NoteDao {
     @Query(HAS_ANY_DATA_SQL)
     suspend fun hasAnyData(): Boolean
 
-    /** A new note; returns its id. */
-    @Insert
-    suspend fun insertNote(note: NoteEntity): Long
+    /**
+     * A new note with its fold and its preview, which SQLite computes from [content] in the same statement (DEC-106,
+     * INV-13); returns the id of the inserted row. [checkedAt] is [now] exactly when [checked] (DEC-22).
+     */
+    @Query(INSERT_NOTE_SQL)
+    suspend fun insertNote(date: Long?, checked: Boolean, checkedAt: Long?, now: Long, content: String, fold: String): Long
 
     /** What a save compares, or null when the note is gone. */
     @Query(SAVE_PROBE_SQL)

@@ -7,6 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.data.OpenResult
 import com.doro.organizer.testing.FakeAppTime
+import com.doro.organizer.testing.RAW_NOTE_INSERT
 import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestKey
 import com.doro.organizer.testing.assertDbInvariants
@@ -133,6 +134,26 @@ class SchemaTest {
         assertEquals(listOf(kept), sql.longsOf("SELECT note_id FROM note_projects"))
     }
 
+    /**
+     * `notes.preview` is NOT NULL without a default (data-layer.md § Entities, DEC-106): a note insert that forgets it
+     * fails instead of storing a preview that is not its content's.
+     */
+    @Test
+    fun notePreview_hasNoDefault_soAnInsertWithoutItFails() {
+        val withoutPreview = contentValuesOf(
+            "checked" to 0,
+            "content" to "text",
+            "content_fold" to "text",
+            "created_at" to now,
+            "updated_at" to now,
+        )
+
+        val error = runCatching { sql.insert("notes", SQLiteDatabase.CONFLICT_ABORT, withoutPreview) }.exceptionOrNull()
+
+        assertTrue("${error?.javaClass}", error is SQLiteConstraintException)
+        assertEquals(0L, sql.longOf("SELECT COUNT(*) FROM notes"))
+    }
+
     @Test
     fun engineIsSqlcipher_plain() {
         assertCipherVersionReported()
@@ -169,14 +190,16 @@ class SchemaTest {
         assertEquals(0L, sql.longOf("SELECT COUNT(*) FROM note_projects"))
     }
 
-    private fun insertNote(): Long = insert(
-        "notes",
-        "date" to null,
-        "checked" to 0,
-        "checked_at" to null,
-        "content" to "",
-        "content_fold" to "",
-    )
+    /** An empty note; its preview comes from `PREVIEW_EXPR` in SQLite ([RAW_NOTE_INSERT], INV-13). */
+    private fun insertNote(): Long = sql.compileStatement(RAW_NOTE_INSERT).use { insert ->
+        listOf(1, 2, 4).forEach(insert::bindNull) // id, date, checked_at
+        insert.bindLong(3, 0)
+        insert.bindLong(5, now)
+        insert.bindLong(6, now)
+        insert.bindString(7, "")
+        insert.bindString(8, "")
+        insert.executeInsert()
+    }
 
     private fun insertPerson(): Long = insert("persons", "name" to "Ann")
 

@@ -8,6 +8,8 @@ import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.core.result.BackupRejection
 import com.doro.organizer.data.HolderState
 import com.doro.organizer.data.db.AppDatabase
+import com.doro.organizer.data.db.PREVIEW_EXPR
+import com.doro.organizer.data.db.RestoreChecks
 import com.doro.organizer.debug.RecordingDocumentsProvider
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.KeyVaultRule
@@ -258,20 +260,49 @@ class RestoreValidationTest {
         assertRejected(mutated("view.db") { execSQL("CREATE VIEW extra AS SELECT id FROM notes") }, BackupRejection.Incompatible)
     }
 
+    /**
+     * One case per restore check (L-11). A case that changes `content` also stores the matching preview, so it breaks
+     * only its own check and not R-6 (INV-13, DEC-106).
+     */
     @Test
     fun eachRestoreCheck_isDamaged() = runValidationTest {
         val first = "(SELECT min(id) FROM notes)"
+        val matchingPreview = "UPDATE notes SET preview = $PREVIEW_EXPR WHERE id = $first"
         val cases = mapOf(
-            "R-1 checked without checked_at" to "UPDATE notes SET checked = 1, checked_at = NULL WHERE id = $first",
-            "R-2 600,003 content bytes" to "UPDATE notes SET content = '${"€".repeat(200_001)}' WHERE id = $first",
-            "R-3 after 2100-12-31" to "UPDATE notes SET date = 47847 WHERE id = $first",
-            "R-3 before 1900-01-01" to "UPDATE notes SET date = -25568 WHERE id = $first",
-            "R-4 BLOB content" to "UPDATE notes SET content = X'00' WHERE id = $first",
-            "R-5 201-character name" to "UPDATE persons SET name = '${"€".repeat(201)}' WHERE id = (SELECT min(id) FROM persons)",
+            "R-1 checked without checked_at" to listOf("UPDATE notes SET checked = 1, checked_at = NULL WHERE id = $first"),
+            "R-2 600,003 content bytes" to
+                listOf("UPDATE notes SET content = '${"€".repeat(200_001)}' WHERE id = $first", matchingPreview),
+            "R-3 after 2100-12-31" to listOf("UPDATE notes SET date = 47847 WHERE id = $first"),
+            "R-3 before 1900-01-01" to listOf("UPDATE notes SET date = -25568 WHERE id = $first"),
+            "R-4 BLOB content" to listOf("UPDATE notes SET content = X'00' WHERE id = $first", matchingPreview),
+            "R-4 BLOB preview" to listOf("UPDATE notes SET preview = X'00' WHERE id = $first"),
+            "R-5 201-character name" to
+                listOf("UPDATE persons SET name = '${"€".repeat(201)}' WHERE id = (SELECT min(id) FROM persons)"),
+            "R-6 a preview that is not its content's" to
+                listOf("UPDATE notes SET preview = 'not the preview of ' || preview WHERE id = $first"),
         )
         for ((index, case) in cases.keys.withIndex()) {
-            assertRejected(mutated("r-check-$index.db") { execSQL(cases.getValue(case)) }, BackupRejection.Damaged, case = case)
+            val document = mutated("r-check-$index.db") { cases.getValue(case).forEach { execSQL(it) } }
+            assertRejected(document, BackupRejection.Damaged, case = case)
         }
+    }
+
+    /**
+     * R-6 alone rejects a stored preview that disagrees with its content (INV-13, DEC-106): the candidate passes every
+     * other restore check of its version, so without R-6 nothing would reject it.
+     */
+    @Test
+    fun aStoredPreviewThatDisagreesWithItsContent_isDamaged_byR6() = runValidationTest {
+        val first = "(SELECT min(id) FROM notes)"
+        val forged = mutated("r6-forged.db") {
+            execSQL("UPDATE notes SET preview = 'not the preview of ' || preview WHERE id = $first")
+            val r6 = "SELECT COUNT(*) FROM notes WHERE preview IS NOT $PREVIEW_EXPR"
+            val checks = RestoreChecks.forVersion(AppDatabase.VERSION)
+            assertTrue("R-6 is a restore check", r6 in checks)
+            assertEquals(1L, longOf(r6))
+            checks.filter { it != r6 }.forEach { check -> assertEquals(check, 0L, longOf(check)) }
+        }
+        assertRejected(forged, BackupRejection.Damaged, case = "R-6")
     }
 
     @Test
