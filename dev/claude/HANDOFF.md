@@ -8,7 +8,7 @@ For Claude Code on any machine that continues this build, and for the owner. Rea
 2. **Read.** Read this whole file, SPEC.md §T and the parts of docs/decisions.md you need. CLAUDE.md is already loaded.
 3. **New machine?** Do the setup in section 5. Set this repo's `git config user.name` and `user.email` to match the existing commits: `git log -1 --format='%an <%ae>'`.
 4. **Check before changing anything.** Run the standard verification (section 3) and tell the owner the result.
-5. **Plan with the owner.** Propose the next tasks from section 1 ("Next") with an estimate, then follow the owner's go and stopping point. **Current plan:** T24 first (the phone is needed for its last step), then T15–T21 one after another (no phone).
+5. **Plan with the owner.** Propose the next tasks from section 1 ("Next") with an estimate, then follow the owner's go and stopping point. **Current plan:** T22 on the owner's mark (the phone stays attached for hours; the owner taps install prompts and does the fingerprint test), then T23 with the owner.
 6. **Ground rules for the whole session:**
    - Ask the owner before any phone action.
    - Commit locally after each task, and push to GitHub only when the owner asks.
@@ -19,23 +19,30 @@ For Claude Code on any machine that continues this build, and for the owner. Rea
 
 ## 1. Where things stand
 
-- **Done:** T1–T14, built and committed. Together they are the whole non-UI core: data layer, KeyVault, fingerprint slot, DbMaintenance (backup, key changes, restore), the crash matrix and SessionGate.
+- **Done:** T1–T21 and T24, built and committed locally; nothing is pushed yet.
+  - T1–T14: the whole non-UI core: data layer, KeyVault, fingerprint slot, DbMaintenance (backup, key changes, restore), the crash matrix and SessionGate.
+  - T24: the CS-29 fix (DEC-98).
+  - T15–T21, built 2026-11-21 without the phone: the UI shell and gate screens, the note list with its five perspectives, selection mode, the editor and picker, Settings, keyboard privacy with `SecureDialogWindow` on every dialog, and release hardening (perf tests, the release-smoke and real-biometric tests, verified open-source notices). Their instrumented tests compile but have never run on a device.
 - **Verified on the owner's phone** (commit "fix: device test failures of T1-T14 on the Poco F7"):
   - 875 instrumented tests, 873 pass.
-  - The 2 failures are the CS-29 rows of `CrashSafetyTest`: open bug **B3** in SPEC.md, decided as **DEC-98**, fixed by **T24**.
+  - The 2 failures are the CS-29 rows of `CrashSafetyTest`: bug **B3** in SPEC.md, decided as **DEC-98**, fixed by **T24** (next bullet).
   - JVM tests (391), lint, `:app:verificationGates` and `config/check-schemas.sh` are green.
 - **Crash suite (L-15) after T24, verified on the owner's phone 2026-11-21:**
   - Run over the T19 working tree (base `8b91fc7`, before T19's commit), because T24 changed the assertions of every `CrashSafetyTest` case and T19 touches the backup code.
   - `CrashSafetyTest` 260/260, `CrashSafetyCoverageTest` 2/2 and `CrashSafetyMoreCasesTest` 2/2 pass, in 24 minutes; `:app:checkDeviceTestResults` passed. The four CS-29 rows of B3 pass.
   - This meets T19's precondition "! L-15 green before any Backup/Restore/encryption setting visible". Results are in `build/t19-l15/` (git-ignored).
   - Still open in T22: the full-suite pass after the fixes.
+- **Green after T21** (the run's final check, 2026-11-21, no phone): 624 JVM tests, lint, `:app:verificationGates`, `config/check-schemas.sh` and `dev/claude/check-docs.js`; the debug, `qa` and `benchmark` test APKs build.
 - **Next, in this order:**
-  1. **T24:** the CS-29 fix, plus guards against test classes that JUnit silently rejects. It needs the phone at the end.
-  2. **T15–T21:** the screens and release hardening. These need no phone; the instrumented tests only have to compile.
-  3. **T22:** the rest of the phone runs.
-  4. **T23:** the manual QA checklist, with the owner.
-- **Not in SPEC yet: release signing.** Where the owner's signing key lives and how it is backed up is still open. Ask the owner before T21, then add it as a task. A lost key means updates cannot install over the app without deleting the user's notes.
-- **Waiting for the owner's sign-off:** the decisions made without them while building, chiefly DEC-75–79, DEC-92–98, plus the SPEC row amendments recorded in the "docs: record Tn …" and "spec: …" commits. Offer the owner a one-page plain-language summary.
+  1. **T22, on the owner's mark (phone):**
+     - Start from a clean build, or run `./gradlew :app:compileDebugAndroidTestKotlin --rerun` first (section 6: moved test sources can leave stale classes).
+     - Run the full `connectedDebugAndroidTest`: about 860 `@Test` methods in the debug test APK, with the T15–T21 UI tests on a device for the first time, so expect failures to root-cause and fix. Then one full-suite pass after the fixes; it also closes the open L-15 item.
+     - Run the before-release jobs that T21 moved here: `perf` on `benchmark`, `release-smoke` on `qa`, and `real-biometric` with the owner at the sensor. Record their Verify-at-setup outcomes (DEC-103).
+     - The first install of the `.qa` and `.benchmark` apps and their test apps needs the owner's tap on HyperOS (section 4.2). Updates after that do not.
+  2. **T23:** the manual QA checklist (testing.md §10) with the owner, L-10 over the M-20 fixtures, and the visual check of the icons drawn offline in T16–T19.
+- **Not in SPEC yet: release signing.** Where the owner's signing key lives and how it is backed up is still open, and the owner has not been asked yet. Ask at the next chance, then add it as a task; it must be settled before any release. A lost key means updates cannot install over the app without deleting the user's notes.
+- **Waiting for the owner's sign-off:** the decisions made without them while building: DEC-75–79 and DEC-92–98; from T15–T21 the new DEC-58, DEC-59 and DEC-99–103 and the amended DEC-50, DEC-57 and DEC-90; plus the SPEC row amendments recorded in the "docs: record Tn …" and "spec: …" commits. Offer the owner a one-page plain-language summary.
+- **SPEC tidy-up, for the spec skill** (FORMAT.md lets a build change only the status cell): B3 still reads OPEN although T24 fixed it, and the L-15 wording in the T19 and T22 rows predates the 260/260 run above.
 
 ## 2. The owner's working preferences
 
