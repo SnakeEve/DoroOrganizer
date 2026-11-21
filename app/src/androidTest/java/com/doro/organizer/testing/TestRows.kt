@@ -56,6 +56,9 @@ class TestRows(private val db: SupportSQLiteDatabase) {
         db.execSQL("DELETE FROM projects WHERE id = ?", arrayOf(id))
     }
 
+    /** The seed database of testing.md § 7 (`seed-10k` by default), with its own ids. */
+    fun seed(model: SeedModel = SeedGenerator().generate()): SeedModel = db.seed(model)
+
     private fun insert(table: String, vararg values: Pair<String, Any?>): Long =
         db.insert(table, SQLiteDatabase.CONFLICT_ABORT, contentValuesOf(*values))
 }

@@ -1,5 +1,7 @@
 package com.doro.organizer.ui.common
 
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,11 +15,18 @@ import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -25,6 +34,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.Placeholder
@@ -42,27 +52,47 @@ private const val PROJECT_ICON = "project"
 private const val GROUP_GAP = "gap"
 
 /**
- * One note of a list (ui.md § 3.7, § 12.1): a merged node that reads [rowDescription], with the done checkbox as its
- * own node and a custom action that does what the checkbox does. The UI never changes the row itself: the toggle
- * writes, and the next emission restyles and moves it (DEC-54, architecture.md § Layering rule 3).
+ * One note of a list (ui.md § 3.7, § 3.8, § 12.1): a merged node that reads [rowDescription], with the done checkbox
+ * as its own node and a custom action that does what the checkbox does. The UI never changes the row itself: the
+ * toggle writes, and the next emission restyles and moves it (DEC-54, architecture.md § Layering rule 3).
+ *
+ * [selected] is null outside selection mode; in it, the row shows its selection mark and, when selected, the
+ * secondary container (DEC-54). [onClick] is the row tap, null while the row has none: outside selection mode the
+ * tap opens the editor, which comes with SPEC T18. [onLongClick] enters selection mode, or in it does what a tap does.
  */
 @Composable
 fun NoteRowItem(
     row: NoteRowUi,
     formats: DateFormats,
     onCheckedChange: (Boolean) -> Unit,
+    onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
+    selected: Boolean? = null,
+    onClick: (() -> Unit)? = null,
 ) {
     val description = rowDescription(row, formats)
+    val state = rowState(row, selected)
     val markLabel = stringResource(if (row.checked) R.string.a11y_mark_not_done else R.string.a11y_mark_done)
-    val doneState = stringResource(R.string.state_done)
+    val selectLabel = stringResource(if (selected == true) R.string.a11y_deselect_note else R.string.a11y_select_note)
     ListItem(
         modifier = modifier
             .testTag("note_row_${row.id}")
             .heightIn(min = 72.dp)
+            .then(
+                if (onClick != null) {
+                    Modifier.combinedClickable(
+                        onClickLabel = selectLabel.takeIf { selected != null },
+                        onLongClickLabel = selectLabel,
+                        onLongClick = onLongClick,
+                        onClick = onClick,
+                    )
+                } else {
+                    Modifier.longPressOnly(selectLabel, LocalHapticFeedback.current, rememberUpdatedState(onLongClick))
+                },
+            )
             .semantics(mergeDescendants = true) {
                 contentDescription = description
-                if (row.checked) stateDescription = doneState
+                state?.let { stateDescription = it }
                 customActions = listOf(CustomAccessibilityAction(markLabel) { onCheckedChange(!row.checked); true })
             },
         leadingContent = { DoneCheckbox(row, onCheckedChange) },
@@ -72,6 +102,55 @@ fun NoteRowItem(
         } else {
             null
         },
+        trailingContent = selected?.let { { SelectionMark(it) } },
+        colors = if (selected == true) {
+            ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+        } else {
+            ListItemDefaults.colors()
+        },
+    )
+}
+
+/**
+ * A long-press with its haptic and its accessibility action, and no tap: a row outside selection mode before the
+ * editor exists, which must not offer a click that does nothing. Temporary: SPEC T18 gives every row its tap, and
+ * this branch goes with the null `onClick`.
+ */
+private fun Modifier.longPressOnly(label: String, haptics: HapticFeedback, action: State<() -> Unit>): Modifier =
+    pointerInput(haptics) {
+        detectTapGestures(
+            onLongPress = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                action.value()
+            },
+        )
+    }.semantics {
+        onLongClick(label) {
+            action.value()
+            true
+        }
+    }
+
+/**
+ * The row's state description (ui.md § 12.1): "Done" for a checked note; in selection mode "Selected" or "Not
+ * selected", followed by ", Done" for a checked note; none for an unchecked note outside selection mode.
+ */
+@Composable
+private fun rowState(row: NoteRowUi, selected: Boolean?): String? {
+    val done = stringResource(R.string.state_done).takeIf { row.checked }
+    val selection = selected?.let { stringResource(if (it) R.string.state_selected else R.string.state_not_selected) }
+    return listOfNotNull(selection, done).ifEmpty { null }?.joinToString(stringResource(R.string.names_separator))
+}
+
+/** The trailing mark of selection mode (ui.md § 3.7): decorative, the row's state description carries it. */
+@Composable
+private fun SelectionMark(selected: Boolean) {
+    val colors = MaterialTheme.colorScheme
+    Icon(
+        painter = painterResource(if (selected) R.drawable.ic_check_circle_filled else R.drawable.ic_radio_button_unchecked),
+        contentDescription = null,
+        modifier = Modifier.size(24.dp).clearAndSetSemantics { },
+        tint = if (selected) colors.primary else colors.outline,
     )
 }
 

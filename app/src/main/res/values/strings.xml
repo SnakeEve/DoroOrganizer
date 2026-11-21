@@ -16,6 +16,8 @@
     <string name="a11y_loading">Loading</string>
     <string name="action_search">Search</string>
     <string name="action_done">Done</string>
+    <string name="action_more">More options</string>
+    <string name="action_delete">Delete</string>
     <!-- Quoted: aapt trims unquoted leading and trailing whitespace. -->
     <string name="names_separator">", "</string>
 
@@ -28,6 +30,10 @@
     <string name="a11y_mark_not_done">Mark note as not done</string>
     <string name="state_done">Done</string>
     <string name="state_not_done">Not done</string>
+    <string name="state_selected">Selected</string>
+    <string name="state_not_selected">Not selected</string>
+    <string name="a11y_select_note">Select note</string>
+    <string name="a11y_deselect_note">Deselect note</string>
     <string name="announce_marked_done">Marked as done</string>
     <string name="announce_marked_not_done">Marked as not done</string>
     <string name="a11y_row_people">People: %1$s</string>
@@ -70,6 +76,38 @@
     <string name="a11y_day_range_start">start of range</string>
     <string name="a11y_day_range_end">end of range</string>
     <string name="a11y_day_in_range">in range</string>
+
+    <!-- Selection mode and batch actions (ui.md § 11.5). -->
+    <plurals name="selected_count">
+        <item quantity="one">%d selected</item>
+        <item quantity="other">%d selected</item>
+    </plurals>
+    <string name="action_exit_selection">Exit selection</string>
+    <string name="action_select_all">Select all</string>
+    <string name="action_set_date">Set date…</string>
+    <string name="dialog_set_date_title">Set date</string>
+    <string name="action_remove_date">Remove date</string>
+    <plurals name="batch_associated">
+        <item quantity="one">%d note associated</item>
+        <item quantity="other">%d notes associated</item>
+    </plurals>
+    <plurals name="batch_date_set">
+        <item quantity="one">Date set on %d note</item>
+        <item quantity="other">Date set on %d notes</item>
+    </plurals>
+    <plurals name="batch_date_removed">
+        <item quantity="one">Date removed from %d note</item>
+        <item quantity="other">Date removed from %d notes</item>
+    </plurals>
+    <plurals name="batch_deleted">
+        <item quantity="one">%d note deleted</item>
+        <item quantity="other">%d notes deleted</item>
+    </plurals>
+    <plurals name="dialog_batch_delete_title">
+        <item quantity="one">Delete %d note?</item>
+        <item quantity="other">Delete %d notes?</item>
+    </plurals>
+    <string name="dialog_irreversible">This cannot be undone.</string>
 
     <!-- EntityPicker (ui.md § 11.7): the embedded body of Individual and Project. -->
     <string name="picker_search_people">Search people</string>

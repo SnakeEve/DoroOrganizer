@@ -33,7 +33,8 @@ import java.time.LocalDate
 
 /**
  * The heading row below `MonthGrid` that labels the list (ui.md § 4.4.2): the selected day in full, marked "Today"
- * when it is today, or the range; "Select range" and, in range mode, "Clear range".
+ * when it is today, or the range; "Select range" and, in range mode, "Clear range", both disabled without [enabled]
+ * (selection mode, ui.md § 5.1).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -44,6 +45,7 @@ internal fun CalendarSelectionHeader(
     onSelectRange: () -> Unit,
     onClearRange: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     FlowRow(
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -67,12 +69,12 @@ internal fun CalendarSelectionHeader(
                 color = MaterialTheme.colorScheme.primary,
             )
         }
-        TextButton(onClick = onSelectRange) {
+        TextButton(onClick = onSelectRange, enabled = enabled) {
             Icon(painterResource(R.drawable.ic_date_range), null, Modifier.size(ButtonDefaults.IconSize))
             Text(stringResource(R.string.action_select_range), Modifier.padding(start = ButtonDefaults.IconSpacing))
         }
         if (selection is DaySelection.Range) {
-            IconButton(onClick = onClearRange) {
+            IconButton(onClick = onClearRange, enabled = enabled) {
                 Icon(painterResource(R.drawable.ic_close), stringResource(R.string.action_clear_range))
             }
         }

@@ -431,6 +431,8 @@ class RedactionTest {
             filtersActive = true,
             searchOpen = true,
             dateFilter = DateFilter.Undated,
+            selection = setOf(21),
+            batchRunning = false,
             calendar = null,
             dialog = null,
             message = null,

@@ -9,8 +9,11 @@ import com.doro.organizer.model.SearchText
  * The seed database writer of testing.md § 7: inserts [model] with its own ids in one bulk transaction, computing
  * `content_fold` with the production fold (DEC-29), then asserts the database invariants (I-01).
  */
-fun AppDatabase.seed(model: SeedModel = SeedGenerator().generate()): SeedModel {
-    val db = openHelper.writableDatabase
+fun AppDatabase.seed(model: SeedModel = SeedGenerator().generate()): SeedModel = openHelper.writableDatabase.seed(model)
+
+/** The seed writer on a raw [SupportSQLiteDatabase] (`TestRows.seed`), for data planted before the app starts. */
+fun SupportSQLiteDatabase.seed(model: SeedModel = SeedGenerator().generate()): SeedModel {
+    val db = this
     db.beginTransaction()
     try {
         db.statement("INSERT INTO persons (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)") { insert ->

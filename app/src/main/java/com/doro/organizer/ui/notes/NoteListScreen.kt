@@ -81,17 +81,21 @@ private fun entityPickerFactory(graph: UiGraph, kind: EntityKind) = viewModelFac
 }
 
 /**
- * One perspective (ui.md § 3, § 4): the app bar or the search bar, the filter chips, and the list, the Calendar's
- * grid, or the embedded entity picker. [reselectCount] grows when the user taps this tab while it is current, which
- * scrolls the list to the top (ui.md § 2.1).
+ * One perspective (ui.md § 3, § 4): the app bar, the search bar or the contextual bar of selection mode (§ 5), the
+ * filter chips, and the list, the Calendar's grid, or the embedded entity picker. [leaveCount] grows when the user
+ * leaves this tab, which ends selection mode; [reselectCount] grows when the user taps this tab while it is current,
+ * which scrolls the list to the top (ui.md § 2.1).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NoteListScreen(perspective: Perspective, reselectCount: Int) {
+fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int) {
     val graph = LocalUiGraph.current
     val spec = remember(perspective) { PerspectiveSpec.of(perspective) }
     val vm: NoteListViewModel = viewModel(factory = noteListFactory(graph, spec))
-    val state by vm.uiState.collectAsStateWithLifecycle()
+    val latest by vm.uiState.collectAsStateWithLifecycle()
+    // A leave not handled yet already ends selection mode in the returning tab's first frame, before onTabLeft runs:
+    // a tab is not composed while another is current, so its retained state still holds the old selection (§ 5.5).
+    val state = if (leaveCount > vm.handledLeaves) latest.copy(selection = null) else latest
     val formats = rememberDateFormats()
     val listState = rememberLazyListState()
     val pickerListState = rememberLazyListState()
@@ -104,7 +108,10 @@ fun NoteListScreen(perspective: Perspective, reselectCount: Int) {
 
     // P-5 times the cold start to the first list with data (architecture.md § Performance budgets).
     if (perspective == Perspective.All) ReportDrawnWhen { !state.loading }
+    LaunchedEffect(leaveCount) { vm.onTabLeft(leaveCount) }
+    // Composed after the search bar's handler, so selection mode takes Back first (ui.md § 2.5).
     BackHandler(enabled = state.searchOpen, onBack = vm::closeSearch)
+    BackHandler(enabled = state.selecting, onBack = vm::exitSelection)
     ReselectEffect(reselectCount, if (pickerShown) pickerListState else listState)
     MessageEffect(state.message, graph, vm::onMessageShown)
 
@@ -113,10 +120,22 @@ fun NoteListScreen(perspective: Perspective, reselectCount: Int) {
             .nestedScroll(scrollBehavior.nestedScrollConnection)
             .semantics { paneTitle = title },
         topBar = {
-            if (state.searchOpen) {
+            val selection = state.selection
+            if (selection != null) {
+                SelectionTopBar(
+                    count = selection.size,
+                    enabled = !state.batchRunning,
+                    onExit = vm::exitSelection,
+                    onSelectAll = vm::selectAll,
+                    onSetDate = vm::openSetDate,
+                    onDelete = vm::openBatchDelete,
+                )
+            } else if (state.searchOpen) {
                 SearchBar(
                     text = vm.searchText,
                     focusOnStart = focusSearch,
+                    // Used once: a bar that returns after selection mode has neither focus nor keyboard (ui.md § 3.3).
+                    onFocusedOnStart = { focusSearch = false },
                     onTextChange = vm::onSearchTextChange,
                     onSubmit = vm::submitSearch,
                     onClear = vm::clearSearchText,
@@ -177,9 +196,9 @@ private fun ListContent(
     listState: LazyListState,
 ) {
     // The Person and Project chips open the EntityPicker destination (PickerKey, SPEC T18); until it exists only the
-    // Date chip is offered.
+    // Date chip is offered. Selection mode disables the chips, so no filter change drops the selection (ui.md § 5.1).
     val chips = state.chips.filter { it.dimension == FilterDimension.Date }
-    if (chips.isNotEmpty()) FilterChipRow(chips, formats) { vm.openDateFilter() }
+    if (chips.isNotEmpty()) FilterChipRow(chips, formats, enabled = !state.selecting) { vm.openDateFilter() }
     val announcer = rememberAnnouncer(graph)
     val markedDone = stringResource(R.string.announce_marked_done)
     val markedNotDone = stringResource(R.string.announce_marked_not_done)
@@ -189,17 +208,20 @@ private fun ListContent(
             onDone(changed)
         }
     }
+    val rowSelection = remember(vm) { RowSelection(enter = vm::enterSelection, toggle = vm::toggleSelection) }
     val calendar = state.calendar
     if (calendar == null) {
-        NoteListBody(state, listState, formats, onCheckedChange, vm::clearFilters)
+        NoteListBody(state, listState, formats, onCheckedChange, rowSelection, vm::clearFilters)
     } else {
-        CalendarContent(state, calendar, vm, formats, listState, onCheckedChange)
+        CalendarContent(state, calendar, vm, formats, listState, onCheckedChange, rowSelection)
     }
 }
 
 /**
  * The Date perspective (ui.md § 4.4): one column whose first items are the grid and the selection header, or two
  * panes when the window is expanded or a landscape phone, where a single column would put the day list below the fold.
+ * Selection mode disables the day cells, "Today", "Select range" and "Clear range"; month navigation still works
+ * (ui.md § 5.1).
  */
 @Composable
 private fun CalendarContent(
@@ -209,7 +231,9 @@ private fun CalendarContent(
     formats: DateFormats,
     listState: LazyListState,
     onCheckedChange: RowToggle,
+    rowSelection: RowSelection,
 ) {
+    val daysEnabled = !state.selecting
     val grid = @Composable { modifier: Modifier ->
         MonthGrid(
             month = calendar.month,
@@ -221,10 +245,18 @@ private fun CalendarContent(
             onDayClick = vm::selectDay,
             onToday = vm::showToday,
             modifier = modifier,
+            daysEnabled = daysEnabled,
         )
     }
     val header = @Composable {
-        CalendarSelectionHeader(calendar.selection, calendar.today, formats, vm::openRangePicker, vm::clearRange)
+        CalendarSelectionHeader(
+            selection = calendar.selection,
+            today = calendar.today,
+            formats = formats,
+            onSelectRange = vm::openRangePicker,
+            onClearRange = vm::clearRange,
+            enabled = daysEnabled,
+        )
     }
     val sizes = currentWindowAdaptiveInfoV2().windowSizeClass
     val twoPane = sizes.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND) ||
@@ -236,10 +268,13 @@ private fun CalendarContent(
                 grid(Modifier.fillMaxWidth())
                 header()
             }
-            NoteListBody(state, listState, formats, onCheckedChange, vm::clearFilters, Modifier.weight(1f), header = {})
+            NoteListBody(
+                state, listState, formats, onCheckedChange, rowSelection, vm::clearFilters, Modifier.weight(1f),
+                header = {},
+            )
         }
     } else {
-        NoteListBody(state, listState, formats, onCheckedChange, vm::clearFilters, header = {
+        NoteListBody(state, listState, formats, onCheckedChange, rowSelection, vm::clearFilters, header = {
             item(key = "month_grid") {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                     grid(Modifier.widthIn(max = 480.dp))
@@ -278,6 +313,25 @@ private fun ListDialogs(state: NoteListUiState, vm: NoteListViewModel, formats: 
         }
         ListDialog.RangePicker -> state.calendar?.let { calendar ->
             RangePickerDialog(calendar.selection, onConfirm = vm::setRange, onDismiss = vm::closeDialog)
+        }
+        ListDialog.SetDate -> state.selection?.let { selection ->
+            // Only the opening value matters: the picker state ignores later initial dates, so it is computed once.
+            val shared = remember { sharedDate(state.rows, selection) }
+            SetDateDialog(
+                shared = shared,
+                today = state.today,
+                running = state.batchRunning,
+                onSet = vm::setDateOfSelection,
+                onDismiss = vm::closeDialog,
+            )
+        }
+        ListDialog.BatchDelete -> state.selection?.let { selection ->
+            BatchDeleteDialog(
+                count = selection.size,
+                running = state.batchRunning,
+                onConfirm = vm::deleteSelection,
+                onDismiss = vm::closeDialog,
+            )
         }
     }
 }

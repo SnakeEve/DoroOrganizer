@@ -19,6 +19,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.style.TextOverflow
@@ -29,10 +30,15 @@ import com.doro.organizer.ui.common.DateFormats
 
 /**
  * The filter chips below the app bar (ui.md § 3.4), one per entry of [chips], scrolling horizontally. [onChipClick]
- * receives the dimension.
+ * receives the dimension; without [enabled] (selection mode, ui.md § 5.1) the chips are disabled.
  */
 @Composable
-internal fun FilterChipRow(chips: List<FilterChipUi>, formats: DateFormats, onChipClick: (FilterDimension) -> Unit) {
+internal fun FilterChipRow(
+    chips: List<FilterChipUi>,
+    formats: DateFormats,
+    enabled: Boolean,
+    onChipClick: (FilterDimension) -> Unit,
+) {
     Row(
         modifier = Modifier
             .horizontalScroll(rememberScrollState())
@@ -40,13 +46,13 @@ internal fun FilterChipRow(chips: List<FilterChipUi>, formats: DateFormats, onCh
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         chips.forEach { chip ->
-            FilterChipItem(chip, formats) { onChipClick(chip.dimension) }
+            FilterChipItem(chip, formats, enabled) { onChipClick(chip.dimension) }
         }
     }
 }
 
 @Composable
-private fun FilterChipItem(chip: FilterChipUi, formats: DateFormats, onClick: () -> Unit) {
+private fun FilterChipItem(chip: FilterChipUi, formats: DateFormats, enabled: Boolean, onClick: () -> Unit) {
     val value = chipValueText(chip.value, formats)
     val label = value ?: stringResource(chip.dimension.nameRes())
     val description = stringResource(chip.dimension.a11yRes(), value ?: stringResource(R.string.filter_any))
@@ -54,15 +60,20 @@ private fun FilterChipItem(chip: FilterChipUi, formats: DateFormats, onClick: ()
     FilterChip(
         selected = value != null,
         onClick = onClick,
+        enabled = enabled,
         label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         modifier = Modifier
             .testTag("chip_${chip.dimension.name}")
             .clearAndSetSemantics {
                 role = Role.DropdownList
                 contentDescription = description
-                onClick(label = changeLabel) {
-                    onClick()
-                    true
+                if (enabled) {
+                    onClick(label = changeLabel) {
+                        onClick()
+                        true
+                    }
+                } else {
+                    disabled()
                 }
             },
         leadingIcon = if (value != null) {

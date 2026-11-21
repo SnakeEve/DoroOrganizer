@@ -6,12 +6,16 @@ import android.os.Bundle
 import android.os.Parcel
 import androidx.test.platform.app.InstrumentationRegistry
 
-/** The Bundle `MainActivity.onSaveInstanceState` filled while [block] ran (testing.md L-03). */
-fun captureSavedState(block: () -> Unit): Bundle {
+/**
+ * The Bundle `MainActivity.onSaveInstanceState` filled while [block] ran (testing.md L-03). [addToState] may add
+ * entries to it before it leaves the process, so they cross Binder with the activity's own state (testing.md I-38).
+ */
+fun captureSavedState(addToState: (Bundle) -> Unit = {}, block: () -> Unit): Bundle {
     val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
     var saved: Bundle? = null
     val callbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {
+            addToState(outState)
             saved = outState
         }
 

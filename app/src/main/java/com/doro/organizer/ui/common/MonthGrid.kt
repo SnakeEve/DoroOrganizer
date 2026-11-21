@@ -85,7 +85,8 @@ private val GRID_PADDING = 8.dp
 /**
  * The calendar of the Date perspective (ui.md § 4.4.1, DEC-11, DEC-53). It holds no state but its own pager: the
  * displayed [month], the [selection] and the [markedDays] (epoch days of [month] with matching notes) are
- * parameters, and swipes, arrows, day taps and "Today" are reported.
+ * parameters, and swipes, arrows, day taps and "Today" are reported. Without [daysEnabled] (selection mode, ui.md
+ * § 5.1) the day cells and "Today" are disabled and only the month changes.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -99,6 +100,7 @@ fun MonthGrid(
     onDayClick: (Long) -> Unit,
     onToday: () -> Unit,
     modifier: Modifier = Modifier,
+    daysEnabled: Boolean = true,
 ) {
     val formats = rememberDateFormats()
     val pagerState = rememberPagerState(initialPage = MonthPages.pageOf(month)) { MonthPages.COUNT }
@@ -116,7 +118,7 @@ fun MonthGrid(
         }
     }
     Column(modifier.testTag("month_grid")) {
-        MonthHeader(month, today, selection, formats, pagerState, onToday)
+        MonthHeader(month, today, selection, formats, pagerState, onToday, daysEnabled)
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val padding = if (maxWidth >= MIN_CELL * MonthPages.COLUMNS + GRID_PADDING * 2) GRID_PADDING else 0.dp
             val column = maxOf(MIN_CELL, (maxWidth - padding * 2) / MonthPages.COLUMNS)
@@ -139,6 +141,7 @@ fun MonthGrid(
                         .then(if (scrolls) Modifier.horizontalScroll(rememberScrollState()) else Modifier)
                         .padding(horizontal = padding),
                     onDayClick = onDayClick,
+                    daysEnabled = daysEnabled,
                 )
             }
         }
@@ -154,6 +157,7 @@ private fun MonthHeader(
     formats: DateFormats,
     pagerState: PagerState,
     onToday: () -> Unit,
+    todayEnabled: Boolean,
 ) {
     val scope = rememberCoroutineScope()
     // The pager's own target, not [month]: that changes only once a page settled, so a second tap during the
@@ -175,7 +179,7 @@ private fun MonthHeader(
             style = MaterialTheme.typography.titleMedium,
         )
         if (month != YearMonth.from(today) || selection != DaySelection.Day(today.toEpochDay())) {
-            TextButton(onClick = onToday) { Text(stringResource(R.string.action_today)) }
+            TextButton(onClick = onToday, enabled = todayEnabled) { Text(stringResource(R.string.action_today)) }
         }
         IconButton(onClick = { scope.launch { pagerState.animateScrollToPage(page - 1) } }, enabled = page > 0) {
             Icon(painterResource(R.drawable.ic_chevron_left), stringResource(R.string.a11y_previous_month))
@@ -200,6 +204,7 @@ private fun MonthPage(
     column: Dp,
     rowHeight: Dp,
     onDayClick: (Long) -> Unit,
+    daysEnabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val locale = LocalConfiguration.current.locales[0]
@@ -235,6 +240,7 @@ private fun MonthPage(
                                 modifier = Modifier
                                     .size(column, rowHeight)
                                     .semantics { collectionItemInfo = CollectionItemInfo(rowIndex, 1, columnIndex, 1) },
+                                enabled = daysEnabled,
                                 onClick = { onDayClick(date.toEpochDay()) },
                             )
                         }
@@ -252,6 +258,7 @@ private fun DayCell(
     selection: DaySelection,
     marked: Boolean,
     formats: DateFormats,
+    enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -268,7 +275,7 @@ private fun DayCell(
     Box(
         modifier = modifier
             .testTag("day_$day")
-            .clickable(onClickLabel = clickLabel, role = Role.Button, onClick = onClick)
+            .clickable(enabled = enabled, onClickLabel = clickLabel, role = Role.Button, onClick = onClick)
             .semantics {
                 contentDescription = description
                 selected = filled

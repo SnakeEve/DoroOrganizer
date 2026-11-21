@@ -46,7 +46,13 @@ fun MainContent(graph: UiGraph, dataEpoch: Int) {
     AppMessagesEffect(graph, appSnackbar)
     val entries = navigation.rememberDisplayedEntries(
         entryProvider<NavKey> {
-            entry<TabKey> { key -> NoteListScreen(key.perspective, navigation.reselectCount(key.perspective)) }
+            entry<TabKey> { key ->
+                NoteListScreen(
+                    perspective = key.perspective,
+                    leaveCount = navigation.leaveCount(key.perspective),
+                    reselectCount = navigation.reselectCount(key.perspective),
+                )
+            }
         },
     )
     val compactWidth = !currentWindowAdaptiveInfoV2().windowSizeClass

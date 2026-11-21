@@ -12,6 +12,8 @@ import java.time.YearMonth
  * current [primary], so "(No data)" never flashes (DEC-25, architecture.md § Layering rule 2). [today] starts the
  * date pickers; [dateFilter] is the date chip's value, which the date filter sheet shows. The search text is not
  * here: the field reads `NoteListViewModel.searchText`, which changes in the frame of each edit (ui.md § 3.3).
+ * [selection] is null outside selection mode (ui.md § 5); [batchRunning] is true while a batch action of the
+ * contextual bar runs, whose actions are then disabled (ui.md § 5.3).
  */
 data class NoteListUiState(
     val spec: PerspectiveSpec,
@@ -23,11 +25,16 @@ data class NoteListUiState(
     val filtersActive: Boolean,
     val searchOpen: Boolean,
     val dateFilter: DateFilter,
+    val selection: Set<Long>?,
+    val batchRunning: Boolean,
     val calendar: CalendarUi?,
     val dialog: ListDialog?,
     val message: UserMessage?,
 ) {
     override fun toString() = "NoteListUiState(${spec.perspective}, rows=${rows.size})" // DEC-70
+
+    /** Selection mode is on (ui.md § 5.1). */
+    val selecting: Boolean get() = selection != null
 }
 
 /** The primary selection of a perspective (ui.md § 4): what the list is of, before any secondary filter. */
@@ -98,4 +105,10 @@ sealed interface ListDialog {
 
     /** The Calendar's range picker (ui.md § 4.4.2). */
     data object RangePicker : ListDialog
+
+    /** The batch date picker of selection mode (ui.md § 5.3). */
+    data object SetDate : ListDialog
+
+    /** The batch delete confirmation of selection mode (ui.md § 8.3). */
+    data object BatchDelete : ListDialog
 }

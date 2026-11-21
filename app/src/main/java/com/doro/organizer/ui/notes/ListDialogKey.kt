@@ -10,6 +10,8 @@ internal fun ListDialog.toKey(): String = when (this) {
     ListDialog.DateFilterSheet -> "DateFilterSheet"
     is ListDialog.DateEndPicker -> "$END_PICKER:${end.name}"
     ListDialog.RangePicker -> "RangePicker"
+    ListDialog.SetDate -> "SetDate"
+    ListDialog.BatchDelete -> "BatchDelete"
 }
 
 /** The [ListDialog] of a saved [key]; null for none, or for a key this version does not know. */
@@ -17,6 +19,8 @@ internal fun listDialogOf(key: String?): ListDialog? = when {
     key == null -> null
     key == "DateFilterSheet" -> ListDialog.DateFilterSheet
     key == "RangePicker" -> ListDialog.RangePicker
+    key == "SetDate" -> ListDialog.SetDate
+    key == "BatchDelete" -> ListDialog.BatchDelete
     key.startsWith("$END_PICKER:") ->
         RangeEnd.entries.firstOrNull { it.name == key.removePrefix("$END_PICKER:") }?.let(ListDialog::DateEndPicker)
     else -> null

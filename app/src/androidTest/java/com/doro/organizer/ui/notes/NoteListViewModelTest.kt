@@ -32,6 +32,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -42,8 +43,9 @@ import org.junit.runner.RunWith
 
 /**
  * `NoteListViewModel` against the real repositories (architecture.md § Dependency injection, Tests): its
- * `SavedStateHandle` keys (ui.md § 3.10) survive a `Parcel` round trip and recreate equal state (testing.md I-38); a
- * deleted filter entity clears that dimension in every perspective that used it (I-42 (d)). The rules that need no
+ * `SavedStateHandle` keys (ui.md § 3.10) survive a `Parcel` round trip and recreate equal state, a restored selection
+ * pruned to the first emission (testing.md I-38); a deleted filter entity clears that dimension in every perspective
+ * that used it (I-42 (d)). The rules that need no
  * database are `NoteListViewModelRulesTest` on the JVM.
  */
 @RunWith(AndroidJUnit4::class)
@@ -110,6 +112,34 @@ class NoteListViewModelTest {
         assertEquals(DaySelection.Range(today, today + 3), restoredDate.calendar?.selection)
         assertEquals(YearMonth.of(2027, 2), restoredDate.calendar?.month)
         assertEquals(ListDialog.RangePicker, restoredDate.dialog)
+    }
+
+    @Test
+    fun selectionKeys_surviveAParcelRoundTrip_andARestoredSelectionIsPrunedToTheFirstEmission() = runBlocking<Unit> {
+        val a = rows.note("a", createdAt = now)
+        val b = rows.note("b", createdAt = now)
+        val gone = rows.note("gone", createdAt = now)
+        val handle = SavedStateHandle()
+        val vm = viewModel(Perspective.All, handle)
+        vm.settled()
+        onMain {
+            vm.onTabLeft(2)
+            vm.enterSelection(a)
+            vm.toggleSelection(b)
+            vm.toggleSelection(gone)
+            vm.openBatchDelete()
+        }
+        vm.awaitState { it.selection?.size == 3 && it.dialog == ListDialog.BatchDelete }
+        val parcelled = handle.parcelled()
+
+        notes.deleteNotes(listOf(gone)).ok()
+        val restoredVm = viewModel(Perspective.All, parcelled, key = "restored")
+        val restored = restoredVm.awaitState { !it.loading && it.selection == setOf(a, b) }
+
+        assertEquals(ListDialog.BatchDelete, restored.dialog)
+        assertEquals(2, parcelled.get<Int>(NoteListViewModel.KEY_HANDLED_LEAVES))
+        onMain { restoredVm.onTabLeft(2) } // the restored count is handled: the selection stays
+        assertArrayEquals(longArrayOf(a, b), parcelled.get<LongArray>(NoteListViewModel.KEY_SELECTION)?.sortedArray())
     }
 
     @Test

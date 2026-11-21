@@ -58,13 +58,14 @@ internal fun PerspectiveTopBar(title: String, onSearch: () -> Unit, scrollBehavi
 /**
  * The search bar that replaces the top app bar (ui.md § 3.3): its own composable rather than a `TopAppBar` title,
  * whose fixed height would clip the field at 200 % font. With [focusOnStart] it takes focus and shows the keyboard,
- * which the Search action asks for and a restored bar does not.
+ * which the Search action asks for and a restored bar does not; [onFocusedOnStart] reports that this happened.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SearchBar(
     text: String,
     focusOnStart: Boolean,
+    onFocusedOnStart: () -> Unit,
     onTextChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onClear: () -> Unit,
@@ -76,6 +77,7 @@ internal fun SearchBar(
         if (focusOnStart) {
             focus.requestFocus()
             keyboard?.show()
+            onFocusedOnStart()
         }
     }
     Surface(color = TopAppBarDefaults.topAppBarColors().containerColor) {

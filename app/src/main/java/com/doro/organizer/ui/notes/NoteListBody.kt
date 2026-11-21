@@ -33,10 +33,14 @@ import com.doro.organizer.ui.common.NoteRowUi
  */
 internal typealias RowToggle = (row: NoteRowUi, checked: Boolean, onDone: (changed: Boolean) -> Unit) -> Unit
 
+/** What a row's long-press and, in selection mode, its tap do (ui.md § 3.8). */
+internal class RowSelection(val enter: (noteId: Long) -> Unit, val toggle: (noteId: Long) -> Unit)
+
 /**
  * The list area (ui.md § 3.6): loading, "(No data)" or the rows in the order the query gave them; the UI never sorts,
  * groups or reorders (DEC-23). With [header] (the Date perspective's grid and selection header, or nothing in its
- * end pane) the loading and empty states are list items, top-aligned under it; without, they are centered.
+ * end pane) the loading and empty states are list items, top-aligned under it; without, they are centered. In
+ * selection mode ([NoteListUiState.selection]) every row shows whether it is selected.
  */
 @Composable
 internal fun NoteListBody(
@@ -44,6 +48,7 @@ internal fun NoteListBody(
     listState: LazyListState,
     formats: DateFormats,
     onCheckedChange: RowToggle,
+    rowSelection: RowSelection,
     onClearFilters: () -> Unit,
     modifier: Modifier = Modifier,
     header: (LazyListScope.() -> Unit)? = null,
@@ -74,7 +79,16 @@ internal fun NoteListBody(
                     }
                 }
                 else -> items(state.rows, key = { it.id }) { row ->
-                    NoteRowItem(row, formats, onCheckedChange = { toggle(row, it) }, modifier = Modifier.animateItem())
+                    val selected = state.selection?.let { row.id in it }
+                    NoteRowItem(
+                        row = row,
+                        formats = formats,
+                        onCheckedChange = { toggle(row, it) },
+                        onLongClick = { if (selected == null) rowSelection.enter(row.id) else rowSelection.toggle(row.id) },
+                        modifier = Modifier.animateItem(),
+                        selected = selected,
+                        onClick = selected?.let { { rowSelection.toggle(row.id) } },
+                    )
                 }
             }
         }

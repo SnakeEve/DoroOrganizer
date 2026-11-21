@@ -13,16 +13,21 @@ class ListDialogKeyTest {
             ListDialog.DateEndPicker(RangeEnd.From),
             ListDialog.DateEndPicker(RangeEnd.Until),
             ListDialog.RangePicker,
+            ListDialog.SetDate,
+            ListDialog.BatchDelete,
         )
 
-        assertEquals(listOf("DateFilterSheet", "DateEndPicker:From", "DateEndPicker:Until", "RangePicker"), dialogs.map { it.toKey() })
+        assertEquals(
+            listOf("DateFilterSheet", "DateEndPicker:From", "DateEndPicker:Until", "RangePicker", "SetDate", "BatchDelete"),
+            dialogs.map { it.toKey() },
+        )
         assertEquals(dialogs, dialogs.map { listDialogOf(it.toKey()) })
     }
 
     @Test
     fun noKeyOrAnUnknownKey_isNoDialog() {
         assertNull(listDialogOf(null))
-        assertNull(listDialogOf("SetDate"))
+        assertNull(listDialogOf("Associate"))
         assertNull(listDialogOf("DateEndPicker:Middle"))
     }
 }
