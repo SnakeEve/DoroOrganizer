@@ -3,11 +3,11 @@ package com.doro.organizer.smoke
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
@@ -57,7 +57,7 @@ class ReleaseSmokeTest {
         awaitListWith(NOTE)
 
         // The editor's navigation key carries the note id through kotlinx.serialization on a saved-state round trip.
-        compose.onNodeWithText(NOTE).performClick()
+        compose.onNodeWithContentDescription(NOTE, substring = true).performClick()
         awaitText(EDIT_NOTE)
         compose.onNodeWithTag(CONTENT).assert(hasText(NOTE))
         checkNotNull(scenario).recreate()
@@ -76,12 +76,22 @@ class ReleaseSmokeTest {
         scenario = ActivityScenario.launch(MainActivity::class.java)
     }
 
-    /** The All list once the editor has left it, with a row that shows [text]. */
-    private fun awaitListWith(text: String) {
+    /** The All list once the editor has left it, with a row for the note whose title is [title]. */
+    private fun awaitListWith(title: String) {
         compose.waitUntil(TIMEOUT_MS) { compose.onAllNodesWithTag(CONTENT).fetchSemanticsNodes().isEmpty() }
         awaitText(TITLE_ALL)
-        awaitText(text)
+        awaitRow(title)
     }
+
+    /**
+     * A note row is one node whose content description starts with the note's title (ui.md § 12.1, "Row (merged)"):
+     * its texts carry `clearAndSetSemantics {}`, so the title is not a text node and a text finder never sees it
+     * (T22 `release-smoke`: the saved note was listed as "Release smoke note, Orphaned").
+     */
+    private fun awaitRow(title: String) =
+        compose.waitUntil(TIMEOUT_MS) {
+            compose.onAllNodesWithContentDescription(title, substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
 
     private fun awaitTag(tag: String) =
         compose.waitUntil(TIMEOUT_MS) { compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
