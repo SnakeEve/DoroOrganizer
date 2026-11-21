@@ -199,7 +199,7 @@ DoroOrganizer/
 | `core/log/AppLog.kt` | forwards to `android.util.Log` | empty bodies |
 | `data/SqlcipherLogging.kt` | no-op | `net.zetetic.database.Logger.setTarget(NoopTarget())` (DEC-08, [security.md § 10](security.md#10-logging-and-leak-hygiene-dec-70)); it also runs `PRAGMA cipher_log_level = NONE` on its own throwaway connection only if the phone check M-27 shows native cipher log lines ([testing.md § 10](testing.md#10-manual-qa-checklist-before-release)) |
 | `data/DebugRoomHooks.kt` | installs the query callback ([db-lifecycle.md § Room builder](db-lifecycle.md#room-builder)) | no-op |
-| `DebugTools.kt` | installs StrictMode ([Threading](#threading)) | no-op |
+| `DebugTools.kt` | `install(app)` installs StrictMode ([Threading](#threading)); `configure(activity)`, called from `MainActivity.attachBaseContext`, applies the font scale an instrumented test set in `DebugTools.fontScale` through `applyOverrideConfiguration`, so dialog and sheet windows inherit it (testing.md I-35); `fontScale` null keeps the phone's | both no-op |
 | `debug/CrashTestService.kt` | the `:crashtest` service of [testing.md § 5](testing.md#5-security-and-lifecycle-tests); declared only in the debug manifest | absent |
 
 Each pair is two files with the same fully qualified class name in `src/debug/java` and `src/release/java`. `src/main` never contains `Log` calls.
@@ -959,6 +959,10 @@ Window flags must be in place before the first app frame (DEC-67). The order bel
 ```kotlin
 class MainActivity : FragmentActivity() {
     private lateinit var container: AppContainer
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(newBase)
+        DebugTools.configure(this)                              // a test's font scale in debug (testing.md I-35), no-op in release
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         val splash = installSplashScreen()                      // before super.onCreate
         super.onCreate(savedInstanceState)
