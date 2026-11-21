@@ -50,7 +50,7 @@ class UnlockPolicyTest {
     }
 
     @Test
-    fun plainAndDevice_lockOn_noUsableStrongBiometric_isTheDeviceCredential_Q7() {
+    fun plainAndDevice_lockOn_noUsableStrongBiometric_isTheDeviceCredential() {
         listOf(KeyMode.PLAIN, KeyMode.DEVICE).forEach { mode ->
             notUsable.forEach { availability ->
                 assertEquals(PolicyDecision.DeviceCredential, route(mode, biometric = availability))

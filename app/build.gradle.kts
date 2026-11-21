@@ -57,12 +57,14 @@ android {
             initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
             applicationIdSuffix = ".qa"
+            testProguardFiles("proguard-qa-test.pro")
         }
         create("benchmark") { // DEC-12: release-like build for the performance tests
             initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
             applicationIdSuffix = ".benchmark"
             proguardFiles("proguard-benchmark.pro")
+            testProguardFiles("proguard-benchmark-test.pro")
         }
     }
 
@@ -75,6 +77,11 @@ android {
         // Only Kotlin files are shared, so src/release holds nothing but .kt files under src/release/java.
         getByName("qa").kotlin.directories.add("src/release/java")
         getByName("benchmark").kotlin.directories.add("src/release/java")
+        // The instrumented-test fixtures that reach the debug test hooks (package debug: the test key spec, the
+        // recording documents provider, the crash seams) live in src/androidTestDebug, so the qa and benchmark test
+        // APKs compile without those hooks; their counterparts for both release-like builds live in src/androidTestRelease.
+        getByName("androidTestQa").kotlin.directories.add("src/androidTestRelease/java")
+        getByName("androidTestBenchmark").kotlin.directories.add("src/androidTestRelease/java")
     }
 
     compileOptions {

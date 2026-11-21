@@ -35,7 +35,8 @@ import org.junit.Rule
  * A gate test that also looks at the screen (testing.md § 1, Compose layer): [compose] finds the nodes of the
  * `MainActivity` that [scene] launches, through the test tags of ui.md § 12.8 and literals copied from ui.md § 11.
  */
-abstract class GateComposeTest(realProcessLifecycle: Boolean = false) : GateTest(realProcessLifecycle) {
+abstract class GateComposeTest(realProcessLifecycle: Boolean = false, realBiometrics: Boolean = false) :
+    GateTest(realProcessLifecycle, realBiometrics) {
     @get:Rule(order = 4)
     val compose = createEmptyComposeRule()
 

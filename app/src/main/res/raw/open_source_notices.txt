@@ -3,7 +3,7 @@ Doro Organizer uses the following open-source components.
 ------------------------------------------------------------
 SQLCipher for Android (net.zetetic:sqlcipher-android 4.20.0)
 ------------------------------------------------------------
-Copyright (c) 2025, ZETETIC LLC
+Copyright (c) 2008-2026, ZETETIC, LLC
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -41,6 +41,12 @@ a legal notice, here is a blessing:
 ------------------------------------------------------------
 LibTomCrypt (built into SQLCipher for Android)
 ------------------------------------------------------------
+This product includes software developed by the LibTomCrypt project.
+
+Released to the Public Domain
+(https://github.com/libtom/libtomcrypt/blob/develop/LICENSE).
+The author disclaims copyright to this source code.
+
 The LibTom license: LibTomCrypt is free for all purposes without any express
 guarantee it works. It is released into the public domain; where that is not
 possible, it is licensed under The Unlicense.
@@ -51,8 +57,18 @@ Navigation 3, Lifecycle, Room, SQLite, Biometric, DataStore, Core,
 Activity, Fragment and Splash Screen
 Copyright The Android Open Source Project
 
-Kotlin standard library, kotlinx.coroutines and kotlinx.serialization
+Kotlin standard library, kotlinx.coroutines, kotlinx.serialization,
+kotlinx atomicfu and JetBrains Java Annotations
 Copyright JetBrains s.r.o. and Kotlin Programming Language contributors
+
+Okio
+Copyright Square, Inc.
+
+Guava ListenableFuture
+Copyright The Guava Authors
+
+JSpecify annotations
+Copyright The JSpecify Authors
 
 Material Symbols icons
 Copyright Google LLC

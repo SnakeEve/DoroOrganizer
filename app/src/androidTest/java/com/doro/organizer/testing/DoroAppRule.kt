@@ -20,7 +20,23 @@ class DoroAppRule(
     lateinit var container: TestAppContainer
         private set
 
-    override fun before() {
+    override fun before() = install(autoStart)
+
+    override fun after() = shutDown()
+
+    /** Starts the gate (T1) on the main thread. */
+    fun start() = InstrumentationRegistry.getInstrumentation().runOnMainSync { container.sessionGate.start() }
+
+    /**
+     * A process restart inside the test process: shuts the running container down as [after] does, then installs a
+     * new one built from the same overrides, whose gate waits for [start]. Close every activity first.
+     */
+    fun restart() {
+        shutDown()
+        install(autoStart = false)
+    }
+
+    private fun install(autoStart: Boolean) {
         val overrides = TestOverrides().apply(configure)
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val app = instrumentation.targetContext.applicationContext as DoroApplication
@@ -32,10 +48,7 @@ class DoroAppRule(
         }
     }
 
-    /** Starts the gate (T1) on the main thread. */
-    fun start() = InstrumentationRegistry.getInstrumentation().runOnMainSync { container.sessionGate.start() }
-
-    override fun after() {
+    private fun shutDown() {
         runBlocking { container.databaseHolder.close() }
         container.applicationScope.cancel()
     }

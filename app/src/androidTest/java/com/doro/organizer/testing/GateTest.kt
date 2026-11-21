@@ -6,9 +6,10 @@ import org.junit.Rule
 /**
  * The rules of a gate test in their order: the vault directory and aliases, the test files, the scope of the
  * planting [MaintenanceSetup], then the app container of [scene] (testing.md § 7, Wiring). With
- * [realProcessLifecycle] the container keeps the real `ProcessLifecycleOwner` (L-21).
+ * [realProcessLifecycle] the container keeps the real `ProcessLifecycleOwner` (L-21), with [realBiometrics] the
+ * production `BiometricGateway` and biometric key spec (testing.md § 2.1).
  */
-abstract class GateTest(realProcessLifecycle: Boolean = false) {
+abstract class GateTest(realProcessLifecycle: Boolean = false, realBiometrics: Boolean = false) {
     @get:Rule(order = 0)
     val vaults = KeyVaultRule()
 
@@ -18,7 +19,7 @@ abstract class GateTest(realProcessLifecycle: Boolean = false) {
     @get:Rule(order = 2)
     val scope = ApplicationScopeRule()
 
-    val scene = GateScene(databases, vaults, scope, realProcessLifecycle)
+    val scene = GateScene(databases, vaults, scope, realProcessLifecycle, realBiometrics)
 
     @get:Rule(order = 3)
     val app = scene.app

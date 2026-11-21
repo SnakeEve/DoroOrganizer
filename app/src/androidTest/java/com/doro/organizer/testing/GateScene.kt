@@ -7,6 +7,7 @@ import com.doro.organizer.MainActivity
 import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.data.HolderState
 import com.doro.organizer.model.KeyMode
+import com.doro.organizer.security.AndroidBioKeystore
 import com.doro.organizer.security.AppLockController
 import com.doro.organizer.security.AuthPurpose
 import com.doro.organizer.security.KeyVault
@@ -29,14 +30,17 @@ import org.junit.Assert.assertEquals
  * settings; [coldStart] then starts the gate of [app]'s container and launches `MainActivity`, whose
  * `AppLockController.attach` runs the auto-prompt. Everything below the platform is real except [gateway] (the
  * fingerprint sensor), [settings], [time], [process] (unless [realProcessLifecycle]) and the idle-unless-targeted
- * [faultHook]; every announcement is recorded in [announcements]. Declare [app] as `@get:Rule(order = 3)` after
- * [databases], [vaults] and [scope].
+ * [faultHook]; every announcement is recorded in [announcements]. With [realBiometrics] the container keeps the
+ * production `BiometricGateway` and the vault the production key spec, so every slot prompt needs a touch on the
+ * sensor and [gateway] sees nothing (testing.md § 2.1). Declare [app] as `@get:Rule(order = 3)` after [databases],
+ * [vaults] and [scope].
  */
 class GateScene(
     private val databases: TestDatabases,
     private val vaults: KeyVaultRule,
     private val scope: ApplicationScopeRule,
     private val realProcessLifecycle: Boolean = false,
+    private val realBiometrics: Boolean = false,
 ) {
     val time = FakeAppTime()
     val settings = FakeSettingsStore().apply { load() }
@@ -44,7 +48,7 @@ class GateScene(
     val process = TestProcessLifecycle()
     val kdf = TestKdf(time)
     val kek = FaultyKekKeystore()
-    val bio = FaultyBioKeystore()
+    val bio = FaultyBioKeystore(if (realBiometrics) AndroidBioKeystore() else testBioKeystore())
 
     /** Blocks or fails the app's maintenance operations at a chosen step; idle until a test targets one. */
     val faultHook = ScriptedFaultHook()
@@ -66,7 +70,7 @@ class GateScene(
         appTime = time
         settingsStore = settings
         processLifecycle = process.takeUnless { realProcessLifecycle }
-        biometricGateway = gateway
+        biometricGateway = gateway.takeUnless { realBiometrics }
         faultHook = this@GateScene.faultHook
         files = maintenanceFiles(databases, vaults)
         keyVault = { store, _, dispatchers ->
@@ -158,6 +162,13 @@ class GateScene(
     fun holderState(): HolderState = app.container.databaseHolder.state.value
 
     fun finish() = scenario?.close()
+
+    /** A process restart: `MainActivity` closes and a new container takes over the same files; [coldStart] follows. */
+    fun restart() {
+        finish()
+        scenario = null
+        app.restart()
+    }
 
     /** Runs [block] on the main thread with the launched `MainActivity`. */
     fun onActivity(block: (MainActivity) -> Unit) {

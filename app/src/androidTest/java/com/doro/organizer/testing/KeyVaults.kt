@@ -2,8 +2,6 @@ package com.doro.organizer.testing
 
 import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.core.coroutines.AppDispatchers
-import com.doro.organizer.debug.testBioKeySpec
-import com.doro.organizer.security.AndroidBioKeystore
 import com.doro.organizer.security.AndroidKekKeystore
 import com.doro.organizer.security.BioKeystore
 import com.doro.organizer.security.CALIBRATION_ITERATIONS
@@ -186,12 +184,12 @@ class FaultyKekKeystore(
 enum class BioOp { Aliases, ContainsAlias, Generate, Delete, InitEncrypt, InitDecrypt, UpdateAad, DoFinal }
 
 /**
- * The biometric seam of security.md § 3.6 over the real AndroidKeyStore in the test configuration, with scripted
- * failures: each [failNext] makes the next call of that operation throw. [doFinalOutputs] keeps every array that
- * `doFinal` returned, so a test can check that the vault zeroed the provider-allocated plaintext; [replaceNextOutput]
- * swaps the next `doFinal` result for an array of another length.
+ * The biometric seam of security.md § 3.6 over the real AndroidKeyStore ([testBioKeystore]: the test configuration in
+ * the debug tests), with scripted failures: each [failNext] makes the next call of that operation throw.
+ * [doFinalOutputs] keeps every array that `doFinal` returned, so a test can check that the vault zeroed the
+ * provider-allocated plaintext; [replaceNextOutput] swaps the next `doFinal` result for an array of another length.
  */
-class FaultyBioKeystore(private val delegate: BioKeystore = AndroidBioKeystore(::testBioKeySpec)) : BioKeystore {
+class FaultyBioKeystore(private val delegate: BioKeystore = testBioKeystore()) : BioKeystore {
     private val failures = mutableMapOf<BioOp, ArrayDeque<Exception>>()
     private val counts = mutableMapOf<BioOp, Int>()
     private val outputs = mutableListOf<ByteArray>()

@@ -6,13 +6,14 @@ import com.doro.organizer.model.NoteFilter
 import com.doro.organizer.model.NoteQuery
 import com.doro.organizer.model.Perspective
 import com.doro.organizer.model.toQuery
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 
 /** The query of the All perspective without filters: every note. */
 val ALL_NOTES: NoteQuery = checkNotNull(NoteFilter(Perspective.All).toQuery())
 
-/** The current rows of [query], with its fields passed to `observeRows` by name. */
-suspend fun NoteDao.rows(query: NoteQuery = ALL_NOTES): List<NoteRowRaw> = observeRows(
+/** The rows of [query] as `observeRows` emits them, with its fields passed by name. */
+fun NoteDao.rowUpdates(query: NoteQuery = ALL_NOTES): Flow<List<NoteRowRaw>> = observeRows(
     personId = query.personId,
     projectId = query.projectId,
     orphanOnly = query.orphanOnly,
@@ -20,7 +21,10 @@ suspend fun NoteDao.rows(query: NoteQuery = ALL_NOTES): List<NoteRowRaw> = obser
     fromDay = query.fromDay,
     toDay = query.toDay,
     searchPattern = query.searchPattern,
-).first()
+)
+
+/** The current rows of [query]. */
+suspend fun NoteDao.rows(query: NoteQuery = ALL_NOTES): List<NoteRowRaw> = rowUpdates(query).first()
 
 /** The ids of [rows], in list order. */
 suspend fun NoteDao.listedIds(query: NoteQuery = ALL_NOTES): List<Long> = rows(query).map { it.id }

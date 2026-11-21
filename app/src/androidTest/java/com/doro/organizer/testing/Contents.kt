@@ -3,7 +3,6 @@ package com.doro.organizer.testing
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.isDialog
-import com.doro.organizer.DebugTools
 import com.doro.organizer.MainActivity
 import com.doro.organizer.ui.theme.DoroTheme
 
@@ -22,19 +21,6 @@ fun ScriptedGateComposeTest.showDialog(dialog: @Composable () -> Unit) {
     compose.waitUntil(GateUi.TIMEOUT_MS) { compose.onAllNodes(isDialog()).fetchSemanticsNodes().isEmpty() }
     scene.onActivity { it.show(dialog) }
     compose.waitUntil(GateUi.TIMEOUT_MS) { compose.onAllNodes(isDialog()).fetchSemanticsNodes().isNotEmpty() }
-}
-
-/**
- * Runs [block] with `MainActivity` at [scale] times the font size (testing.md I-35): every activity [block] launches
- * gets it in its configuration, which its dialog and sheet windows inherit.
- */
-fun atFontScale(scale: Float, block: () -> Unit) {
-    DebugTools.fontScale = scale
-    try {
-        block()
-    } finally {
-        DebugTools.fontScale = null
-    }
 }
 
 /** The tab tags (ui.md § 12.8) and their labels (Q10); literals copied from ui.md § 11. */
