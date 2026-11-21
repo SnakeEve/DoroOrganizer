@@ -24,6 +24,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import com.doro.organizer.R
+import com.doro.organizer.ui.common.SecureDialogWindow
 
 /**
  * The contextual bar of selection mode (ui.md § 5.2), which replaces the app bar or the search bar: "Exit selection",
@@ -70,22 +71,26 @@ internal fun SelectionTopBar(
                     Icon(painterResource(R.drawable.ic_more_vert), stringResource(R.string.action_more))
                 }
                 DropdownMenu(expanded = menuOpen && enabled, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_set_date)) },
-                        leadingIcon = { Icon(painterResource(R.drawable.ic_edit_calendar), contentDescription = null) },
-                        onClick = {
-                            menuOpen = false
-                            onSetDate()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_delete)) },
-                        leadingIcon = { Icon(painterResource(R.drawable.ic_delete), contentDescription = null) },
-                        onClick = {
-                            menuOpen = false
-                            onDelete()
-                        },
-                    )
+                    SecureDialogWindow {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_set_date)) },
+                            leadingIcon = {
+                                Icon(painterResource(R.drawable.ic_edit_calendar), contentDescription = null)
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onSetDate()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_delete)) },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_delete), contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onDelete()
+                            },
+                        )
+                    }
                 }
             }
         },

@@ -28,6 +28,7 @@ import com.doro.organizer.core.result.InputRule
 import com.doro.organizer.ui.common.DialogContent
 import com.doro.organizer.ui.common.FieldMessage
 import com.doro.organizer.ui.common.PasswordField
+import com.doro.organizer.ui.common.SecureDialogWindow
 import com.doro.organizer.ui.common.copyPassword
 import com.doro.organizer.ui.common.takePassword
 
@@ -64,35 +65,37 @@ internal fun PasswordResetDialog(busy: Boolean, onDismiss: () -> Unit, onConfirm
         properties = DialogProperties(dismissOnClickOutside = false),
         title = { Text(stringResource(R.string.pw_reset_title)) },
         text = {
-            DialogContent {
-                Text(stringResource(R.string.pw_reset_body))
-                Text(stringResource(R.string.pw_set_body))
-                PasswordField(
-                    state = first,
-                    label = stringResource(R.string.password_new),
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !busy,
-                    message = rejected?.takeIf { it != InputRule.PasswordMismatch }?.let { policyMessage(it) },
-                    imeAction = ImeAction.Next,
-                )
-                PasswordField(
-                    state = second,
-                    label = stringResource(R.string.password_repeat),
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !busy,
-                    message = rejected?.takeIf { it == InputRule.PasswordMismatch }?.let { policyMessage(it) },
-                )
-                Row(
-                    Modifier.fillMaxWidth().toggleable(
-                        value = acknowledged,
+            SecureDialogWindow(hideOverlays = true) {
+                DialogContent {
+                    Text(stringResource(R.string.pw_reset_body))
+                    Text(stringResource(R.string.pw_set_body))
+                    PasswordField(
+                        state = first,
+                        label = stringResource(R.string.password_new),
+                        modifier = Modifier.fillMaxWidth(),
                         enabled = !busy,
-                        role = Role.Checkbox,
-                        onValueChange = { acknowledged = it },
-                    ),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(checked = acknowledged, onCheckedChange = null, enabled = !busy)
-                    Text(stringResource(R.string.password_ack))
+                        message = rejected?.takeIf { it != InputRule.PasswordMismatch }?.let { policyMessage(it) },
+                        imeAction = ImeAction.Next,
+                    )
+                    PasswordField(
+                        state = second,
+                        label = stringResource(R.string.password_repeat),
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !busy,
+                        message = rejected?.takeIf { it == InputRule.PasswordMismatch }?.let { policyMessage(it) },
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().toggleable(
+                            value = acknowledged,
+                            enabled = !busy,
+                            role = Role.Checkbox,
+                            onValueChange = { acknowledged = it },
+                        ),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = acknowledged, onCheckedChange = null, enabled = !busy)
+                        Text(stringResource(R.string.password_ack))
+                    }
                 }
             }
         },

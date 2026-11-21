@@ -1,5 +1,6 @@
 package com.doro.organizer
 
+import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -24,6 +25,11 @@ import kotlinx.coroutines.launch
  */
 class MainActivity : FragmentActivity() {
     private lateinit var container: AppContainer
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(newBase)
+        DebugTools.configure(this) // a test's font scale in debug, no-op in release
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val splash = installSplashScreen()

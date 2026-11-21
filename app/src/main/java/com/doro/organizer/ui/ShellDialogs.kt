@@ -74,29 +74,25 @@ private fun clearAutoOffNotice(graph: UiGraph) {
 /** The biometric lock turned itself off because the device lost its screen lock (security.md § 7.6). */
 @Composable
 private fun AutoOffNotice(onOk: () -> Unit) {
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = onOk,
-            title = { Text(stringResource(R.string.lock_auto_off_title)) },
-            text = { DialogContent { Text(stringResource(R.string.lock_auto_off_body)) } },
-            confirmButton = { TextButton(onClick = onOk) { Text(stringResource(R.string.action_ok)) } },
-        )
-    }
+    AlertDialog(
+        onDismissRequest = onOk,
+        title = { Text(stringResource(R.string.lock_auto_off_title)) },
+        text = { SecureDialogWindow { DialogContent { Text(stringResource(R.string.lock_auto_off_body)) } } },
+        confirmButton = { TextButton(onClick = onOk) { Text(stringResource(R.string.action_ok)) } },
+    )
 }
 
 /** The startup password's Keystore part is gone while the fingerprint still works (DEC-86). */
 @Composable
 private fun KekNotice(onBackUpNow: () -> Unit, onOk: () -> Unit) {
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = onOk,
-            modifier = Modifier.testTag("kek_notice"),
-            title = { Text(stringResource(R.string.kek_notice_title)) },
-            text = { DialogContent { Text(stringResource(R.string.kek_notice_body)) } },
-            dismissButton = { TextButton(onClick = onOk) { Text(stringResource(R.string.action_ok)) } },
-            confirmButton = { TextButton(onClick = onBackUpNow) { Text(stringResource(R.string.action_backup_now)) } },
-        )
-    }
+    AlertDialog(
+        onDismissRequest = onOk,
+        modifier = Modifier.testTag("kek_notice"),
+        title = { Text(stringResource(R.string.kek_notice_title)) },
+        text = { SecureDialogWindow { DialogContent { Text(stringResource(R.string.kek_notice_body)) } } },
+        dismissButton = { TextButton(onClick = onOk) { Text(stringResource(R.string.action_ok)) } },
+        confirmButton = { TextButton(onClick = onBackUpNow) { Text(stringResource(R.string.action_backup_now)) } },
+    )
 }
 
 /**
@@ -108,29 +104,29 @@ private fun SlotOfferDialog(offer: SlotOffer, graph: UiGraph) {
     val vm: SlotOfferViewModel = viewModel(factory = slotOfferFactory(graph))
     val busy by vm.busy.collectAsStateWithLifecycle()
     val decline = { if (!busy) graph.appLockController.dismissSlotOffer() }
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = decline,
-            properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy),
-            modifier = Modifier.testTag("slot_offer"),
-            title = { Text(stringResource(R.string.slot_offer_title)) },
-            text = {
+    AlertDialog(
+        onDismissRequest = decline,
+        properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy),
+        modifier = Modifier.testTag("slot_offer"),
+        title = { Text(stringResource(R.string.slot_offer_title)) },
+        text = {
+            SecureDialogWindow {
                 val body = when (offer) {
                     SlotOffer.Invalidated -> R.string.slot_offer_body_invalidated
                     SlotOffer.Missing -> R.string.slot_offer_body_missing
                 }
                 DialogContent { Text(stringResource(body)) }
-            },
-            dismissButton = {
-                TextButton(onClick = decline, enabled = !busy, modifier = Modifier.testTag("slot_offer_dismiss")) {
-                    Text(stringResource(R.string.action_not_now))
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = vm::setUp, enabled = !busy, modifier = Modifier.testTag("slot_offer_setup")) {
-                    Text(stringResource(R.string.action_slot_setup))
-                }
-            },
-        )
-    }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = decline, enabled = !busy, modifier = Modifier.testTag("slot_offer_dismiss")) {
+                Text(stringResource(R.string.action_not_now))
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = vm::setUp, enabled = !busy, modifier = Modifier.testTag("slot_offer_setup")) {
+                Text(stringResource(R.string.action_slot_setup))
+            }
+        },
+    )
 }

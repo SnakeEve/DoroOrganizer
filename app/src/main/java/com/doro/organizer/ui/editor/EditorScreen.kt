@@ -46,6 +46,7 @@ import com.doro.organizer.ui.common.DelayedProgress
 import com.doro.organizer.ui.common.MessageEffect
 import com.doro.organizer.ui.common.PICKER_RESULT
 import com.doro.organizer.ui.common.PickerResult
+import com.doro.organizer.ui.common.SecureDialogWindow
 import com.doro.organizer.ui.navigation.EditorKey
 import com.doro.organizer.ui.navigation.LocalIsTopEntry
 import com.doro.organizer.ui.navigation.Navigator
@@ -179,10 +180,12 @@ private fun EditorMenu(
             Icon(painterResource(R.drawable.ic_more_vert), stringResource(R.string.action_more))
         }
         DropdownMenu(expanded = open && enabled, onDismissRequest = { open = false }) {
-            item(R.string.menu_unlink, canUnlink, onUnlink)
-            item(R.string.menu_delete_person, true) { onDeleteEntity(EntityKind.Person) }
-            item(R.string.menu_delete_project, true) { onDeleteEntity(EntityKind.Project) }
-            item(R.string.menu_delete_note, true, onDeleteNote)
+            SecureDialogWindow {
+                item(R.string.menu_unlink, canUnlink, onUnlink)
+                item(R.string.menu_delete_person, true) { onDeleteEntity(EntityKind.Person) }
+                item(R.string.menu_delete_project, true) { onDeleteEntity(EntityKind.Project) }
+                item(R.string.menu_delete_note, true, onDeleteNote)
+            }
         }
     }
 }

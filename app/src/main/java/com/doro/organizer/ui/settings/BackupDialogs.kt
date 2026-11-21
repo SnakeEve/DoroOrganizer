@@ -15,16 +15,14 @@ import com.doro.organizer.ui.common.SecureDialogWindow
 /** The warning before every plaintext export (ui.md § 8.5, DEC-83), before the picker or the share copy. */
 @Composable
 internal fun PlainBackupWarningDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            modifier = Modifier.testTag("backup_plain_warning"),
-            title = { Text(stringResource(R.string.backup_plain_title)) },
-            text = { DialogContent { Text(stringResource(R.string.backup_plain_body)) } },
-            dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
-            confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.action_backup_anyway)) } },
-        )
-    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("backup_plain_warning"),
+        title = { Text(stringResource(R.string.backup_plain_title)) },
+        text = { SecureDialogWindow { DialogContent { Text(stringResource(R.string.backup_plain_body)) } } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.action_backup_anyway)) } },
+    )
 }
 
 /**
@@ -34,13 +32,13 @@ internal fun PlainBackupWarningDialog(onConfirm: () -> Unit, onDismiss: () -> Un
 @Composable
 internal fun BackupPasswordDialog(share: Boolean, onConfirm: (CharArray) -> Unit, onDismiss: () -> Unit) {
     val password = rememberNewPasswordState()
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            properties = PasswordDialogProperties,
-            modifier = Modifier.testTag("backup_password_dialog"),
-            title = { Text(stringResource(R.string.backup_password_title)) },
-            text = {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        properties = PasswordDialogProperties,
+        modifier = Modifier.testTag("backup_password_dialog"),
+        title = { Text(stringResource(R.string.backup_password_title)) },
+        text = {
+            SecureDialogWindow(hideOverlays = true) {
                 DialogContent {
                     Text(stringResource(R.string.backup_password_body))
                     NewPasswordFields(
@@ -50,27 +48,25 @@ internal fun BackupPasswordDialog(share: Boolean, onConfirm: (CharArray) -> Unit
                         enabled = true,
                     )
                 }
-            },
-            dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
-            confirmButton = {
-                TextButton(onClick = { password.take()?.let(onConfirm) }, enabled = password.complete) {
-                    Text(stringResource(if (share) R.string.action_share else R.string.action_backup))
-                }
-            },
-        )
-    }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+        confirmButton = {
+            TextButton(onClick = { password.take()?.let(onConfirm) }, enabled = password.complete) {
+                Text(stringResource(if (share) R.string.action_share else R.string.action_backup))
+            }
+        },
+    )
 }
 
 /** "Back up first?" before a first startup password (DEC-73); Back and a tap outside change nothing. */
 @Composable
 internal fun BackupOfferDialog(onBackUp: () -> Unit, onSkip: () -> Unit, onDismiss: () -> Unit) {
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text(stringResource(R.string.pw_backup_offer_title)) },
-            text = { DialogContent { Text(stringResource(R.string.pw_backup_offer_body)) } },
-            dismissButton = { TextButton(onClick = onSkip) { Text(stringResource(R.string.action_skip)) } },
-            confirmButton = { TextButton(onClick = onBackUp) { Text(stringResource(R.string.action_backup_now)) } },
-        )
-    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.pw_backup_offer_title)) },
+        text = { SecureDialogWindow { DialogContent { Text(stringResource(R.string.pw_backup_offer_body)) } } },
+        dismissButton = { TextButton(onClick = onSkip) { Text(stringResource(R.string.action_skip)) } },
+        confirmButton = { TextButton(onClick = onBackUp) { Text(stringResource(R.string.action_backup_now)) } },
+    )
 }

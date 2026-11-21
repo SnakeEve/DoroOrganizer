@@ -10,8 +10,12 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -110,6 +114,21 @@ class GateUi(private val compose: ComposeTestRule) {
     fun countText(text: String, substring: Boolean = false): Int =
         compose.onAllNodes(hasText(text, substring = substring), useUnmergedTree = true).fetchSemanticsNodes().size
 
+    /**
+     * Every node with a click action, in every window of the screen (dialogs included), has a touch target of at
+     * least 48 × 48 dp (testing.md I-35, ui.md § 12.4: no exception). [where] names the screen in the failure.
+     */
+    fun assertEveryClickableHasATouchTarget(where: String) {
+        compose.waitForIdle()
+        val nodes = compose.onAllNodes(hasClickAction()).fetchSemanticsNodes()
+        assertTrue("$where: no clickable node", nodes.isNotEmpty())
+        val small = nodes.filter { node ->
+            val minimum = with(node.layoutInfo.density) { 48.dp.toPx() }
+            node.touchBoundsInRoot.width < minimum || node.touchBoundsInRoot.height < minimum
+        }
+        assertTrue("$where: under 48 dp: ${small.map { it.describe() }}", small.isEmpty())
+    }
+
     /** The bounds of the node tagged [tag] in the root's coordinates. */
     fun boundsOf(tag: String, useUnmergedTree: Boolean = false): Rect =
         compose.onNodeWithTag(tag, useUnmergedTree).fetchSemanticsNode().boundsInRoot
@@ -162,6 +181,14 @@ fun SemanticsNodeInteraction.assertTouchTarget(): SemanticsNodeInteraction {
     val bounds = node.touchBoundsInRoot
     assertTrue("touch target ${bounds.width} x ${bounds.height} px < 48 dp", bounds.width >= minimum && bounds.height >= minimum)
     return this
+}
+
+/** A node as a failure names it: its tag, description or text, and its touch bounds. */
+private fun SemanticsNode.describe(): String {
+    val name = config.getOrNull(SemanticsProperties.TestTag)
+        ?: config.getOrNull(SemanticsProperties.ContentDescription)?.joinToString()
+        ?: config.getOrNull(SemanticsProperties.Text)?.joinToString()
+    return "$name ${touchBoundsInRoot.width} x ${touchBoundsInRoot.height} px"
 }
 
 /** The `error` color of `DoroTheme` on this phone, in its current light or dark setting (DEC-56). */

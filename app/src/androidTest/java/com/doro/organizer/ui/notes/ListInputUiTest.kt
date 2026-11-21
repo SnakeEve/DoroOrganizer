@@ -1,6 +1,5 @@
 package com.doro.organizer.ui.notes
 
-import android.view.View
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -8,25 +7,19 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
-import androidx.test.espresso.Espresso.onView
-import androidx.test.espresso.matcher.RootMatchers.isDialog
-import androidx.test.espresso.matcher.RootMatchers.withDecorView
-import androidx.test.espresso.matcher.ViewMatchers.isRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.model.SearchText
 import com.doro.organizer.session.GateState
 import com.doro.organizer.testing.ScriptedGateComposeTest
-import org.hamcrest.Description
-import org.hamcrest.Matchers.allOf
-import org.hamcrest.TypeSafeMatcher
-import org.junit.Assert.assertEquals
+import com.doro.organizer.testing.assertFocusedDialogWindow
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
  * The list's input surfaces over a scripted gate (no database needed): the search fields keep every character of
  * quick typing, because their text is updated in the frame of the edit (ui.md § 3.3, § 7.2), and the list's sheet
- * and date pickers keep autofill out of their own windows through `SecureDialogWindow` (security.md § 11, DEC-71).
+ * and date pickers keep autofill out of their own windows through `SecureDialogWindow` (security.md § 11, DEC-71)
+ * and, being no security dialogs, leave overlays allowed (security.md § 9.4).
  */
 @RunWith(AndroidJUnit4::class)
 class ListInputUiTest : ScriptedGateComposeTest() {
@@ -65,11 +58,11 @@ class ListInputUiTest : ScriptedGateComposeTest() {
 
         compose.onNodeWithTag(DATE_CHIP).performClick()
         compose.onNodeWithText(FILTER_BY_DATE).assertExists()
-        assertFocusedDialogExcludesAutofill()
+        assertFocusedDialogWindow(hidesOverlays = false)
 
         compose.onNodeWithText(FROM).performClick()
         compose.waitForIdle()
-        assertFocusedDialogExcludesAutofill()
+        assertFocusedDialogWindow(hidesOverlays = false)
     }
 
     @Test
@@ -81,22 +74,7 @@ class ListInputUiTest : ScriptedGateComposeTest() {
         compose.onNodeWithText(SELECT_RANGE).performClick()
         compose.waitForIdle()
 
-        assertFocusedDialogExcludesAutofill()
-    }
-
-    /** The dialog window that has focus, the topmost one, carries the exclusion on its own decor view. */
-    private fun assertFocusedDialogExcludesAutofill() {
-        onView(isRoot()).inRoot(allOf(isDialog(), withDecorView(hasWindowFocus()))).check { view, _ ->
-            assertEquals(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS, view.rootView.importantForAutofill)
-        }
-    }
-
-    private fun hasWindowFocus() = object : TypeSafeMatcher<View>() {
-        override fun describeTo(description: Description) {
-            description.appendText("has window focus")
-        }
-
-        override fun matchesSafely(item: View) = item.hasWindowFocus()
+        assertFocusedDialogWindow(hidesOverlays = false)
     }
 
     private companion object {

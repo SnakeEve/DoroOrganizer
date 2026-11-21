@@ -15,13 +15,14 @@ import org.junit.Rule
  * status directly; no database, key-state or Keystore is touched. The time, the settings (loaded) and the process
  * lifecycle are fakes, and every announcement is recorded in [announcements]. [hasAnyData] answers
  * `NoteRepository.hasAnyData()`, and [launchFailures] stands for the launch failures of `ExternalActivities`.
+ * With [settingsRead] false the settings never emit, as before the first DataStore read.
  */
-class ScriptedGateScene {
+class ScriptedGateScene(settingsRead: Boolean = true) {
     val gate = ScriptedSessionGate(GateState.Starting(authenticated = false))
     val lock = ScriptedLockController()
     val maintenance = ScriptedMaintenance()
     val time = FakeAppTime()
-    val settings = FakeSettingsStore().apply { load() }
+    val settings = FakeSettingsStore().apply { if (settingsRead) load() }
     val announcements = Announcements()
 
     /** The answer of `NoteRepository.hasAnyData()`: with no database open, the real one fails. */
@@ -64,8 +65,8 @@ class ScriptedGateScene {
 }
 
 /** A Compose test over a [ScriptedGateScene]: [compose] finds the nodes of the `MainActivity` that [scene] launches. */
-abstract class ScriptedGateComposeTest {
-    val scene = ScriptedGateScene()
+abstract class ScriptedGateComposeTest(settingsRead: Boolean = true) {
+    val scene = ScriptedGateScene(settingsRead)
 
     @get:Rule(order = 0)
     val app = scene.app

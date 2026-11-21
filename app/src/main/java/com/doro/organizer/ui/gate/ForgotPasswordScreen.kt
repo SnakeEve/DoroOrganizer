@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -20,7 +19,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,7 +31,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -42,10 +39,10 @@ import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.doro.organizer.R
+import com.doro.organizer.core.messages.UiText
 import com.doro.organizer.data.maintenance.MaintenanceOrigin
 import com.doro.organizer.ui.GateGraph
-import com.doro.organizer.ui.common.DialogContent
-import com.doro.organizer.ui.common.errorText
+import com.doro.organizer.ui.common.MessageDialog
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 
@@ -146,12 +143,11 @@ internal fun ForgotPasswordScreen(
         )
     }
     ui.error?.let { error ->
-        val text = LocalResources.current.errorText(error, graph.appTime)
-        AlertDialog(
-            onDismissRequest = vm::dismissError,
-            title = { Text(stringResource(R.string.key_change_failed_title)) },
-            text = { DialogContent { Text(text) } },
-            confirmButton = { TextButton(onClick = vm::dismissError) { Text(stringResource(R.string.action_ok)) } },
+        MessageDialog(
+            stringResource(R.string.key_change_failed_title),
+            listOf(UiText.Error(error)),
+            graph.appTime,
+            onClose = vm::dismissError,
         )
     }
 }

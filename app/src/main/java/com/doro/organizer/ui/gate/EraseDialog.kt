@@ -20,6 +20,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import com.doro.organizer.R
 import com.doro.organizer.model.TextWhitespace
 import com.doro.organizer.ui.common.DialogContent
+import com.doro.organizer.ui.common.SecureDialogWindow
 import java.util.Locale
 
 /** The typed confirmation of an Erase (ui.md § 8.10): the trimmed input equals [word], ignoring case (`Locale.ROOT`). */
@@ -38,19 +39,21 @@ internal fun EraseDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.erase_title)) },
         text = {
-            DialogContent {
-                Text(stringResource(R.string.erase_body))
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    label = { Text(stringResource(R.string.erase_prompt, word)) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Characters,
-                        autoCorrectEnabled = false,
-                    ),
-                    modifier = Modifier.fillMaxWidth().testTag("erase_confirmation"),
-                )
+            SecureDialogWindow(hideOverlays = true) {
+                DialogContent {
+                    Text(stringResource(R.string.erase_body))
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        label = { Text(stringResource(R.string.erase_prompt, word)) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Characters,
+                            autoCorrectEnabled = false,
+                        ),
+                        modifier = Modifier.fillMaxWidth().testTag("erase_confirmation"),
+                    )
+                }
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },

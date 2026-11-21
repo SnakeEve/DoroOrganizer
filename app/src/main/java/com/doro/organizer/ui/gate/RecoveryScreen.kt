@@ -31,6 +31,7 @@ import com.doro.organizer.ui.GateGraph
 import com.doro.organizer.ui.common.DialogContent
 import com.doro.organizer.ui.common.MaintenanceStatusHost
 import com.doro.organizer.ui.common.MessageDialog
+import com.doro.organizer.ui.common.SecureDialogWindow
 import com.doro.organizer.ui.common.restoreErrorText
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
@@ -103,11 +104,13 @@ internal fun RecoveryScreen(recovery: Recovery, graph: GateGraph) {
 
 /** The confirmation of Start fresh (ui.md § 8.9); its outcome reaches the user through `DbMaintenance.status`. */
 @Composable
-private fun StartFreshDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
+internal fun StartFreshDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.start_fresh_title)) },
-        text = { DialogContent { Text(stringResource(R.string.start_fresh_body)) } },
+        text = {
+            SecureDialogWindow(hideOverlays = true) { DialogContent { Text(stringResource(R.string.start_fresh_body)) } }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
         confirmButton = {
             TextButton(

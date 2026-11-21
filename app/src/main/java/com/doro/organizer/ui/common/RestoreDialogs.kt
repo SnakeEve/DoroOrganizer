@@ -32,12 +32,12 @@ internal val PasswordDialogProperties = DialogProperties(dismissOnClickOutside =
 /** "Checking the backup…" until the confirmation; Cancel and Back end the restore, nothing else dismisses it. */
 @Composable
 internal fun RestoreCheckingDialog(fraction: Float?, onCancel: () -> Unit) {
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = onCancel,
-            properties = DialogProperties(dismissOnClickOutside = false),
-            title = { Text(stringResource(R.string.restore_checking)) },
-            text = {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        properties = DialogProperties(dismissOnClickOutside = false),
+        title = { Text(stringResource(R.string.restore_checking)) },
+        text = {
+            SecureDialogWindow {
                 DialogContent {
                     if (fraction != null) {
                         LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
@@ -45,10 +45,10 @@ internal fun RestoreCheckingDialog(fraction: Float?, onCancel: () -> Unit) {
                         LinearProgressIndicator(Modifier.fillMaxWidth())
                     }
                 }
-            },
-            confirmButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) } },
-        )
-    }
+            }
+        },
+        confirmButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) } },
+    )
 }
 
 /** `NeedsBackupPassword`: [retry] after a password SQLCipher rejected, which cannot be told from a foreign file. */
@@ -56,12 +56,12 @@ internal fun RestoreCheckingDialog(fraction: Float?, onCancel: () -> Unit) {
 internal fun RestoreBackupPasswordDialog(retry: Boolean, onAnswer: (CharArray?) -> Unit) {
     val field = remember(retry) { TextFieldState() }
     val submit = { if (field.text.isNotEmpty()) onAnswer(field.takePassword()) }
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = { onAnswer(null) },
-            properties = PasswordDialogProperties,
-            title = { Text(stringResource(R.string.restore_password_title)) },
-            text = {
+    AlertDialog(
+        onDismissRequest = { onAnswer(null) },
+        properties = PasswordDialogProperties,
+        title = { Text(stringResource(R.string.restore_password_title)) },
+        text = {
+            SecureDialogWindow(hideOverlays = true) {
                 DialogContent {
                     Text(stringResource(R.string.restore_password_body))
                     PasswordField(
@@ -72,15 +72,15 @@ internal fun RestoreBackupPasswordDialog(retry: Boolean, onAnswer: (CharArray?) 
                         onSubmit = submit,
                     )
                 }
-            },
-            dismissButton = { TextButton(onClick = { onAnswer(null) }) { Text(stringResource(R.string.action_cancel)) } },
-            confirmButton = {
-                TextButton(onClick = submit, enabled = field.text.isNotEmpty()) {
-                    Text(stringResource(R.string.action_continue))
-                }
-            },
-        )
-    }
+            }
+        },
+        dismissButton = { TextButton(onClick = { onAnswer(null) }) { Text(stringResource(R.string.action_cancel)) } },
+        confirmButton = {
+            TextButton(onClick = submit, enabled = field.text.isNotEmpty()) {
+                Text(stringResource(R.string.action_continue))
+            }
+        },
+    )
 }
 
 /**
@@ -93,12 +93,12 @@ internal fun RestoreDatabasePasswordDialog(error: AppError?, appTime: AppTime, o
     val remaining = rememberRemainingMillis(throttledUntil(0L, error), appTime)
     val throttled = remaining > 0
     val submit = { if (!throttled && field.text.isNotEmpty()) onAnswer(field.takePassword()) }
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = { onAnswer(null) },
-            properties = PasswordDialogProperties,
-            title = { Text(stringResource(R.string.restore_db_password_title)) },
-            text = {
+    AlertDialog(
+        onDismissRequest = { onAnswer(null) },
+        properties = PasswordDialogProperties,
+        title = { Text(stringResource(R.string.restore_db_password_title)) },
+        text = {
+            SecureDialogWindow(hideOverlays = true) {
                 DialogContent {
                     Text(stringResource(R.string.restore_db_password_body))
                     PasswordField(
@@ -110,15 +110,15 @@ internal fun RestoreDatabasePasswordDialog(error: AppError?, appTime: AppTime, o
                         onSubmit = submit,
                     )
                 }
-            },
-            dismissButton = { TextButton(onClick = { onAnswer(null) }) { Text(stringResource(R.string.action_cancel)) } },
-            confirmButton = {
-                TextButton(onClick = submit, enabled = !throttled && field.text.isNotEmpty()) {
-                    Text(stringResource(R.string.action_continue))
-                }
-            },
-        )
-    }
+            }
+        },
+        dismissButton = { TextButton(onClick = { onAnswer(null) }) { Text(stringResource(R.string.action_cancel)) } },
+        confirmButton = {
+            TextButton(onClick = submit, enabled = !throttled && field.text.isNotEmpty()) {
+                Text(stringResource(R.string.action_continue))
+            }
+        },
+    )
 }
 
 /**
@@ -127,11 +127,11 @@ internal fun RestoreDatabasePasswordDialog(error: AppError?, appTime: AppTime, o
  */
 @Composable
 internal fun RestoreConfirmDialog(preview: RestorePreview, onAnswer: (Boolean) -> Unit) {
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = { onAnswer(false) },
-            title = { Text(stringResource(R.string.restore_confirm_title)) },
-            text = {
+    AlertDialog(
+        onDismissRequest = { onAnswer(false) },
+        title = { Text(stringResource(R.string.restore_confirm_title)) },
+        text = {
+            SecureDialogWindow(hideOverlays = true) {
                 DialogContent {
                     Text(
                         stringResource(
@@ -149,16 +149,16 @@ internal fun RestoreConfirmDialog(preview: RestorePreview, onAnswer: (Boolean) -
                     }
                     Text(stringResource(resultingModeText(preview.resultingMode)) + " " + stringResource(settings))
                 }
-            },
-            dismissButton = { TextButton(onClick = { onAnswer(false) }) { Text(stringResource(R.string.action_cancel)) } },
-            confirmButton = {
-                TextButton(
-                    onClick = { onAnswer(true) },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                ) { Text(stringResource(R.string.action_restore)) }
-            },
-        )
-    }
+            }
+        },
+        dismissButton = { TextButton(onClick = { onAnswer(false) }) { Text(stringResource(R.string.action_cancel)) } },
+        confirmButton = {
+            TextButton(
+                onClick = { onAnswer(true) },
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) { Text(stringResource(R.string.action_restore)) }
+        },
+    )
 }
 
 private fun resultingModeText(mode: KeyMode): Int = when (mode) {
@@ -171,12 +171,10 @@ private fun resultingModeText(mode: KeyMode): Int = when (mode) {
 @Composable
 fun MessageDialog(title: String, paragraphs: List<UiText>, appTime: AppTime, onClose: () -> Unit) {
     val resources = LocalResources.current
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = onClose,
-            title = { Text(title) },
-            text = { DialogContent { paragraphs.forEach { Text(resources.resolve(it, appTime)) } } },
-            confirmButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.action_ok)) } },
-        )
-    }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(title) },
+        text = { SecureDialogWindow { DialogContent { paragraphs.forEach { Text(resources.resolve(it, appTime)) } } } },
+        confirmButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.action_ok)) } },
+    )
 }

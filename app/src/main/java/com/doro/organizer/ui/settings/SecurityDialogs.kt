@@ -94,13 +94,13 @@ internal fun KeyChangeDialog(
         val new = if (flow.asksNew) newPassword.take() ?: return@confirm else null
         onConfirm(if (asksCurrent) current.takePassword() else null, new)
     }
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            properties = if (asksCurrent || flow.asksNew) PasswordDialogProperties else DialogProperties(),
-            modifier = Modifier.testTag("key_change_dialog"),
-            title = { Text(stringResource(texts.title)) },
-            text = {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        properties = if (asksCurrent || flow.asksNew) PasswordDialogProperties else DialogProperties(),
+        modifier = Modifier.testTag("key_change_dialog"),
+        title = { Text(stringResource(texts.title)) },
+        text = {
+            SecureDialogWindow(hideOverlays = true) {
                 DialogContent {
                     texts.body.forEach { Text(stringResource(it)) }
                     if (asksCurrent) {
@@ -126,23 +126,23 @@ internal fun KeyChangeDialog(
                         )
                     }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss, enabled = !busy) { Text(stringResource(R.string.action_cancel)) }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = confirm,
-                    enabled = !busy && !throttled && complete,
-                    colors = if (flow == KeyFlow.EncryptOff) {
-                        ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                    } else {
-                        ButtonDefaults.textButtonColors()
-                    },
-                ) { Text(stringResource(texts.confirm)) }
-            },
-        )
-    }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text(stringResource(R.string.action_cancel)) }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = confirm,
+                enabled = !busy && !throttled && complete,
+                colors = if (flow == KeyFlow.EncryptOff) {
+                    ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                } else {
+                    ButtonDefaults.textButtonColors()
+                },
+            ) { Text(stringResource(texts.confirm)) }
+        },
+    )
 }
 
 /** The texts and test tag of a lock password dialog: `lock_password_dialog` is the § 8.16 dialog only (ui.md § 12.8). */
@@ -197,13 +197,13 @@ internal fun LockPasswordDialog(
     val remaining = rememberRemainingMillis(throttledUntil(retryAt, error), appTime)
     val throttled = remaining > 0
     val confirm = { if (!busy && !throttled && field.text.isNotEmpty()) onConfirm(field.takePassword()) }
-    SecureDialogWindow {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            properties = PasswordDialogProperties,
-            modifier = Modifier.testTag(texts.tag),
-            title = { Text(stringResource(texts.title)) },
-            text = {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        properties = PasswordDialogProperties,
+        modifier = Modifier.testTag(texts.tag),
+        title = { Text(stringResource(texts.title)) },
+        text = {
+            SecureDialogWindow(hideOverlays = true) {
                 DialogContent {
                     Text(stringResource(texts.body))
                     // In the dialog's own composition, where the requester is attached (ui.md § 8.8).
@@ -217,15 +217,15 @@ internal fun LockPasswordDialog(
                         onSubmit = confirm,
                     )
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss, enabled = !busy) { Text(stringResource(R.string.action_cancel)) }
-            },
-            confirmButton = {
-                TextButton(onClick = confirm, enabled = !busy && !throttled && field.text.isNotEmpty()) {
-                    Text(stringResource(texts.confirm))
-                }
-            },
-        )
-    }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text(stringResource(R.string.action_cancel)) }
+        },
+        confirmButton = {
+            TextButton(onClick = confirm, enabled = !busy && !throttled && field.text.isNotEmpty()) {
+                Text(stringResource(texts.confirm))
+            }
+        },
+    )
 }
