@@ -5,7 +5,8 @@ import android.os.Build
 import android.os.SystemClock
 import android.os.Trace
 import androidx.test.platform.app.InstrumentationRegistry
-import java.io.File
+import androidx.test.services.storage.TestStorage
+import java.io.OutputStream
 import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
@@ -22,8 +23,8 @@ import org.junit.runners.model.Statement
  * fixture runs. [measure] makes [WARM_UPS] warm-up runs and [RUNS] measured runs, timed with
  * `SystemClock.elapsedRealtimeNanos()`.
  * After a passing body every budget is asserted, all at once: the exact budget on a phone, twice the budget on an
- * emulator. Whether the test passed or not, the median, p90 and maximum of every measurement taken go as JSON into the
- * instrumentation's `additionalTestOutputDir` (`<class>-<method>.json`); a failed write is reported next to the test's
+ * emulator. Whether the test passed or not, the median, p90 and maximum of every measurement taken go as JSON
+ * (`<class>-<method>.json`) into the TestStorage output of [openOutput]; a failed write is reported next to the test's
  * own result, never instead of it. Labels and trace sections are constants, never user data (DEC-70).
  */
 class PerfRecorder : TestRule {
@@ -92,7 +93,7 @@ class PerfRecorder : TestRule {
             .put("emulator", onEmulator)
             .put("measurements", JSONArray(measurements.map(Measurement::toJson)))
         val name = "${description.testClass.simpleName}-${description.methodName}.json"
-        File(outputDirectory(), name).writeText(json.toString(2))
+        openOutput(name).bufferedWriter().use { it.write(json.toString(2)) }
     }
 
     private fun assertWithinBudgets() {
@@ -134,14 +135,21 @@ class PerfRecorder : TestRule {
 
         private val onEmulator: Boolean get() = Build.HARDWARE == "ranchu" || Build.HARDWARE == "goldfish"
 
+        /** The instrumentation argument that makes AGP pull the TestStorage output after the run (testing.md § 8). */
+        const val USE_TEST_STORAGE = "useTestStorageService"
+
         /**
-         * The directory AGP passes as `additionalTestOutputDir` and pulls after the run (testing.md § 8; Verify at
-         * setup: it survives the Orchestrator's `pm clear`).
+         * Opens [name] for writing, replacing an earlier file of that name, in the androidx.test.services TestStorage
+         * output (`/sdcard/googletest/test_outputfiles`, owned by the test services app), which AGP copies into the
+         * connected run's additional test output when [USE_TEST_STORAGE] is `true`. Never the instrumentation's
+         * `additionalTestOutputDir`: it lies in the app's own data, which the Orchestrator's `clearPackageData` deletes
+         * after every test, so only the last test's files reached the host (T22).
          */
-        fun outputDirectory(): File {
-            val path = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
-                ?: error("no additionalTestOutputDir argument: run the perf job through Gradle (testing.md § 9)")
-            return File(path).apply { check(isDirectory || mkdirs()) { "cannot create the test output directory" } }
+        fun openOutput(name: String): OutputStream {
+            check(InstrumentationRegistry.getArguments().getString(USE_TEST_STORAGE) == "true") {
+                "no $USE_TEST_STORAGE=true argument: run the perf job through Gradle on benchmark (testing.md § 9)"
+            }
+            return TestStorage().openOutputFile(name)
         }
 
         private fun targetIsDebuggable(): Boolean =

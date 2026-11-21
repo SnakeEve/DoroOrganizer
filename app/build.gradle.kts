@@ -41,6 +41,9 @@ android {
             "com.doro.organizer.testing.DoroTestRunner"
         }
         testInstrumentationRunnerArguments["clearPackageData"] = "true" // with the Orchestrator: pm clear after each test
+        // The perf output (JSON, seed-10k.db) goes through TestStorage, outside the app's data that clearPackageData
+        // deletes; with this argument AGP copies it into the additional test output (testing.md § 8).
+        if (testType == "benchmark") testInstrumentationRunnerArguments["useTestStorageService"] = "true"
     }
 
     buildTypes {
@@ -119,11 +122,14 @@ android {
         animationsDisabled = true
         unitTests.all {
             it.systemProperty("doro.srcRoot", file("src").absolutePath)
-            // ArchitectureTest (I-41), MigrationCoverageTest and SchemaJsonTest (I-47, I-48) read these files, not
-            // classes: declared as inputs, a change that alters no bytecode still reruns them.
-            it.inputs.files(fileTree("src") { include("main/**", "debug/**", "release/**", "androidTest/**") })
+            // ArchitectureTest (I-41), MigrationCoverageTest, SchemaJsonTest (I-47, I-48) and PerfOutputTest read these
+            // files, not classes: declared as inputs, a change that alters no bytecode still reruns them.
+            it.inputs.files(fileTree("src") { include("main/**", "debug/**", "release/**", "androidTest*/**") })
                 .withPathSensitivity(PathSensitivity.RELATIVE)
                 .withPropertyName("doroScannedSources")
+            it.inputs.file("build.gradle.kts") // PerfOutputTest: the benchmark run's useTestStorageService argument
+                .withPathSensitivity(PathSensitivity.NONE)
+                .withPropertyName("doroBuildFile")
             it.inputs.files(fileTree("schemas"))
                 .withPathSensitivity(PathSensitivity.RELATIVE)
                 .withPropertyName("doroSchemas")
@@ -200,6 +206,7 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4) // the Compose halves of the gate tests (SPEC T15)
     androidTestImplementation(libs.androidx.test.uiautomator) // L-21: Home and the relaunch of the task
+    androidTestImplementation(libs.androidx.test.services.storage) // PerfRecorder's output survives clearPackageData
     androidTestUtil(libs.androidx.test.orchestrator)
 }
 

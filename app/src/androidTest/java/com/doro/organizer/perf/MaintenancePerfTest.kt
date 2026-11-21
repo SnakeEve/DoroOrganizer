@@ -21,7 +21,6 @@ import com.doro.organizer.testing.ok
 import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.testing.restoreAnswering
 import com.doro.organizer.testing.seed
-import java.io.File
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -36,7 +35,8 @@ import org.junit.runner.RunWith
  * key change, through the production `DbMaintenance`. The backup goes to a share file (`cacheDir/share/`, served by
  * `BackupFileProvider`), the export pipeline of every backup, because the benchmark build has no test documents
  * provider; the restore reads that file back. Also `exportSeedBackup` (testing.md § 7): `seed-10k.db`, the plain
- * backup that P-5 and M-18 restore through Settings.
+ * backup that P-5 and M-18 restore through Settings, written through [PerfRecorder.openOutput] once its copy has been
+ * checked.
  */
 @PerfTest
 @RunWith(AndroidJUnit4::class)
@@ -88,12 +88,14 @@ class MaintenancePerfTest {
     fun exportSeedBackup() = runTest(timeout = 120.seconds) {
         val seeded = startSeeded()
 
-        val target = File(PerfRecorder.outputDirectory(), SEED_BACKUP)
+        val copy = databases.file(SEED_BACKUP)
         val input = checkNotNull(context.contentResolver.openInputStream(shareBackup())) { "the share file did not open" }
-        input.use { target.outputStream().use(it::copyTo) }
+        input.use { copy.outputStream().use(it::copyTo) }
         // What P-5 and M-18 restore: a plaintext database (the empty key opens it) holding the whole seed.
-        val notes = databases.raw(target, TestKey.Plain).use { it.longOf("SELECT COUNT(*) FROM notes") }
+        val notes = databases.raw(copy, TestKey.Plain).use { it.longOf("SELECT COUNT(*) FROM notes") }
         assertEquals(seeded.notes.size.toLong(), notes)
+        // The checked copy goes out through TestStorage: the Orchestrator's pm clear deletes the app's own files.
+        copy.inputStream().use { PerfRecorder.openOutput(SEED_BACKUP).use(it::copyTo) }
     }
 
     private suspend fun startSeeded(): SeedModel {
