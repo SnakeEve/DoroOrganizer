@@ -47,8 +47,11 @@ interface AppLockController : ExternalCallbacks {
      */
     fun enroll()
 
-    /** `PASSWORD` mode, lock on, usable strong biometric, slot `Live`; the reminder does not affect it. */
-    suspend fun fingerprintUnlockAvailable(): Boolean
+    /**
+     * `Available`: `PASSWORD` mode, lock on, usable strong biometric, slot `Live`; `Unknown`: the same with a slot
+     * whose key could not be looked up (DEC-77). The reminder does not affect it.
+     */
+    suspend fun fingerprintUnlockAvailable(): FingerprintAvailability
 
     /** An authorized DECRYPT cipher for `ResetPassword` or `RestoreKey` (security.md § 7.3 results). */
     suspend fun slotPrompt(purpose: AuthPurpose): AppResult<SlotCipher?>

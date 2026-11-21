@@ -116,9 +116,9 @@ class NavigatorTest {
 
     @Test
     fun aPickerKeyEqualToTheTopApartFromItsVisit_isNotPushed() {
-        val first = PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate, navigator.nextVisit())
+        val first = PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate(selectionSaved = true), navigator.nextVisit())
         navigator.open(first)
-        navigator.open(PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate, navigator.nextVisit()))
+        navigator.open(PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate(selectionSaved = true), navigator.nextVisit()))
 
         assertEquals(listOf(TabKey(Perspective.All, 0), first), state.stacks.getValue(Perspective.All))
     }

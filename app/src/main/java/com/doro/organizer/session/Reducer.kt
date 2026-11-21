@@ -26,6 +26,7 @@ import com.doro.organizer.session.GateEvent.Opened
 import com.doro.organizer.session.GateEvent.PasswordNeeded
 import com.doro.organizer.session.GateEvent.PasswordRejected
 import com.doro.organizer.session.GateEvent.PasswordRequired
+import com.doro.organizer.session.GateEvent.PasswordStorageFull
 import com.doro.organizer.session.GateEvent.PasswordSubmitted
 import com.doro.organizer.session.GateEvent.PasswordVerified
 import com.doro.organizer.session.GateEvent.Retry
@@ -44,7 +45,7 @@ import com.doro.organizer.session.GateState.Opening
 import com.doro.organizer.session.GateState.Ready
 import com.doro.organizer.session.GateState.Starting
 
-// The transition table of architecture.md § Transition table, rows T1–T62. Each guard is mutually exclusive with the
+// The transition table of architecture.md § Transition table, rows T1–T64. Each guard is mutually exclusive with the
 // others for its (state, event) pair; a pair no row matches is T35 and leaves the state unchanged without effects.
 
 internal typealias Transition = Pair<GateState, List<GateEffect>>
@@ -138,7 +139,8 @@ private fun locked(s: Locked, e: GateEvent, elapsedNow: Long): Transition? {
             else -> null
         }
         is PasswordSubmitted -> if (entry != null && checkable(resume) && !entry.checking && elapsedNow >= entry.retryAt) {
-            s.copy(password = entry.copy(checking = true, checkFailed = false)) to listOf(VerifyPassword(e.password)) // T47
+            s.copy(password = entry.copy(checking = true, checkFailed = false, storageFull = false)) to
+                listOf(VerifyPassword(e.password)) // T47
         } else {
             null
         }
@@ -153,6 +155,12 @@ private fun locked(s: Locked, e: GateEvent, elapsedNow: Long): Transition? {
         }
         is PasswordRejected -> if (entry?.checking == true) { // T49
             s.copy(password = entry.copy(failures = e.failures, retryAt = e.retryAt, checking = false)).only()
+        } else {
+            null
+        }
+        // T64 (DEC-75): the password was not checked, so the backoff is unchanged.
+        is PasswordStorageFull -> if (entry?.checking == true) {
+            s.copy(password = entry.copy(failures = e.failures, retryAt = e.retryAt, checking = false, storageFull = true)).only()
         } else {
             null
         }
@@ -192,7 +200,7 @@ private fun lockedMaintenanceStarted(resume: Resume, entry: PasswordEntry?, e: M
     }
     if (!e.fingerprintReset) return Locked(Resume.Maintenance(Maintenance(e.op, origin))).only()
     if (e.op != MaintenanceOp.KeyChange || origin != Origin.Ready || entry == null) return null
-    val resetFrom = entry.copy(checking = false, checkFailed = false)
+    val resetFrom = entry.copy(checking = false, checkFailed = false, storageFull = false)
     return Locked(Resume.Maintenance(Maintenance(MaintenanceOp.KeyChange, Origin.Ready, resetFrom = resetFrom))).only()
 }
 
@@ -244,6 +252,9 @@ private fun opening(s: Opening, e: GateEvent): Transition? = when (e) {
         else -> Locked(Resume.Open).only() // T43: the cipher is spent; only a new prompt can produce another
     }
     is PasswordRejected -> NeedsPassword(e.failures, e.retryAt, false, s.reason, s.fingerprintUsable).only() // T21
+    // T63 (DEC-75): the password was not checked, so the backoff is unchanged.
+    is PasswordStorageFull ->
+        NeedsPassword(e.failures, e.retryAt, false, s.reason, s.fingerprintUsable, storageFull = true).only()
     is PasswordNeeded -> NeedsPassword(e.failures, e.retryAt, false, e.reason).only() // T22
     KeyFailed -> (if (s.lockPending) Locked(Resume.KeyUnavailable) else KeyUnavailable).only() // T23
     LockNow -> s.copy(lockPending = true).only() // T24

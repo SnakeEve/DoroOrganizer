@@ -11,6 +11,7 @@ import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.CorruptRestoreScene
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.MaintenanceSetup
+import com.doro.organizer.testing.RestoreAnswer
 import com.doro.organizer.testing.RestoreAnswer.Companion.backupPassword
 import com.doro.organizer.testing.RestoreAnswer.Companion.confirm
 import com.doro.organizer.testing.RestoreAnswer.Companion.databasePassword
@@ -111,6 +112,33 @@ class RestoreFromCorruptFingerprintTest {
         scene.assertRestored(result)
         assertEquals(0, setup.settings.snapshot().unlockFailures) // the correct password reset the count
         assertEquals(setup.time.nowMillis(), setup.settings.snapshot().passwordVerifiedAt) // the reminder restarted
+    }
+
+    @Test
+    fun aDatabasePasswordThatCannotBeCounted_isNotChecked_asksAgainSayingSo_andRestoresOnceSpaceIsFree() = runCorruptTest {
+        scene.passwordModeInCorrupt(DATABASE_PASSWORD, BACKUP_PASSWORD)
+        val failures = setup.settings.snapshot().unlockFailures
+
+        val result = setup.maintenance.restoreAnswering(
+            scene.backup.uri,
+            MaintenanceOrigin.Corrupt,
+            backupPassword(BACKUP_PASSWORD),
+            fingerprint { null },
+            RestoreAnswer("database password, storage full", { it == MaintenanceStatus.NeedsDatabasePassword(null) }) {
+                setup.settings.failEdits = true
+                answerPassword(DATABASE_PASSWORD.toCharArray())
+            },
+            // DEC-75: the right password, but its attempt could not be counted, so it was not checked.
+            RestoreAnswer("database password, space freed", { it == MaintenanceStatus.NeedsDatabasePassword(AppError.StorageFull) }) {
+                assertEquals("nothing was counted", failures, setup.settings.snapshot().unlockFailures)
+                setup.settings.failEdits = false
+                answerPassword(DATABASE_PASSWORD.toCharArray())
+            },
+            confirm(),
+        )
+
+        scene.assertRestored(result)
+        assertEquals(0, setup.settings.snapshot().unlockFailures)
     }
 
     @Test

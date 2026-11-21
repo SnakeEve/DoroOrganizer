@@ -64,9 +64,12 @@ enum class BioSlotStatus {
     /** A `bioSlot` whose own key, named by `bioSlot.keyAlias`, is present (DEC-98). */
     Live,
 
-    /**
-     * A `bioSlot` whose key is missing, or whose alias check failed twice: the password unlocks and the re-creation
-     * offer is due.
-     */
+    /** A `bioSlot` whose key is missing: the password unlocks and the re-creation offer is due. */
     Dead,
+
+    /**
+     * A `bioSlot` whose alias check failed twice (DEC-77): whether its key exists is not known. Not live, so the
+     * password unlocks, but nothing is deleted, no re-creation is offered and no text calls the slot gone.
+     */
+    Unknown,
 }

@@ -105,6 +105,7 @@ internal class GateEffects(
                 }
                 is UnlockResult.PasswordRejected -> GateEvent.PasswordRejected(result.failures, result.retryAtElapsedMs)
                 is UnlockResult.Throttled -> GateEvent.PasswordRejected(result.failures, result.retryAtElapsedMs)
+                is UnlockResult.StorageFull -> GateEvent.PasswordStorageFull(result.failures, result.retryAtElapsedMs)
                 // In Locked this means "could not be checked" (T50), never "the key cannot be obtained".
                 else -> if (lockController.reportPasswordKekFailure()) GateEvent.KekFailedWithSlot else GateEvent.KeyFailed
             }
@@ -140,6 +141,8 @@ internal class GateEffects(
             is UnlockResult.PasswordRejected ->
                 Obtained.Raise(GateEvent.PasswordRejected(result.failures, result.retryAtElapsedMs))
             is UnlockResult.Throttled -> Obtained.Raise(GateEvent.PasswordRejected(result.failures, result.retryAtElapsedMs))
+            is UnlockResult.StorageFull ->
+                Obtained.Raise(GateEvent.PasswordStorageFull(result.failures, result.retryAtElapsedMs))
             UnlockResult.PasswordNeeded -> Obtained.Raise(passwordNeeded(PasswordReason.None))
             else -> Obtained.Raise(
                 if (passwordPath && lockController.reportPasswordKekFailure()) GateEvent.KekFailedWithSlot else GateEvent.KeyFailed,

@@ -14,6 +14,7 @@ import com.doro.organizer.data.maintenance.MaintenanceResult
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.security.AppLockController
 import com.doro.organizer.security.AuthPurpose
+import com.doro.organizer.security.FingerprintAvailability
 import com.doro.organizer.security.SlotCipher
 import com.doro.organizer.testing.FakeKeyVault
 import com.doro.organizer.testing.unused
@@ -66,8 +67,8 @@ class ForgotPasswordViewModelTest {
         val fields = ForgotPasswordUiState::class.java.declaredFields.filterNot { Modifier.isStatic(it.modifiers) }
         assertEquals(setOf("fingerprintAvailable", "busy", "error"), fields.map { it.name }.toSet())
         assertEquals(
-            "ForgotPasswordUiState(fingerprintAvailable=true, busy=false, error=AuthFailed)",
-            ForgotPasswordUiState(true, false, AppError.AuthFailed).toString(),
+            "ForgotPasswordUiState(fingerprintAvailable=Available, busy=false, error=AuthFailed)",
+            ForgotPasswordUiState(AVAILABLE, false, AppError.AuthFailed).toString(),
         )
     }
 
@@ -79,14 +80,14 @@ class ForgotPasswordViewModelTest {
         vm.refreshAvailability()
         assertEquals(1, lock.availabilityCalls)
         assertNull(vm.state.value.fingerprintAvailable)
-        lock.answerAvailability(true)
-        assertEquals(true, vm.state.value.fingerprintAvailable)
+        lock.answerAvailability(AVAILABLE)
+        assertEquals(AVAILABLE, vm.state.value.fingerprintAvailable)
 
         vm.refreshAvailability()
         assertNull("reset to null at once", vm.state.value.fingerprintAvailable)
         assertEquals(2, lock.availabilityCalls)
-        lock.answerAvailability(false)
-        assertEquals(false, vm.state.value.fingerprintAvailable)
+        lock.answerAvailability(UNAVAILABLE)
+        assertEquals(UNAVAILABLE, vm.state.value.fingerprintAvailable)
     }
 
     @Test
@@ -103,8 +104,8 @@ class ForgotPasswordViewModelTest {
         assertTrue("zeroed by the ViewModel", newPassword.all { it == '\u0000' })
         assertEquals(2, lock.availabilityCalls)
         assertNull(vm.state.value.fingerprintAvailable)
-        lock.answerAvailability(false)
-        assertEquals(false, vm.state.value.fingerprintAvailable)
+        lock.answerAvailability(UNAVAILABLE)
+        assertEquals(UNAVAILABLE, vm.state.value.fingerprintAvailable)
         assertEquals(0, maintenance.calls)
     }
 
@@ -146,7 +147,7 @@ class ForgotPasswordViewModelTest {
         maintenance.finish(AppResult.Ok(MaintenanceResult.KeyChanged(KeyMode.PASSWORD, KeyMode.PASSWORD)))
         assertFalse(vm.state.value.busy)
         assertEquals("a reset that succeeded does not ask again", 1, lock.availabilityCalls)
-        assertEquals(true, vm.state.value.fingerprintAvailable)
+        assertEquals(AVAILABLE, vm.state.value.fingerprintAvailable)
     }
 
     @Test
@@ -186,7 +187,7 @@ class ForgotPasswordViewModelTest {
         vm.refreshAvailability()
 
         assertEquals(1, lock.availabilityCalls)
-        assertEquals(true, vm.state.value.fingerprintAvailable)
+        assertEquals(AVAILABLE, vm.state.value.fingerprintAvailable)
     }
 
     @Test
@@ -195,13 +196,49 @@ class ForgotPasswordViewModelTest {
         vm.resetPassword(MaintenanceOrigin.NeedsPassword, typed())
         lock.answerPrompt(AppResult.Ok(FakeKeyVault().newSlotCipher()))
         maintenance.finish(AppResult.Err(AppError.Unexpected))
-        lock.answerAvailability(true)
+        lock.answerAvailability(AVAILABLE)
 
         vm.onScreenOpened()
 
         assertEquals(3, lock.availabilityCalls)
-        lock.answerAvailability(true)
+        lock.answerAvailability(AVAILABLE)
         assertNull("a new opening does not close at once", withTimeoutOrNull(1_000) { vm.resetStarted.first() })
+    }
+
+    // DEC-59: a screen restored after Android closed the app.
+
+    @Test
+    fun aScreenRestoredOverANewViewModel_asksForTheAnswer() = runTest {
+        val vm = viewModel() // as after a process death: the screen was opened, this ViewModel never asked
+
+        vm.onScreenRestored()
+
+        assertEquals(1, lock.availabilityCalls)
+        lock.answerAvailability(AVAILABLE)
+        assertEquals(AVAILABLE, vm.state.value.fingerprintAvailable)
+    }
+
+    @Test
+    fun aScreenRestoredOverItsAnswer_orItsRunningQuestion_asksNothing() = runTest {
+        val vm = answered()
+        vm.onScreenRestored()
+        assertEquals("a rotation keeps the answer", 1, lock.availabilityCalls)
+
+        vm.refreshAvailability()
+        vm.onScreenRestored()
+        assertEquals("a rotation while the question runs", 2, lock.availabilityCalls)
+        lock.answerAvailability(UNAVAILABLE)
+        assertEquals(UNAVAILABLE, vm.state.value.fingerprintAvailable)
+    }
+
+    @Test
+    fun anUnknownSlot_isItsOwnAnswer() = runTest {
+        val vm = viewModel()
+        vm.onScreenOpened()
+
+        lock.answerAvailability(FingerprintAvailability.Unknown)
+
+        assertEquals(FingerprintAvailability.Unknown, vm.state.value.fingerprintAvailable)
     }
 
     @Test
@@ -212,20 +249,20 @@ class ForgotPasswordViewModelTest {
         }
     }
 
-    /** A ViewModel whose availability answer is in: true. */
+    /** A ViewModel whose availability answer is in: `Available`. */
     private fun answered(): ForgotPasswordViewModel = viewModel().also {
         it.refreshAvailability()
-        lock.answerAvailability(true)
+        lock.answerAvailability(AVAILABLE)
     }
 
     /** `fingerprintUnlockAvailable()` and `slotPrompt(ResetPassword)` wait until the test answers. */
     private class ScriptedLock : AppLockController by unused() {
-        private val availability = Channel<Boolean>(Channel.UNLIMITED)
+        private val availability = Channel<FingerprintAvailability>(Channel.UNLIMITED)
         private var prompt = CompletableDeferred<AppResult<SlotCipher?>>()
         var availabilityCalls = 0
         var prompts = 0
 
-        fun answerAvailability(answer: Boolean) {
+        fun answerAvailability(answer: FingerprintAvailability) {
             availability.trySend(answer)
         }
 
@@ -234,7 +271,7 @@ class ForgotPasswordViewModelTest {
             prompt = CompletableDeferred()
         }
 
-        override suspend fun fingerprintUnlockAvailable(): Boolean {
+        override suspend fun fingerprintUnlockAvailable(): FingerprintAvailability {
             availabilityCalls++
             return availability.receive()
         }
@@ -269,5 +306,10 @@ class ForgotPasswordViewModelTest {
             password = newPassword
             return result.await()
         }
+    }
+
+    private companion object {
+        val AVAILABLE = FingerprintAvailability.Available
+        val UNAVAILABLE = FingerprintAvailability.Unavailable
     }
 }

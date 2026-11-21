@@ -112,6 +112,16 @@ class UnlockPolicyTest {
     }
 
     @Test
+    fun password_aSlotThatCannotBeLookedUp_isThePassword_SlotUnknown_evenWithADueReminder() {
+        for (due in listOf(false, true)) {
+            assertEquals(
+                PolicyDecision.Password(PasswordCause.SlotUnknown),
+                route(KeyMode.PASSWORD, bio = BioSlotStatus.Unknown, reminderDue = due),
+            )
+        }
+    }
+
+    @Test
     fun password_reminderDue_isThePassword_Reminder() {
         listOf(true, false).forEach { cold ->
             assertEquals(
@@ -203,6 +213,7 @@ class UnlockPolicyTest {
             PasswordCause.NoBiometric to UnlockRoute.Password(PasswordReason.None, fingerprintUsable = false),
             PasswordCause.SlotMissing to UnlockRoute.Password(PasswordReason.None, fingerprintUsable = false),
             PasswordCause.SlotInvalidated to UnlockRoute.Password(PasswordReason.FingerprintChanged, fingerprintUsable = false),
+            PasswordCause.SlotUnknown to UnlockRoute.Password(PasswordReason.None, fingerprintUsable = false),
             PasswordCause.Reminder to UnlockRoute.Password(PasswordReason.Reminder, fingerprintUsable = false),
             PasswordCause.SlotUnavailable to UnlockRoute.Password(PasswordReason.None, fingerprintUsable = true),
             PasswordCause.UserChose to UnlockRoute.Password(PasswordReason.None, fingerprintUsable = true),

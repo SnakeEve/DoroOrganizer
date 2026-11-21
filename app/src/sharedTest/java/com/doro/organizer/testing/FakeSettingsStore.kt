@@ -32,6 +32,13 @@ class FakeSettingsStore(initial: Settings = Settings()) : SettingsStore {
     @Volatile
     var failEditsFrom = Int.MAX_VALUE
 
+    /**
+     * Every [recordPasswordVerified] fails as with [failEdits] while smaller writes still succeed: its edit of three
+     * keys no longer fits, one of two still does.
+     */
+    @Volatile
+    var failPasswordVerified = false
+
     @Volatile
     var edits = 0
         private set
@@ -59,8 +66,10 @@ class FakeSettingsStore(initial: Settings = Settings()) : SettingsStore {
     override suspend fun setBackoff(failures: Int, retryAtElapsedMs: Long) =
         edit { it.copy(unlockFailures = failures, unlockRetryAtElapsedMs = retryAtElapsedMs) }
 
-    override suspend fun recordPasswordVerified(epochMillis: Long) =
+    override suspend fun recordPasswordVerified(epochMillis: Long) {
+        if (failPasswordVerified) throw IOException("injected settings write failure")
         edit { it.copy(unlockFailures = 0, unlockRetryAtElapsedMs = 0, passwordVerifiedAt = epochMillis) }
+    }
 
     override suspend fun setRemembered(kind: EntityKind, id: Long) = edit { it.withRemembered(kind, id) }
 

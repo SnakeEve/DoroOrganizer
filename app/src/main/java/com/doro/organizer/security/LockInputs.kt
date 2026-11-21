@@ -21,7 +21,12 @@ internal data class LockInputs(
             (biometric == BiometricAvailability.Success || biometric == BiometricAvailability.StatusUnknown)
 
     /** The fingerprint route of `PASSWORD` mode is open, whatever the reminder says (security.md § 7.3). */
-    val liveFingerprint: Boolean get() = mode == KeyMode.PASSWORD && lockOn && usable && bio == BioSlotStatus.Live
+    val liveFingerprint: Boolean get() = fingerprintRoute && bio == BioSlotStatus.Live
+
+    /** As [liveFingerprint], but the slot's key could not be looked up (DEC-77): it may still be good. */
+    val unknownFingerprint: Boolean get() = fingerprintRoute && bio == BioSlotStatus.Unknown
+
+    private val fingerprintRoute: Boolean get() = mode == KeyMode.PASSWORD && lockOn && usable
 }
 
 /** The `BiometricPrompt` error codes as security.md § 7.4 groups them. */

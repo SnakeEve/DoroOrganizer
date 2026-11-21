@@ -12,9 +12,13 @@ sealed interface PickerPurpose {
     @Serializable
     data class EditorLinks(val selectedIds: List<Long>) : PickerPurpose
 
-    /** The contextual bar's "Associate": multi-select over both kinds on two tabs, starting empty (DEC-36). */
+    /**
+     * The contextual bar's "Associate": multi-select over both kinds on two tabs, starting empty (DEC-36).
+     * [selectionSaved]: the list's selection fits its saved state (DEC-57); when it does not, Android closing the app
+     * loses it, and the picker that comes back closes.
+     */
     @Serializable
-    data object BatchAssociate : PickerPurpose
+    data class BatchAssociate(val selectionSaved: Boolean) : PickerPurpose
 
     /** The Individual or Project title: single-select; [selectedId] is the current entity. */
     @Serializable

@@ -92,6 +92,7 @@ internal class RestoreKeyUnlock(private val deps: MaintenanceDeps, private val q
                 is UnlockResult.Key -> return run.own(result.rawKey)
                 is UnlockResult.PasswordRejected -> AppError.WrongPassword
                 is UnlockResult.Throttled -> AppError.Throttled(result.retryAtElapsedMs)
+                is UnlockResult.StorageFull -> AppError.StorageFull // not checked: not counted (DEC-75)
                 else -> return null
             }
         }

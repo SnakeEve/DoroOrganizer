@@ -136,6 +136,18 @@ class SettingsRowsUiTest : ScriptedGateComposeTest() {
         ui.awaitText(SLOT_SETUP_TITLE)
     }
 
+    /** DEC-77 as the owner signed it off: a slot that could not be looked up is not called missing. */
+    @Test
+    fun aSlotThatCannotBeLookedUp_showsNoSlotLine_andOffersNoSetUp() = runBlocking<Unit> {
+        scene.maintenance.keyMode.value = KeyMode.PASSWORD
+        scene.settings.setBiometricLock(true)
+        scene.lock.lockAvailability = available(BiometricAvailability.Success, SlotState.Unknown)
+        openSettings()
+        row(BIOMETRIC).assertIsOn().assert(hasText(BIOMETRIC_SUMMARY_PASSWORD))
+        compose.onNodeWithText(SLOT_MISSING).assertDoesNotExist()
+        compose.onNodeWithTag(SLOT_SET_UP).assertDoesNotExist()
+    }
+
     @Test
     fun aLiveSlot_orTheLockOff_showsNoSlotLine() = runBlocking<Unit> {
         scene.maintenance.keyMode.value = KeyMode.PASSWORD

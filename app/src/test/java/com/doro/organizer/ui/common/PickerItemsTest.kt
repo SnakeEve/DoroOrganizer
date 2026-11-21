@@ -34,9 +34,9 @@ class PickerItemsTest {
 
     @Test
     fun theCreateRow_trimsTheText_andSaysAnotherOnACaseInsensitiveMatch() {
-        val plain = items(PickerPurpose.BatchAssociate, search = "  Dora ").first()
-        val listed = items(PickerPurpose.BatchAssociate, search = "anna").first()
-        val createdBefore = items(PickerPurpose.BatchAssociate, search = "ZED", created = listOf(NewEntity("k", "zed")))
+        val plain = items(ASSOCIATE, search = "  Dora ").first()
+        val listed = items(ASSOCIATE, search = "anna").first()
+        val createdBefore = items(ASSOCIATE, search = "ZED", created = listOf(NewEntity("k", "zed")))
 
         assertEquals(PickerItem.Create("Dora", another = false), plain)
         assertEquals(PickerItem.Create("anna", another = true), listed)
@@ -118,5 +118,6 @@ class PickerItemsTest {
 
     private companion object {
         val DAY: LocalDate = LocalDate.of(2026, 11, 17)
+        val ASSOCIATE = PickerPurpose.BatchAssociate(selectionSaved = true)
     }
 }

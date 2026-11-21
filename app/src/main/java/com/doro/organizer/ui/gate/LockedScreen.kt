@@ -1,5 +1,6 @@
 package com.doro.organizer.ui.gate
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -41,18 +42,27 @@ internal fun LockedScreen(authError: LockError?, lock: AppLockController) {
                 Text(stringResource(R.string.action_use_password))
             }
         }
-        // The fixed text for a fingerprint the slot could not use, else the system's already localized errString;
-        // a silent error has no message (security.md § 7.4).
-        val slotFailed = authError?.code == LockError.SLOT_FAILED
-        val errorText = if (slotFailed) stringResource(R.string.gate_slot_failed) else authError?.message
+        // The fixed texts of the app's own errors (a fingerprint the slot could not use, a key-state that could not be
+        // read), else the system's already localized errString; a silent error has no message (security.md § 7.4).
+        val fixed = authError?.let { fixedLockErrorOf(it.code) }
+        val errorText = fixed?.let { stringResource(it.text) } ?: authError?.message
         if (errorText != null) {
             Text(
                 errorText,
                 color = MaterialTheme.colorScheme.error,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-                    .then(if (slotFailed) Modifier.testTag("gate_slot_failed_text") else Modifier),
+                    .then(fixed?.let { Modifier.testTag(it.tag) } ?: Modifier),
             )
         }
     }
+}
+
+/** A lock error of the app itself, not of the system prompt: its fixed text and its test tag. */
+private class FixedLockError(@param:StringRes val text: Int, val tag: String)
+
+private fun fixedLockErrorOf(code: Int): FixedLockError? = when (code) {
+    LockError.SLOT_FAILED -> FixedLockError(R.string.gate_slot_failed, "gate_slot_failed_text")
+    LockError.KEY_STATE_UNREADABLE -> FixedLockError(R.string.gate_key_state_unreadable, "gate_key_state_unreadable_text")
+    else -> null
 }

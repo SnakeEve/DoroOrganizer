@@ -7,6 +7,8 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.UiDevice
 import androidx.test.espresso.intent.Intents
 import androidx.test.espresso.intent.Intents.intended
 import androidx.test.espresso.intent.Intents.intending
@@ -201,6 +203,24 @@ class ShellDialogsTest : ScriptedGateComposeTest() {
         ui.awaitText(OFFER_TITLE)
     }
 
+    /** DEC-101 as the owner signed it off: the auto-off notice cannot be dismissed unread. */
+    @Test
+    fun theAutoOffNotice_closesOnlyWithOk_neverWithBackOrATapOutside() {
+        runBlocking { scene.settings.setLockAutoOff() }
+        inReady()
+        ui.awaitText(AUTO_OFF_TITLE)
+
+        ui.pressBack()
+        tapOutside()
+        compose.waitForIdle()
+
+        compose.onNodeWithText(AUTO_OFF_TITLE).assertExists()
+        assertTrue(checkNotNull(scene.settings.settings.value).lockAutoOffNotice)
+        compose.onNodeWithText(OK).performClick()
+        compose.waitUntil(GateUi.TIMEOUT_MS) { scene.settings.settings.value?.lockAutoOffNotice == false }
+        compose.onNodeWithText(AUTO_OFF_TITLE).assertDoesNotExist()
+    }
+
     @Test
     fun aKeyChange_showsItsSnackbar_beforeTheOffer() {
         scene.lock.slotOffer.value = SlotOffer.Missing
@@ -221,6 +241,12 @@ class ShellDialogsTest : ScriptedGateComposeTest() {
     }
 
     private fun shown(text: String) = ui.countText(text) > 0
+
+    /** A tap near the top of the screen, below the status bar: on the scrim, outside the centered dialog. */
+    private fun tapOutside() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        device.click(device.displayWidth / 2, device.displayHeight / 10)
+    }
 
     private fun assertNoMessage() {
         compose.waitForIdle()

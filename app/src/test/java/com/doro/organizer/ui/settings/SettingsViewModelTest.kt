@@ -271,6 +271,30 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun aCurrentPasswordThatCouldNotBeCounted_closesEveryPasswordDialog_withTheStorageText() {
+        maintenance.mode.value = KeyMode.PASSWORD
+        maintenance.keyChangeResult = AppResult.Err(AppError.StorageFull)
+        lock.passwordResult = AppResult.Err(AppError.StorageFull)
+        val vm = viewModel()
+        vm.onChangeStartupPassword()
+        vm.confirmKeyChange(KeyFlow.ChangePassword, "current".toCharArray(), "new password".toCharArray())
+        assertNull(vm.dialog)
+        assertNull(vm.uiState.value.dialogError)
+        assertEquals("the host shows and acknowledges it", listOf("changeKey:PASSWORD:true:true"), maintenance.calls)
+
+        for (dialog in listOf(SettingsDialog.LockOnPassword, SettingsDialog.LockOffPassword, SettingsDialog.SlotSetupPassword)) {
+            if (dialog == SettingsDialog.SlotSetupPassword) vm.onSetUpSlot()
+            vm.confirmLockPassword(dialog, "the password".toCharArray())
+            assertNull("$dialog closes", vm.dialog)
+            assertNull(vm.uiState.value.dialogError)
+            val message = checkNotNull(vm.uiState.value.message) { "$dialog says why" }
+            assertEquals(UiText.Error(AppError.StorageFull), message.text)
+            assertTrue(message.isError)
+            vm.onMessageShown(message.id)
+        }
+    }
+
+    @Test
     fun theEncryptionSwitch_opensTheDialogOfTheCommittedMode() {
         val vm = viewModel()
         maintenance.mode.value = KeyMode.DEVICE

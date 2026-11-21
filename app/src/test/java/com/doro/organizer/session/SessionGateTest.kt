@@ -26,7 +26,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * L-18: one test per row of architecture.md § Transition table (T1–T62 with sub-rows), the meta-test that every row
+ * L-18: one test per row of architecture.md § Transition table (T1–T64 with sub-rows), the meta-test that every row
  * has one, the sequences of L-18 and the reducer parts of L-53 (a) and L-54 (b).
  */
 class SessionGateTest {
@@ -400,6 +400,35 @@ class SessionGateTest {
         assertStep(state, go(state.copy(fingerprintUsable = true), GateEvent.FingerprintRechecked(false)))
     }
 
+    // DEC-75: a password whose attempt could not be counted was not checked; T63 and T64 show the storage line.
+
+    @Test fun t63_passwordStorageFull_afterOpening_returnsToThePasswordScreen_withTheStorageLine() {
+        val state = Opening(true, false, false, reason = PasswordReason.Reminder, fingerprintUsable = true)
+        assertStep(
+            NeedsPassword(2, 0, false, PasswordReason.Reminder, fingerprintUsable = true, storageFull = true),
+            go(state, GateEvent.PasswordStorageFull(2, 0)),
+        )
+    }
+
+    @Test fun t64_passwordStorageFull_onTheEntry_showsTheStorageLine_andTheNextSubmitClearsIt() {
+        val shown = checking.copy(checking = false, storageFull = true)
+        assertStep(Locked(Resume.Ready, password = shown), go(Locked(Resume.Ready, password = checking), GateEvent.PasswordStorageFull(checking.failures, checking.retryAt)))
+        assertIgnored(Locked(Resume.Ready, password = entry), GateEvent.PasswordStorageFull(0, 0))
+
+        val password = CharArray(8) { 'q' }
+        val t = go(Locked(Resume.Ready, password = shown), GateEvent.PasswordSubmitted(password), now = Long.MAX_VALUE)
+        assertStep(Locked(Resume.Ready, password = shown.copy(checking = true, storageFull = false)), t, E4)
+    }
+
+    @Test fun passwordStorageFull_isNotCarriedIntoAFingerprintReset() {
+        val reset = GateEvent.MaintenanceStarted(MaintenanceOp.KeyChange, fingerprintReset = true)
+        // An aborted reset returns to this entry (T58), which must not show a storage line from before the reset.
+        assertStep(
+            lockedM(maintenance(MaintenanceOp.KeyChange, Origin.Ready, resetFrom = entry)),
+            go(Locked(Resume.Ready, password = entry.copy(storageFull = true)), reset),
+        )
+    }
+
     @Test fun t62_recheckOnTheKeyStoreEntry_setsFingerprintUsable() {
         for (resume in listOf(Resume.Ready, Resume.Corrupt)) {
             assertStep(Locked(resume, password = keyStoreEntry.copy(fingerprintUsable = true)), go(Locked(resume, password = keyStoreEntry), GateEvent.FingerprintRechecked(true)))
@@ -409,7 +438,7 @@ class SessionGateTest {
     // Meta-test and properties of the whole table
 
     @Test fun everyRowOfTheTable_hasItsTest() {
-        val rows = (1..62).flatMap { n ->
+        val rows = (1..64).flatMap { n ->
             when (n) {
                 14 -> listOf("14a", "14b", "14c", "14d", "14e")
                 28 -> listOf("28a", "28b")

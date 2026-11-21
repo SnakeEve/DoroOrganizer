@@ -16,6 +16,7 @@ import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.Perspective
 import com.doro.organizer.testing.FakeAppTime
 import com.doro.organizer.testing.FakeSettingsStore
+import com.doro.organizer.ui.navigation.PickerPurpose
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -363,6 +364,26 @@ class NoteListSelectionTest {
         list.vm.exitSelection()
         runCurrent()
         assertFalse(list.handle.contains(NoteListViewModel.KEY_SELECTION))
+    }
+
+    @Test
+    fun theAssociatePicker_knowsTheSelectionIsSaved_exactlyUpTo1000Ids() = runTest {
+        rows.value = (1L..1_001L).map { noteRow(it) }
+        notes.selectIdsResult = AppResult.Ok((1L..1_000L).toList())
+        val list = open(Perspective.All)
+        list.vm.enterSelection(1)
+        list.vm.selectAll()
+        runCurrent()
+        assertEquals(1_000, list.state.selection?.size)
+        assertEquals(PickerPurpose.BatchAssociate(selectionSaved = true), list.vm.associatePurpose())
+
+        list.vm.toggleSelection(1_001)
+        runCurrent()
+
+        // DEC-57: a picker over this selection closes when restored, because its selection is not saved.
+        assertEquals(1_001, list.state.selection?.size)
+        assertFalse(list.handle.contains(NoteListViewModel.KEY_SELECTION))
+        assertEquals(PickerPurpose.BatchAssociate(selectionSaved = false), list.vm.associatePurpose())
     }
 
     // Select all (ui.md § 5.3).

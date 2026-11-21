@@ -31,18 +31,17 @@ internal class BioSlotCrypto(
     suspend fun statusLocked(state: KeyState?): BioSlotStatus {
         val bioSlot = state?.bioSlot
         if (state == null || state.slot.mode != KeyMode.PASSWORD || bioSlot == null) return BioSlotStatus.None
-        val present = withContext(dispatchers.io) {
+        return withContext(dispatchers.io) {
             try {
-                retryOnceLocked { keystore.containsAlias(bioSlot.keyAlias) }
+                if (retryOnceLocked { keystore.containsAlias(bioSlot.keyAlias) }) BioSlotStatus.Live else BioSlotStatus.Dead
             } catch (e: Exception) {
                 if (!e.isKeystoreFailure()) throw e
                 AppLog.d("KeyVault: biometric alias check failed: ${e.javaClass.simpleName}")
                 // A slot that cannot even be looked up is not live: otherwise DEC-86's fallback from a failed password
                 // KEK to the fingerprint would loop and KeyUnavailable would never be reached. Nothing is deleted.
-                false
+                BioSlotStatus.Unknown
             }
         }
-        return if (present) BioSlotStatus.Live else BioSlotStatus.Dead
     }
 
     /** `biometricUnlockCipher` (security.md § 3.7.3 step 1). */

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.doro.organizer.R
 import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.messages.UiText
 import com.doro.organizer.core.result.AppError
@@ -311,8 +312,10 @@ class NoteListViewModelRulesTest {
         assertTrue(afterChoice.none { state -> state.primary == Primary.Entity(BOB, "Bob") && state.rows.any { it.id == 1L } })
     }
 
+    // DEC-99 as the owner signed it off: a choice that cannot be saved opens its notes anyway.
+
     @Test
-    fun aFailedChoice_showsTheStorageFullText_andRemembersNothing() = runTest {
+    fun aFailedChoice_opensItsNotesAnyway_saysItIsNotRemembered_andRemembersNothing() = runTest {
         entities.put(EntityKind.Project, ALPHA, "Alpha")
         val list = open(Perspective.Project)
         assertEquals(Primary.None, list.state.primary)
@@ -321,9 +324,68 @@ class NoteListViewModelRulesTest {
         list.vm.choosePrimary(ALPHA)
         runCurrent()
 
-        assertEquals(UiText.Error(AppError.StorageFull), list.state.message?.text)
-        assertEquals(Primary.None, list.state.primary)
+        assertEquals(UiText.Res(R.string.primary_not_remembered), list.state.message?.text)
+        assertTrue(list.state.message?.isError == true)
+        assertEquals(Primary.Entity(ALPHA, "Alpha"), list.state.primary)
+        assertEquals(ALPHA, notes.rowQueries.last().projectId)
         assertNull(settings.snapshot().rememberedProjectId)
+    }
+
+    @Test
+    fun anUnsavedChoice_givesWayToALaterSavedOne_evenOfTheRememberedEntity() = runTest {
+        entities.put(EntityKind.Person, ALICE, "Alice")
+        entities.put(EntityKind.Person, BOB, "Bob")
+        settings.setRemembered(EntityKind.Person, ALICE)
+        val list = open(Perspective.Individual)
+        settings.failEdits = true
+        list.vm.choosePrimary(BOB)
+        runCurrent()
+        assertEquals(Primary.Entity(BOB, "Bob"), list.state.primary)
+
+        settings.failEdits = false
+        list.vm.choosePrimary(ALICE)
+        runCurrent()
+
+        assertEquals(Primary.Entity(ALICE, "Alice"), list.state.primary)
+        assertEquals(ALICE, settings.snapshot().rememberedPersonId)
+        assertEquals(Primary.Entity(ALICE, "Alice"), open(Perspective.Individual, restoredFrom(list.handle)).state.primary)
+    }
+
+    @Test
+    fun anUnsavedChoice_survivesAProcessDeath_butNotTheNextStart() = runTest {
+        entities.put(EntityKind.Person, ALICE, "Alice")
+        entities.put(EntityKind.Person, BOB, "Bob")
+        settings.setRemembered(EntityKind.Person, ALICE)
+        val list = open(Perspective.Individual)
+        settings.failEdits = true
+        list.vm.choosePrimary(BOB)
+        runCurrent()
+        settings.failEdits = false
+
+        val restored = open(Perspective.Individual, restoredFrom(list.handle))
+        val nextStart = open(Perspective.Individual)
+
+        // DEC-99 (6): a restored screen looks the same; the settings were never changed.
+        assertEquals(Primary.Entity(BOB, "Bob"), restored.state.primary)
+        assertEquals(Primary.Entity(ALICE, "Alice"), nextStart.state.primary)
+    }
+
+    @Test
+    fun anUnsavedChoiceWhoseEntityIsDeleted_showsThePicker_notTheOlderRememberedOne() = runTest {
+        entities.put(EntityKind.Person, ALICE, "Alice")
+        entities.put(EntityKind.Person, BOB, "Bob")
+        settings.setRemembered(EntityKind.Person, ALICE)
+        val list = open(Perspective.Individual)
+        settings.failEdits = true
+        list.vm.choosePrimary(BOB)
+        runCurrent()
+
+        entities.delete(EntityKind.Person, BOB)
+        runCurrent()
+
+        assertEquals(Primary.None, list.state.primary)
+        assertEquals("the remembered id is not Bob's, so it stays", ALICE, settings.snapshot().rememberedPersonId)
+        assertEquals(Primary.None, open(Perspective.Individual, restoredFrom(list.handle)).state.primary)
     }
 
     @Test
@@ -480,6 +542,9 @@ class NoteListViewModelRulesTest {
     )["list-${created++}", NoteListViewModel::class]
 
     private fun handle(vararg values: Pair<String, Any?>) = SavedStateHandle(mapOf(*values))
+
+    /** The handle a ViewModel rebuilt after a process death gets: every value [handle] saved. */
+    private fun restoredFrom(handle: SavedStateHandle) = SavedStateHandle(handle.keys().associateWith { handle.get<Any?>(it) })
 
     private companion object {
         const val ALICE = 1L

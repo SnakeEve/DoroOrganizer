@@ -58,7 +58,19 @@ class EntityPickerViewModel(
     private val appTime: AppTime,
     private val purpose: PickerPurpose? = null,
 ) : ViewModel() {
-    private val kinds = if (purpose == PickerPurpose.BatchAssociate) listOf(kind, kind.other()) else listOf(kind)
+    private val kinds = if (purpose is PickerPurpose.BatchAssociate) listOf(kind, kind.other()) else listOf(kind)
+
+    /**
+     * A `BatchAssociate` over a selection too large to save, rebuilt from its saved state after Android closed the
+     * app: the list's selection is gone, so the screen closes the picker (DEC-57). Only such a picker saves
+     * [KEY_OPENED], whose presence at creation tells a rebuilt ViewModel from a new one.
+     */
+    val selectionLost: Boolean = run {
+        val unsavedSelection = (purpose as? PickerPurpose.BatchAssociate)?.selectionSaved == false
+        val rebuilt = savedStateHandle.contains(KEY_OPENED)
+        if (unsavedSelection) savedStateHandle[KEY_OPENED] = true
+        unsavedSelection && rebuilt
+    }
     private val tab = MutableStateFlow(savedStateHandle.get<String>(KEY_TAB)?.let(EntityKind::valueOf) ?: kind)
 
     // Snapshot state written inside the field's onValueChange, so the field shows every edit in its own frame; the
@@ -145,7 +157,7 @@ class EntityPickerViewModel(
      */
     fun confirm(): PickerResult = when (purpose) {
         is PickerPurpose.EditorLinks -> PickerResult.Links(kind, survivingChecked(kind), created.getValue(kind).value)
-        PickerPurpose.BatchAssociate -> PickerResult.Associate(
+        is PickerPurpose.BatchAssociate -> PickerResult.Associate(
             personIds = survivingChecked(EntityKind.Person),
             projectIds = survivingChecked(EntityKind.Project),
             newPersons = created.getValue(EntityKind.Person).value,
@@ -230,6 +242,7 @@ class EntityPickerViewModel(
         const val KEY_NEW_KEYS = "newKeys"
         const val KEY_NEW_NAMES = "newNames"
         const val KEY_TAB = "tab"
+        const val KEY_OPENED = "opened"
     }
 }
 

@@ -87,6 +87,28 @@ class PasswordScreenTest : GateComposeTest() {
         ui.awaitShell()
     }
 
+    /** DEC-75: an attempt that cannot be counted is not checked; the screen says storage is full, never "wrong". */
+    @Test
+    fun aFullStorage_checksNoPassword_saysSo_andTheRightPasswordOpensOnceSpaceIsFree() = runBlocking<Unit> {
+        scene.plant(KeyMode.PASSWORD, PASSWORD)
+        scene.settings.setBackoff(failures = 2, retryAtElapsedMs = 0)
+        coldStartOnThePasswordScreen()
+        scene.settings.failEdits = true
+
+        ui.enterPassword(PASSWORD)
+
+        scene.awaitGate { it is GateState.NeedsPassword && it.storageFull }
+        compose.waitUntil(GateUi.TIMEOUT_MS) { compose.onAllNodesWithTextCount(STORAGE_FULL) == 1 }
+        compose.onNodeWithText(WRONG_PASSWORD, useUnmergedTree = true).assertDoesNotExist()
+        assertEquals(2, scene.settings.snapshot().unlockFailures)
+
+        scene.settings.failEdits = false
+        ui.enterPassword(PASSWORD)
+
+        scene.awaitGate(GateState.Ready)
+        assertEquals(0, scene.settings.snapshot().unlockFailures)
+    }
+
     @Test
     fun savedInstanceState_neverHoldsThePassword() = runBlocking<Unit> {
         scene.plant(KeyMode.PASSWORD, PASSWORD)
@@ -113,6 +135,7 @@ class PasswordScreenTest : GateComposeTest() {
     private companion object {
         const val PASSWORD = "correct horse"
         const val FORGOT = "gate_forgot"
+        const val STORAGE_FULL = "Not enough free storage, so the password was not checked. Free up some space and try again."
 
         /** `password_show` and `password_hide`, ui.md § 11. */
         const val SHOW_PASSWORD = "Show password"

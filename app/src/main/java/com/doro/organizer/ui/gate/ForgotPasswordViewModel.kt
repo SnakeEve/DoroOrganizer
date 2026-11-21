@@ -12,7 +12,9 @@ import com.doro.organizer.data.maintenance.MaintenanceOrigin
 import com.doro.organizer.data.maintenance.MaintenanceResult
 import com.doro.organizer.security.AppLockController
 import com.doro.organizer.security.AuthPurpose
+import com.doro.organizer.security.FingerprintAvailability
 import com.doro.organizer.ui.GateGraph
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,7 +27,7 @@ import kotlinx.coroutines.launch
 /** The state of the Forgot password screen: exactly these three things (DEC-90, ui.md § 8.15). */
 data class ForgotPasswordUiState(
     /** The answer of `AppLockController.fingerprintUnlockAvailable()`; null until it has answered. */
-    val fingerprintAvailable: Boolean? = null,
+    val fingerprintAvailable: FingerprintAvailability? = null,
     /** True from Confirm until `slotPrompt` and, if called, `resetPasswordWithBiometric` have returned. */
     val busy: Boolean = false,
     /** The local `Err(AuthFailed)` of the prompt; every other error is reported through `DbMaintenance.status`. */
@@ -51,6 +53,9 @@ class ForgotPasswordViewModel(
 
     private val startedResets = Channel<Unit>(Channel.CONFLATED)
 
+    /** The running question of [refreshAvailability]; null before the first. */
+    private var availabilityQuestion: Job? = null
+
     /**
      * One element each time a fingerprint reset starts (the cipher is handed to `DbMaintenance`). The Forgot password
      * screen closes on it, because the gate states that also close it can pass between two frames (ui.md § 10.3). It
@@ -67,11 +72,21 @@ class ForgotPasswordViewModel(
         refreshAvailability()
     }
 
+    /**
+     * The Forgot password screen was composed again within the same opening: after a rotation this ViewModel still
+     * holds its answer or its running question; after Android closed the app it is new and holds neither, so it asks
+     * (DEC-59). [refreshAvailability] leaves a running reset alone, which asks itself when it ends without a cipher.
+     */
+    fun onScreenRestored() {
+        if (mutableState.value.fingerprintAvailable == null && availabilityQuestion?.isActive != true) refreshAvailability()
+    }
+
     /** Asks the controller again; each time the screen opens and after a prompt that did not authorize. */
     fun refreshAvailability() {
         if (mutableState.value.busy) return // the running reset asks again itself when it ends without a cipher
         mutableState.update { it.copy(fingerprintAvailable = null) }
-        viewModelScope.launch {
+        availabilityQuestion?.cancel()
+        availabilityQuestion = viewModelScope.launch {
             val available = lock.fingerprintUnlockAvailable()
             mutableState.update { it.copy(fingerprintAvailable = available) }
         }

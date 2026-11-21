@@ -10,6 +10,7 @@ import com.doro.organizer.model.KeyMode
 import com.doro.organizer.security.AndroidBioKeystore
 import com.doro.organizer.security.AppLockController
 import com.doro.organizer.security.AuthPurpose
+import com.doro.organizer.security.FingerprintAvailability
 import com.doro.organizer.security.KeyVault
 import com.doro.organizer.security.ToggleOutcome
 import com.doro.organizer.session.GateEvent
@@ -180,6 +181,14 @@ class GateScene(
         checkNotNull(scenario) { "not started" }.recreate()
     }
 
+    /**
+     * Recreates the launched `MainActivity` as after Android closed the app in the background: its state saved, every
+     * ViewModel gone, so each is rebuilt from that state; the container (the gate) stays, as startup would restore it.
+     */
+    fun recreateAfterProcessDeath() {
+        checkNotNull(scenario) { "not started" }.recreateAfterProcessDeath()
+    }
+
     /** Moves the launched `MainActivity` to [state] (CREATED: stopped, its state saved). */
     fun moveActivityTo(state: Lifecycle.State) {
         checkNotNull(scenario) { "not started" }.moveToState(state)
@@ -225,7 +234,7 @@ private class CountingLockController(private val inner: AppLockController) : App
         held.value = false
     }
 
-    override suspend fun fingerprintUnlockAvailable(): Boolean {
+    override suspend fun fingerprintUnlockAvailable(): FingerprintAvailability {
         availabilityCalls.incrementAndGet()
         held.first { !it }
         return inner.fingerprintUnlockAvailable()

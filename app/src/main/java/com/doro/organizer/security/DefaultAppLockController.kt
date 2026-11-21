@@ -226,8 +226,9 @@ class DefaultAppLockController(
         val decision = decision(shown, inputs)
         if (screen == shown) route.value = publicRoute(decision, inputs)
         when (decision) {
-            // The key-state cannot be read over a key screen: fail closed, silently; "Unlock" tries again (§ 7.5).
-            null -> listener().onAuthError(LockError(BiometricPrompt.ERROR_CANCELED, null))
+            // The key-state cannot be read over a key screen: fail closed with a line saying so; "Unlock" tries again
+            // (§ 7.5, DEC-96).
+            null -> listener().onAuthError(LockError(LockError.KEY_STATE_UNREADABLE, null))
             // PLAIN and DEVICE only: decision() never lets a PASSWORD-mode key screen unlock without a key check.
             PolicyDecision.None -> listener().onUnlocked()
             PolicyDecision.AutoOff -> autoOffAndUnlock()
@@ -327,6 +328,7 @@ class DefaultAppLockController(
             inputs.mode != KeyMode.PASSWORD || !inputs.lockOn -> SlotState.NotUsed
             inputs.bio == BioSlotStatus.Live -> SlotState.Ready
             inputs.bio == BioSlotStatus.Dead -> SlotState.Invalidated
+            inputs.bio == BioSlotStatus.Unknown -> SlotState.Unknown
             else -> SlotState.Missing
         }
         return LockAvailability(inputs.biometric, inputs.deviceSecure, slot)
@@ -454,6 +456,7 @@ class DefaultAppLockController(
                 is UnlockResult.Verified -> null
                 is UnlockResult.PasswordRejected -> AppError.WrongPassword
                 is UnlockResult.Throttled -> AppError.Throttled(result.retryAtElapsedMs)
+                is UnlockResult.StorageFull -> AppError.StorageFull // not checked: not counted (DEC-75)
                 else -> AppError.KeyUnavailable // a message only; the gate is not touched (DEC-86)
             }
         } catch (e: KeyVaultException) {
@@ -486,7 +489,14 @@ class DefaultAppLockController(
         externalActivities.request(ExternalRequest(ExternalKind.Enroll, intent, fallbackIntent = fallback))
     }
 
-    override suspend fun fingerprintUnlockAvailable(): Boolean = inputs().liveFingerprint
+    override suspend fun fingerprintUnlockAvailable(): FingerprintAvailability {
+        val inputs = inputs()
+        return when {
+            inputs.liveFingerprint -> FingerprintAvailability.Available
+            inputs.unknownFingerprint -> FingerprintAvailability.Unknown
+            else -> FingerprintAvailability.Unavailable
+        }
+    }
 
     override suspend fun slotPrompt(purpose: AuthPurpose): AppResult<SlotCipher?> {
         require(purpose == AuthPurpose.ResetPassword || purpose == AuthPurpose.RestoreKey) { "not a slot purpose" }
@@ -518,7 +528,7 @@ class DefaultAppLockController(
         val due = when (inputs.bio) {
             BioSlotStatus.None -> SlotOffer.Missing
             BioSlotStatus.Dead -> SlotOffer.Invalidated
-            BioSlotStatus.Live -> return
+            BioSlotStatus.Live, BioSlotStatus.Unknown -> return // Unknown: the slot may still be good (DEC-77)
         }
         if (screen == LockScreen.Content) offer.value = due // the offer exists only in this foreground session
     }
@@ -547,8 +557,10 @@ class DefaultAppLockController(
         try {
             val lockOn = withContext(dispatchers.io) { settingsStore.snapshot().biometricLock }
             if (!lockOn) {
-                // A slot left behind while the lock is off is stale (§ 3.7.5).
-                if (withContext(dispatchers.io) { keyVault.biometricSlotStatus() } != BioSlotStatus.None) {
+                // A slot left behind while the lock is off is stale (§ 3.7.5). One whose key cannot be looked up waits
+                // for a later reconciliation: nothing is deleted on an unknown answer (DEC-77).
+                val status = withContext(dispatchers.io) { keyVault.biometricSlotStatus() }
+                if (status != BioSlotStatus.None && status != BioSlotStatus.Unknown) {
                     slotWriter().removeBiometricSlot()
                 }
             } else if (withContext(dispatchers.io) { committedMode() } == KeyMode.PASSWORD && !biometric.isDeviceSecure()) {

@@ -1,6 +1,7 @@
 package com.doro.organizer.ui.gate
 
 import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.doro.organizer.R
 import com.doro.organizer.core.messages.UiText
 import com.doro.organizer.data.maintenance.MaintenanceOrigin
+import com.doro.organizer.security.FingerprintAvailability
 import com.doro.organizer.ui.GateGraph
 import com.doro.organizer.ui.common.MessageDialog
 import kotlinx.coroutines.CoroutineStart
@@ -48,8 +50,9 @@ import kotlinx.coroutines.launch
 
 /**
  * The Forgot password screen (ui.md § 10.3, DEC-63) over a password screen whose Erase origin is [eraseOrigin]. The
- * fingerprint reset comes first while `fingerprintUnlockAvailable()` says yes and [resetOrigin] exists (never over
- * `Locked(Corrupt)`); the erase path is always offered once the answer is in. Back returns to the password screen.
+ * fingerprint reset comes first while `fingerprintUnlockAvailable()` says `Available` and [resetOrigin] exists (never
+ * over `Locked(Corrupt)`); `Unknown` there says to try again later (DEC-77); the erase path is always offered once the
+ * answer is in. Back returns to the password screen.
  * [onClose] also runs when a fingerprint reset starts and when an Erase from a `Locked` origin is confirmed: neither
  * returns here (ui.md § 10.3), and the gate states that say so can pass between two frames.
  */
@@ -67,12 +70,15 @@ internal fun ForgotPasswordScreen(
     var eraseOpen by rememberSaveable { mutableStateOf(false) }
     var resetOpen by rememberSaveable { mutableStateOf(false) }
     var resetSubmitted by rememberSaveable { mutableStateOf(false) }
-    // Once per opening, not per composition: after a rotation the activity-scoped ViewModel keeps its answer.
+    // Once per opening, not per composition: after a rotation the activity-scoped ViewModel keeps its answer, and
+    // after Android closed the app the new one asks again (DEC-59).
     var asked by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (!asked) {
             asked = true
             vm.onScreenOpened()
+        } else {
+            vm.onScreenRestored()
         }
     }
     // The reset dialog closes once the prompt and, if it authorized, the reset call have returned (ui.md § 8.15).
@@ -110,10 +116,19 @@ internal fun ForgotPasswordScreen(
                 Modifier.widthIn(max = GATE_MAX_WIDTH).fillMaxWidth().padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (available && resetOrigin != null) {
-                    ResetFirst(busy = ui.busy, onReset = { resetOpen = true }, onErase = { eraseOpen = true })
+                if (resetOrigin == null) {
+                    EraseOnly(R.string.forgot_body, busy = ui.busy, onErase = { eraseOpen = true })
                 } else {
-                    EraseOnly(busy = ui.busy, onErase = { eraseOpen = true })
+                    when (available) {
+                        FingerprintAvailability.Available ->
+                            ResetFirst(busy = ui.busy, onReset = { resetOpen = true }, onErase = { eraseOpen = true })
+                        // The slot's key could not be looked up: the reset may work later, so the password is not
+                        // called unrecoverable (DEC-77).
+                        FingerprintAvailability.Unknown ->
+                            EraseOnly(R.string.forgot_body_fingerprint_unknown, busy = ui.busy, onErase = { eraseOpen = true })
+                        FingerprintAvailability.Unavailable ->
+                            EraseOnly(R.string.forgot_body, busy = ui.busy, onErase = { eraseOpen = true })
+                    }
                 }
             }
         }
@@ -175,8 +190,8 @@ private fun ResetFirst(busy: Boolean, onReset: () -> Unit, onErase: () -> Unit) 
 }
 
 @Composable
-private fun EraseOnly(busy: Boolean, onErase: () -> Unit) {
-    Text(stringResource(R.string.forgot_body), style = MaterialTheme.typography.bodyLarge)
+private fun EraseOnly(@StringRes body: Int, busy: Boolean, onErase: () -> Unit) {
+    Text(stringResource(body), style = MaterialTheme.typography.bodyLarge)
     Button(
         onClick = onErase,
         enabled = !busy,

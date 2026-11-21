@@ -55,7 +55,7 @@ sealed interface PickerItem {
 
 /** The purposes whose list offers the create row and checkboxes (ui.md § 7.1, DEC-33). */
 val PickerPurpose?.isMultiSelect: Boolean
-    get() = this is PickerPurpose.EditorLinks || this == PickerPurpose.BatchAssociate
+    get() = this is PickerPurpose.EditorLinks || this is PickerPurpose.BatchAssociate
 
 /**
  * The list of a picker tab of [kind] for [purpose] (null: the embedded body of Individual and Project), top to bottom
@@ -81,7 +81,7 @@ internal fun pickerItems(
     }
     return buildList {
         when (purpose) {
-            is PickerPurpose.EditorLinks, PickerPurpose.BatchAssociate -> {
+            is PickerPurpose.EditorLinks, is PickerPurpose.BatchAssociate -> {
                 createItem(search, options, created)?.let(::add)
                 created.filter { matches(it.name) }.forEach { add(PickerItem.New(it)) }
                 shown.forEach { add(entity(it, it.id in checked)) }

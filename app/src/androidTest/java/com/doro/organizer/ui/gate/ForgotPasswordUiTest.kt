@@ -20,6 +20,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.data.maintenance.MaintenanceOp
 import com.doro.organizer.data.maintenance.PipelineStep
 import com.doro.organizer.model.KeyMode
+import com.doro.organizer.security.FingerprintAvailability
 import com.doro.organizer.security.PromptResult
 import com.doro.organizer.session.GateState
 import com.doro.organizer.session.Origin
@@ -207,7 +208,11 @@ class ForgotPasswordUiTest : GateComposeTest() {
         openTheForgotScreen()
         compose.onNodeWithText(NOT_AVAILABLE_BODY).assertExists()
         compose.onNodeWithTag(RESET_WITH_FINGERPRINT).assertDoesNotExist()
-        assertTrue("the slot itself is usable", app.container.appLockController.fingerprintUnlockAvailable())
+        assertEquals(
+            "the slot itself is usable",
+            FingerprintAvailability.Available,
+            app.container.appLockController.fingerprintUnlockAvailable(),
+        )
     }
 
     @Test

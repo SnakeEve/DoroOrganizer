@@ -34,6 +34,8 @@ class LockTogglePasswordModeTest {
         assertEquals(AppResult.Err(AppError.WrongPassword), f.controller.confirmWithPassword(AuthPurpose.EnableLock, "bad".toCharArray()))
         f.vault.nextVerifyPassword.addLast(UnlockResult.Throttled(5, 30_000))
         assertEquals(AppResult.Err(AppError.Throttled(30_000)), f.controller.confirmWithPassword(AuthPurpose.EnableLock, "bad".toCharArray()))
+        f.vault.nextVerifyPassword.addLast(UnlockResult.StorageFull(5, 0)) // not checked: not counted (DEC-75)
+        assertEquals(AppResult.Err(AppError.StorageFull), f.controller.confirmWithPassword(AuthPurpose.EnableLock, "pw".toCharArray()))
         f.vault.nextVerifyPassword.addLast(UnlockResult.KeyFailed)
         assertEquals(AppResult.Err(AppError.KeyUnavailable), f.controller.confirmWithPassword(AuthPurpose.EnableLock, "pw".toCharArray()))
         assertEquals(0, f.gateway.prompts.size)

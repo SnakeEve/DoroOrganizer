@@ -15,16 +15,20 @@ sealed interface GateState {
         override fun toString() = "Starting(authenticated=$authenticated)"
     }
 
-    /** `PASSWORD` mode with the database closed: the password screen (DEC-62). */
+    /**
+     * `PASSWORD` mode with the database closed: the password screen (DEC-62). [storageFull]: the last password was not
+     * checked, because its attempt could not be counted (DEC-75).
+     */
     data class NeedsPassword(
         val failures: Int,
         val retryAt: Long,
         val couldNotOpen: Boolean,
         val reason: PasswordReason = PasswordReason.None,
         val fingerprintUsable: Boolean = false,
+        val storageFull: Boolean = false,
     ) : GateState {
         override fun toString() = "NeedsPassword(failures=$failures, retryAt=$retryAt, couldNotOpen=$couldNotOpen, " +
-            "reason=$reason, fingerprintUsable=$fingerprintUsable)"
+            "reason=$reason, fingerprintUsable=$fingerprintUsable, storageFull=$storageFull)"
     }
 
     /** The app is locked; [resume] returns on unlock. With a [password] entry it is the password screen. */
@@ -73,7 +77,10 @@ sealed interface GateState {
     data object KeyUnavailable : GateState
 }
 
-/** The password screen of a `Locked` state; it holds no password. [checkFailed]: the last check hit a Keystore failure (T50). */
+/**
+ * The password screen of a `Locked` state; it holds no password. [checkFailed]: the last check hit a Keystore failure
+ * (T50). [storageFull]: the last password was not checked, because its attempt could not be counted (DEC-75).
+ */
 data class PasswordEntry(
     val reason: PasswordReason,
     val fingerprintUsable: Boolean,
@@ -81,9 +88,10 @@ data class PasswordEntry(
     val retryAt: Long,
     val checking: Boolean = false,
     val checkFailed: Boolean = false,
+    val storageFull: Boolean = false,
 ) {
     override fun toString() = "PasswordEntry(reason=$reason, fingerprintUsable=$fingerprintUsable, failures=$failures, " +
-        "retryAt=$retryAt, checking=$checking, checkFailed=$checkFailed)"
+        "retryAt=$retryAt, checking=$checking, checkFailed=$checkFailed, storageFull=$storageFull)"
 }
 
 /** What a `Locked` state returns to on unlock. */

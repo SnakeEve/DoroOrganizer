@@ -21,6 +21,7 @@ import java.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
@@ -406,70 +407,100 @@ class KeyVaultTest {
         assertTrue(vault.unlock(password) is UnlockResult.Throttled)
     }
 
-    // --- SettingsStore write failures (security.md § 3.6) ---
+    // --- counting before checking, and SettingsStore write failures (DEC-75, security.md § 3.6) ---
+
+    @Test
+    fun anAttempt_isCountedBeforeItsPasswordIsChecked() = runVaultTest {
+        val vault = vault()
+        vault.install(KeyMode.PASSWORD, password)
+        settings.setBackoff(failures = 4, retryAtElapsedMs = 0)
+        val fifthWait = time.elapsedMillis() + 30_000
+        var duringTheCheck: Pair<Int, Long>? = null
+        kdf.onDerive = { duringTheCheck = runBlocking { backoff() } }
+
+        assertTrue(vault.unlock(password) is UnlockResult.Key)
+
+        // A process that dies during the check has already paid for this guess.
+        assertEquals(5 to fifthWait, duringTheCheck)
+        assertEquals("a correct password resets the count", 0 to 0L, backoff())
+    }
 
     @Test
     fun failingSuccessWrite_stillReturnsTheKey_andTheReminderStaysDue() = runVaultTest {
         val vault = vault()
         val prepared = vault.install(KeyMode.PASSWORD, password)
         time.advanceBy(Duration.ofMillis(PasswordReminder.INTERVAL_MS))
-        settings.failEdits = true
+        settings.failEditsFrom = settings.edits + 2 // the count before the check is written, the success write fails
 
         val result = vault.unlock(password) as UnlockResult.Key
 
         assertArrayEquals(prepared.rawKey, result.rawKey)
         assertTrue(vault.isPasswordReminderDue())
+        assertEquals("with the write-back failing too, the counted attempt stays", 1 to 0L, backoff())
     }
 
     @Test
-    fun failingCountWrite_answersAWaitComputedInMemory_andPersistsNothing() = runVaultTest {
+    fun failingSuccessWrite_writesBackThePairFromBeforeTheAttempt_soNoWaitIsLeft() = runVaultTest {
         val vault = vault()
         vault.install(KeyMode.PASSWORD, password)
-        settings.setBackoff(failures = 2, retryAtElapsedMs = 0)
-        settings.failEdits = true
-        val derivations = kdf.derivations().size
+        time.advanceBy(Duration.ofMillis(PasswordReminder.INTERVAL_MS))
+        settings.setBackoff(failures = 4, retryAtElapsedMs = 0)
+        settings.failPasswordVerified = true
+
+        assertTrue(vault.unlock(password) is UnlockResult.Key)
+
+        assertEquals("the fifth count and its 30 s wait are taken back", 4 to 0L, backoff())
+        assertTrue(vault.isPasswordReminderDue())
+    }
+
+    @Test
+    fun aWrongPasswordsWait_runsFromTheEndOfTheCheck() = runVaultTest {
+        val vault = vault()
+        vault.install(KeyMode.PASSWORD, password)
+        settings.setBackoff(failures = 4, retryAtElapsedMs = 0)
+        kdf.onDerive = { time.setElapsed(time.elapsedMillis() + 2_000) } // the derivation takes 2 s
 
         val result = vault.unlock(wrongPassword)
 
-        assertEquals(UnlockResult.Throttled(2, time.elapsedMillis() + 30_000), result)
-        assertEquals(derivations + 1, kdf.derivations().size)
-        assertEquals(2 to 0L, backoff())
+        val retryAt = time.elapsedMillis() + 30_000
+        assertEquals(UnlockResult.PasswordRejected(5, retryAt), result)
+        assertEquals(5 to retryAt, backoff())
     }
 
     @Test
-    fun failingCountWrite_pastTheFifthFailure_waitsTheNextDelay() = runVaultTest {
-        val vault = vault()
-        vault.install(KeyMode.PASSWORD, password)
-        settings.setBackoff(failures = 6, retryAtElapsedMs = time.elapsedMillis())
-        settings.failEdits = true
-
-        val result = vault.unlock(wrongPassword)
-
-        assertEquals(UnlockResult.Throttled(6, time.elapsedMillis() + 120_000), result)
-    }
-
-    @Test
-    fun failingCountWrite_bindsTheNextAttemptsInMemory_andTheCountCarriesOn() = runVaultTest {
+    fun failingCountWrite_checksNoPassword_andAnswersStorageFull_withTheBackoffUnchanged() = runVaultTest {
         val vault = vault()
         val slot = vault.install(KeyMode.PASSWORD, password).slot
         settings.setBackoff(failures = 2, retryAtElapsedMs = 0)
         settings.failEdits = true
-        val first = vault.unlock(wrongPassword) as UnlockResult.Throttled
         val derivations = kdf.derivations().size
-        // DEC-75: the first answer carries the count before the attempt; the floor holds that attempt, failures + 1,
-        // and binds every later attempt with the same wait.
-        val floor = UnlockResult.Throttled(first.failures + 1, first.retryAtElapsedMs)
+        val storageFull = UnlockResult.StorageFull(2, 0)
 
-        assertEquals(UnlockResult.Throttled(2, time.elapsedMillis() + 30_000), first)
-        assertEquals(floor, vault.unlock(password))
-        assertEquals(floor, vault.openKey(slot, password))
-        assertEquals(floor, vault.verifyPassword(password))
-        assertEquals("no free extra guess", derivations, kdf.derivations().size)
+        assertEquals(storageFull, vault.unlock(wrongPassword))
+        assertEquals("the right password cannot unlock either", storageFull, vault.unlock(password))
+        assertEquals(storageFull, vault.openKey(slot, password))
+        assertEquals(storageFull, vault.verifyPassword(password))
 
-        time.setElapsed(first.retryAtElapsedMs)
+        assertEquals("no password was checked", derivations, kdf.derivations().size)
+        assertEquals(2 to 0L, backoff())
+    }
+
+    @Test
+    fun failingCountWrite_givesNoExtraGuessAfterARestart_andTheCountCarriesOnOnceSpaceIsFree() = runVaultTest {
+        vault().install(KeyMode.PASSWORD, password)
+        settings.setBackoff(failures = 2, retryAtElapsedMs = 0)
+        settings.failEdits = true
+        assertEquals(UnlockResult.StorageFull(2, 0), vault().unlock(wrongPassword))
+
+        // A new process: nothing in memory, and still no password is checked while the count cannot be written.
+        val restarted = vault()
+        val derivations = kdf.derivations().size
+        assertEquals(UnlockResult.StorageFull(2, 0), restarted.unlock(wrongPassword))
+        assertEquals(derivations, kdf.derivations().size)
+
         settings.failEdits = false
-        assertEquals(UnlockResult.PasswordRejected(4, 0), vault.unlock(wrongPassword))
-        assertEquals(4 to 0L, backoff())
+        assertEquals(UnlockResult.PasswordRejected(3, 0), restarted.unlock(wrongPassword))
+        assertEquals(3 to 0L, backoff())
     }
 
     @Test
@@ -509,6 +540,19 @@ class KeyVaultTest {
         assertEquals(KeyFailure.KeyUnavailable, failure.failure)
         assertEquals(0 to 0L, backoff())
         secrets.assertAllZeroExcept()
+    }
+
+    @Test
+    fun anyOtherPasswordLayerFailure_takesBackTheCountedAttempt_andItsWait() = runVaultTest {
+        val vault = vault()
+        vault.install(KeyMode.PASSWORD, password)
+        settings.setBackoff(failures = 4, retryAtElapsedMs = 0)
+        kdf.onDerive = { throw IllegalArgumentException("injected") }
+
+        assertEquals(UnlockResult.KeyFailed, vault.unlock(password))
+
+        // DEC-76: errors never count, so the fifth count and its 30 s wait written before the check are gone.
+        assertEquals(4 to 0L, backoff())
     }
 
     @Test

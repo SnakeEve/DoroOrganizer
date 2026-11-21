@@ -122,14 +122,15 @@ class KeyVaultBiometricTest {
     }
 
     @Test
-    fun status_anAliasCheckThatKeepsFailing_isDead_andDeletesNothing() = runVaultTest {
+    fun status_anAliasCheckThatKeepsFailing_isUnknown_andDeletesNothing() = runVaultTest {
         val vault = vault()
         vault.installWithSlot()
         val before = rule.stateFile.readBytes()
         repeat(2) { bio.failNext(BioOp.ContainsAlias, KeyStoreException("injected")) }
 
-        // Not Live, so a failed password KEK reaches KeyUnavailable instead of looping through the slot (DEC-86).
-        assertEquals(BioSlotStatus.Dead, vault.biometricSlotStatus())
+        // Not Live, so a failed password KEK reaches KeyUnavailable instead of looping through the slot (DEC-86); not
+        // Dead either, because the key may still exist (DEC-77 as the owner signed it off).
+        assertEquals(BioSlotStatus.Unknown, vault.biometricSlotStatus())
 
         assertTrue(rule.bioKeyExists())
         assertArrayEquals(before, rule.stateFile.readBytes())

@@ -34,7 +34,8 @@ import org.junit.runner.RunWith
  * selected notes in plural form; the selection ends after an action, on Back (before the search, which returns without
  * focus) and on a tab change, whose returning tab never shows it; selection mode locks
  * the filters and offers no batch check; Associate links the selection to the entities picked and created on both
- * tabs of its picker in one call, and Back from that picker keeps the selection and writes nothing.
+ * tabs of its picker in one call, and Back from that picker keeps the selection and writes nothing; that picker,
+ * restored after Android closed the app, stays with a saved selection and closes without one (DEC-57).
  */
 @RunWith(AndroidJUnit4::class)
 class BatchUiTest : ListComposeTest() {
@@ -253,8 +254,54 @@ class BatchUiTest : ListComposeTest() {
         assertEquals(1L, count("SELECT COUNT(*) FROM persons"))
     }
 
+    /** DEC-57 fix: like the Set date and Delete dialogs, an Associate picker that lost its selection closes. */
+    @Test
+    fun theAssociatePicker_restoredWithoutItsSelection_closes_andLinksNothing() {
+        var first = 0L
+        startWith {
+            person("Alice", createdAt = now)
+            first = note("first", createdAt = now)
+            repeat(UNSAVED_SELECTION - 1) { note("n$it", createdAt = now - 1 - it) }
+        }
+        awaitRow(first)
+        longPress(first)
+        tapAction(SELECT_ALL)
+        ui.awaitText(selectedTitle(UNSAVED_SELECTION))
+        tapAction(EditorUi.ASSOCIATE)
+        ui.awaitTag(EditorUi.PICKER_SEARCH)
+
+        scene.recreateAfterProcessDeath() // the selection was too large to be saved
+
+        awaitRow(first)
+        compose.onNodeWithTag(EditorUi.PICKER_SEARCH).assertDoesNotExist()
+        awaitNoSelection()
+        assertEquals(0L, count("SELECT COUNT(*) FROM note_persons"))
+    }
+
+    @Test
+    fun theAssociatePicker_restoredWithItsSavedSelection_staysOpen() {
+        var a = 0L
+        startWith {
+            a = note("a", createdAt = now)
+            person("Alice", createdAt = now)
+        }
+        awaitRow(a)
+        longPress(a)
+        tapAction(EditorUi.ASSOCIATE)
+        ui.awaitTag(EditorUi.PICKER_SEARCH)
+
+        scene.recreateAfterProcessDeath()
+
+        ui.awaitTag(EditorUi.PICKER_SEARCH)
+        ui.pressBack()
+        ui.awaitText(selectedTitle(1))
+    }
+
     private companion object {
         /** Enough frames for the tab change and the returning tab's first effects. */
         const val RETURN_FRAMES = 10
+
+        /** One id more than a saved selection holds (DEC-57). */
+        const val UNSAVED_SELECTION = 1_001
     }
 }

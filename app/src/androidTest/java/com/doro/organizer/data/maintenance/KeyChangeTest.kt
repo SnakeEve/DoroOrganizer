@@ -161,6 +161,31 @@ class KeyChangeTest {
         setup.restart(P1)
     }
 
+    @Test
+    fun aCurrentPasswordThatCannotBeCounted_isNotChecked_andChangesNothing() = runMaintenanceTest {
+        seeded()
+        assertTrue(setup.maintenance.changeKey(KeyMode.PASSWORD, null, P1.toCharArray()) is AppResult.Ok)
+        val stateBytes = vaults.stateFile.readBytes()
+        val failures = setup.settings.snapshot().unlockFailures
+        val prechecks = prechecks()
+        setup.settings.failEdits = true
+
+        val refused = setup.maintenance.changeKey(KeyMode.DEVICE, P1.toCharArray(), null)
+
+        setup.settings.failEdits = false
+        // DEC-75: the right password, but its attempt could not be counted, so it was not checked.
+        assertEquals(AppResult.Err(AppError.StorageFull), refused)
+        assertEquals("stopped before the free-space check", prechecks, prechecks())
+        assertArrayEquals(stateBytes, vaults.stateFile.readBytes())
+        assertEquals(failures, setup.settings.snapshot().unlockFailures)
+        assertEquals(
+            AppResult.Ok(MaintenanceResult.KeyChanged(KeyMode.PASSWORD, KeyMode.DEVICE)),
+            setup.maintenance.changeKey(KeyMode.DEVICE, P1.toCharArray(), null),
+        )
+    }
+
+    private fun prechecks() = setup.hook.steps(MaintenanceOp.KeyChange).count { it == PipelineStep.PRECHECK }
+
     private suspend fun assertWrongCurrentPasswordChangesNothing(flow: Flow) {
         val stateBytes = vaults.stateFile.readBytes()
         val failures = setup.settings.snapshot().unlockFailures

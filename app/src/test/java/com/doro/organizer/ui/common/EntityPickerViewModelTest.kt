@@ -121,7 +121,7 @@ class EntityPickerViewModelTest {
     @Test
     fun batchAssociate_startsEmpty_confirmsOnceAnythingIsChosen_andReturnsBothKinds() = runTest(dispatcher) {
         val handle = SavedStateHandle()
-        val vm = picker(PickerPurpose.BatchAssociate, handle)
+        val vm = picker(PickerPurpose.BatchAssociate(selectionSaved = true), handle)
         collect(vm)
         assertFalse(vm.uiState.value.canConfirm)
 
@@ -175,6 +175,33 @@ class EntityPickerViewModelTest {
         assertEquals(listOf(1L), vm.uiState.value.items.map { (it as PickerItem.Entity).row.id })
         assertNull(handle.get<String>(EntityPickerViewModel.KEY_TAB))
     }
+
+    // DEC-57: an Associate picker that outlived the list's selection.
+
+    @Test
+    fun batchAssociate_overAnUnsavedSelection_isLostOnlyWhenRebuiltFromItsSavedState() = runTest(dispatcher) {
+        val handle = SavedStateHandle()
+        val opened = picker(PickerPurpose.BatchAssociate(selectionSaved = false), handle)
+        assertFalse("a new picker has its selection", opened.selectionLost)
+
+        // Android closed the app: a new ViewModel over the same saved state, as the entry restores it.
+        val rebuilt = picker(PickerPurpose.BatchAssociate(selectionSaved = false), SavedStateHandle(handle.toMap()))
+
+        assertTrue(rebuilt.selectionLost)
+    }
+
+    @Test
+    fun batchAssociate_overASavedSelection_isNeverLost_andSavesNoMarker() = runTest(dispatcher) {
+        val handle = SavedStateHandle()
+        picker(PickerPurpose.BatchAssociate(selectionSaved = true), handle)
+
+        val rebuilt = picker(PickerPurpose.BatchAssociate(selectionSaved = true), SavedStateHandle(handle.toMap()))
+
+        assertFalse(rebuilt.selectionLost)
+        assertFalse(handle.contains(EntityPickerViewModel.KEY_OPENED))
+    }
+
+    private fun SavedStateHandle.toMap(): Map<String, Any?> = keys().associateWith { get<Any?>(it) }
 
     private fun TestScope.collect(vm: EntityPickerViewModel) {
         backgroundScope.launch { vm.uiState.collect {} }

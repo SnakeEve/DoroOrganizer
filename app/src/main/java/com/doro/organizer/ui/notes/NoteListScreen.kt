@@ -68,7 +68,6 @@ import com.doro.organizer.ui.common.rememberDateFormats
 import com.doro.organizer.ui.navigation.EditorKey
 import com.doro.organizer.ui.navigation.Navigator
 import com.doro.organizer.ui.navigation.PickerKey
-import com.doro.organizer.ui.navigation.PickerPurpose
 import com.doro.organizer.ui.navigation.SettingsKey
 
 /** Builds the list's ViewModel in the tab root's entry (architecture.md § Lifetimes). */
@@ -153,7 +152,7 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
                     onExit = vm::exitSelection,
                     onSelectAll = vm::selectAll,
                     onAssociate = {
-                        navigator.open(PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate, navigator.nextVisit()))
+                        navigator.open(PickerKey(EntityKind.Person, vm.associatePurpose(), navigator.nextVisit()))
                     },
                     onSetDate = vm::openSetDate,
                     onDelete = vm::openBatchDelete,

@@ -44,6 +44,15 @@ class GateRoutingTest {
     }
 
     @Test
+    fun anUncountedAttempt_showsTheStorageLine_onBothPasswordScreens() {
+        val needs = GateState.NeedsPassword(2, 0, couldNotOpen = false, storageFull = true)
+        val locked = GateState.Locked(Resume.Ready, password = entry.copy(storageFull = true))
+
+        assertEquals(PasswordScreenModel(PasswordReason.None, false, 2, 0, storageFull = true), passwordScreenOf(needs))
+        assertEquals(PasswordScreenModel(PasswordReason.Reminder, true, 3, 42, storageFull = true), passwordScreenOf(locked))
+    }
+
+    @Test
     fun lockedPasswordEntry_overARunningOperation_carriesItsOp() {
         val gate = GateState.Locked(Resume.Maintenance(backup), password = entry)
 
@@ -129,7 +138,7 @@ class GateRoutingTest {
 
         assertEquals(
             "PasswordScreenModel(reason=None, fingerprintUsable=false, failures=1, retryAt=2, couldNotOpen=false, " +
-                "busy=false, checkFailed=false, maintenance=null)",
+                "busy=false, checkFailed=false, maintenance=null, storageFull=false)",
             text,
         )
     }

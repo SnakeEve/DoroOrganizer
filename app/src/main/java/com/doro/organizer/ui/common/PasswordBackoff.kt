@@ -15,11 +15,14 @@ fun throttledUntil(retryAt: Long, error: AppError?): Long =
 
 /**
  * The line under a current-password field (ui.md § 8.8): while a backoff runs ([throttled]) its countdown replaces
- * "Wrong password." and is plain text, not an error; otherwise a `WrongPassword` [error] shows as an error.
+ * "Wrong password." and is plain text, not an error; otherwise a `StorageFull` [error], an attempt that could not be
+ * counted and so was not checked (DEC-75), and a `WrongPassword` one show as errors, in that order, as on the password
+ * screen.
  */
 @Composable
 fun currentPasswordMessage(throttled: Boolean, remainingMs: Long, error: AppError?): FieldMessage? = when {
     throttled -> FieldMessage(stringResource(R.string.password_throttled, countdownText(remainingMs)), isError = false)
+    error == AppError.StorageFull -> FieldMessage(stringResource(R.string.gate_password_storage_full), isError = true)
     error == AppError.WrongPassword -> FieldMessage(stringResource(R.string.password_wrong), isError = true)
     else -> null
 }

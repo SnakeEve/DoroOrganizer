@@ -20,6 +20,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.doro.organizer.security.FingerprintAvailability
 import com.doro.organizer.security.SlotOffer
 import com.doro.organizer.session.GateState
 import com.doro.organizer.session.Resume
@@ -149,7 +150,7 @@ class AccessibilityTest {
     class Gates : ScriptedGateComposeTest() {
         @Test
         fun gateScreens_everyClickable_hasA48dpTouchTarget() {
-            scene.lock.fingerprintAvailable = true
+            scene.lock.fingerprintAvailable = FingerprintAvailability.Available
             scene.launch(GateState.NeedsPassword(failures = 0, retryAt = 0, couldNotOpen = false))
             ui.awaitPasswordScreen()
             ui.assertEveryClickableHasATouchTarget("password screen")

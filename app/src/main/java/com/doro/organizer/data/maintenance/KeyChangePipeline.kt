@@ -289,6 +289,7 @@ internal class KeyChangePipeline(
         is UnlockResult.Key -> null
         is UnlockResult.PasswordRejected -> AppError.WrongPassword
         is UnlockResult.Throttled -> AppError.Throttled(result.retryAtElapsedMs)
+        is UnlockResult.StorageFull -> AppError.StorageFull // not checked: its attempt could not be counted (DEC-75)
         else -> AppError.KeyUnavailable
     }
 }

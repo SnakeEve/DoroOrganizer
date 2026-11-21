@@ -8,7 +8,9 @@ import com.doro.organizer.model.UnlockRoute
  * The finer causes behind a password decision (security.md § 5.1). Internal to the decision: the gate sees only
  * [PasswordReason] and `fingerprintUsable` through [UnlockPolicy.toRoute].
  */
-internal enum class PasswordCause { LockOff, NoBiometric, SlotMissing, SlotInvalidated, SlotUnavailable, Reminder, UserChose }
+internal enum class PasswordCause {
+    LockOff, NoBiometric, SlotMissing, SlotInvalidated, SlotUnknown, SlotUnavailable, Reminder, UserChose,
+}
 
 /** What an unlock asks for (security.md § 5.1, § 5.5). */
 internal sealed interface PolicyDecision {
@@ -61,6 +63,7 @@ object UnlockPolicy {
             !usable -> PolicyDecision.Password(PasswordCause.NoBiometric)
             bio == BioSlotStatus.None -> PolicyDecision.Password(PasswordCause.SlotMissing)
             bio == BioSlotStatus.Dead -> PolicyDecision.Password(PasswordCause.SlotInvalidated)
+            bio == BioSlotStatus.Unknown -> PolicyDecision.Password(PasswordCause.SlotUnknown)
             reminderDue -> PolicyDecision.Password(PasswordCause.Reminder)
             else -> PolicyDecision.Slot
         }
@@ -95,7 +98,8 @@ object UnlockPolicy {
                 if (kekFailedWithLiveSlot) PasswordReason.KeyStoreFailed else PasswordReason.None,
                 fingerprintUsable = false,
             )
-            PasswordCause.LockOff, PasswordCause.SlotMissing ->
+            // SlotUnknown: the slot may still be good, so no reason claims that the fingerprints changed (DEC-77).
+            PasswordCause.LockOff, PasswordCause.SlotMissing, PasswordCause.SlotUnknown ->
                 UnlockRoute.Password(PasswordReason.None, fingerprintUsable = false)
         }
         PolicyDecision.None, PolicyDecision.AutoOff, PolicyDecision.Biometric, PolicyDecision.DeviceCredential ->

@@ -71,11 +71,15 @@ private fun clearAutoOffNotice(graph: UiGraph) {
     }
 }
 
-/** The biometric lock turned itself off because the device lost its screen lock (security.md § 7.6). */
+/**
+ * The biometric lock turned itself off because the device lost its screen lock (security.md § 7.6). Only "OK" closes
+ * it: Back and a tap outside do nothing, so the notice cannot be dismissed unread (DEC-101).
+ */
 @Composable
 private fun AutoOffNotice(onOk: () -> Unit) {
     AlertDialog(
-        onDismissRequest = onOk,
+        onDismissRequest = {},
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
         title = { Text(stringResource(R.string.lock_auto_off_title)) },
         text = { SecureDialogWindow { DialogContent { Text(stringResource(R.string.lock_auto_off_body)) } } },
         confirmButton = { TextButton(onClick = onOk) { Text(stringResource(R.string.action_ok)) } },

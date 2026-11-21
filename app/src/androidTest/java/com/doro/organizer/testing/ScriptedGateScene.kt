@@ -56,6 +56,14 @@ class ScriptedGateScene(settingsRead: Boolean = true) {
         checkNotNull(scenario) { "not launched" }.recreate()
     }
 
+    /**
+     * Recreates the launched `MainActivity` as after Android closed the app in the background: its state saved, every
+     * ViewModel gone, so each is rebuilt from that state; the container (the gate) stays, as startup would restore it.
+     */
+    fun recreateAfterProcessDeath() {
+        checkNotNull(scenario) { "not launched" }.recreateAfterProcessDeath()
+    }
+
     /** Runs [block] on the main thread with the launched `MainActivity`. */
     fun onActivity(block: (MainActivity) -> Unit) {
         checkNotNull(scenario) { "not launched" }.onActivity(block)

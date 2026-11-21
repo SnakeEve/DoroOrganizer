@@ -11,7 +11,6 @@ import com.doro.organizer.R
 import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.messages.UiText
 import com.doro.organizer.core.messages.UserMessage
-import com.doro.organizer.core.result.AppError
 import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.core.time.AppTime
 import com.doro.organizer.data.EntityRepository
@@ -31,6 +30,7 @@ import com.doro.organizer.settings.SettingsStore
 import com.doro.organizer.ui.common.DaySelection
 import com.doro.organizer.ui.common.NoteRowUi
 import com.doro.organizer.ui.common.toRowUi
+import com.doro.organizer.ui.navigation.PickerPurpose
 import java.io.IOException
 import java.time.LocalDate
 import java.time.YearMonth
@@ -126,6 +126,13 @@ class NoteListViewModel(
 
     /** The Individual or Project entity last shown, whose replacement ends selection mode (ui.md § 5.5 rule 6). */
     private var shownEntity: Long? = null
+
+    /**
+     * A choice of the primary entity that could not be saved in the settings (DEC-99), shown in place of the remembered
+     * id. It is kept with the screen's saved state, so a restored screen still shows it, but never in the settings, so
+     * the next start shows the remembered one.
+     */
+    private val unsavedChoice = MutableStateFlow(UnsavedChoice.of(savedStateHandle[KEY_UNSAVED_CHOICE]))
 
     private val primary: Flow<Primary> = when {
         spec.primaryKind != null -> entityPrimary(spec.primaryKind)
@@ -338,16 +345,19 @@ class NoteListViewModel(
 
     /**
      * Remembers [id] as the person of Individual or the project of Project (DEC-28), from the embedded picker or the
-     * title's picker; secondary filters and search stay.
+     * title's picker; secondary filters and search stay. A choice that cannot be saved is shown anyway, but not
+     * remembered for the next start, and a message says so (DEC-99).
      */
     fun choosePrimary(id: Long) {
         val kind = checkNotNull(spec.primaryKind) { "only Individual and Project have an entity" }
         viewModelScope.launch {
             try {
                 settingsStore.setRemembered(kind, id)
+                setUnsavedChoice(UnsavedChoice.None)
             } catch (_: IOException) {
-                // A failed DataStore write is a full disk (SettingsStore): nothing was remembered, the picker stays.
-                message.value = UserMessage.error(AppError.StorageFull)
+                // A failed DataStore write is a full disk (SettingsStore).
+                setUnsavedChoice(UnsavedChoice.Entity(id))
+                message.value = UserMessage.of(UiText.Res(R.string.primary_not_remembered), isError = true)
             }
         }
     }
@@ -472,6 +482,12 @@ class NoteListViewModel(
     fun deleteSelection() = runBatch(noteRepository::deleteNotes) { UiText.Plural(R.plurals.batch_deleted, it.selected) }
 
     /**
+     * The purpose of the Associate picker over the current selection, which a process death keeps exactly when its
+     * saved key is present (DEC-57, [setSelection]).
+     */
+    fun associatePurpose() = PickerPurpose.BatchAssociate(selectionSaved = savedStateHandle.contains(KEY_SELECTION))
+
+    /**
      * The result of the batch associate picker (ui.md § 5.3, § 7.7): links the selection to the chosen and the new
      * persons and projects in one additive transaction (DEC-33, DEC-36).
      */
@@ -491,8 +507,7 @@ class NoteListViewModel(
      * forgotten. A new choice or a restarted collection keeps the shown primary until the probe answers, so the
      * screen never falls back to `Loading` (ui.md § 3.6: only the rows reload).
      */
-    private fun entityPrimary(kind: EntityKind): Flow<Primary> = settingsStore.settings
-        .map { settings -> settings?.let { Remembered(it.rememberedId(kind)) } }
+    private fun entityPrimary(kind: EntityKind): Flow<Primary> = shownChoice(kind)
         .distinctUntilChanged()
         .flatMapLatest { remembered ->
             val id = remembered?.id
@@ -516,6 +531,18 @@ class NoteListViewModel(
                 val id = (primary as? Primary.Entity)?.id
                 if (shownEntity != null && id != shownEntity) endSelection()
                 shownEntity = id
+            }
+        }
+
+    /** The choice to show: an unsaved one of this screen, else the remembered id; null until the settings are read. */
+    private fun shownChoice(kind: EntityKind): Flow<Remembered?> =
+        combine(settingsStore.settings, unsavedChoice) { settings, unsaved ->
+            settings?.let {
+                when (unsaved) {
+                    UnsavedChoice.None -> Remembered(it.rememberedId(kind))
+                    is UnsavedChoice.Entity -> Remembered(unsaved.id)
+                    UnsavedChoice.Cleared -> Remembered(null)
+                }
             }
         }
 
@@ -564,8 +591,12 @@ class NoteListViewModel(
     private fun markedDays(query: NoteQuery, shown: YearMonth): Flow<Set<Long>> =
         noteRepository.observeMarkedDays(query, shown.atDay(1).toEpochDay(), shown.atEndOfMonth().toEpochDay())
 
-    /** Forgets [id] if it is still the remembered entity of [kind], compared inside the one settings edit. */
+    /**
+     * Forgets [id] if it is still the remembered entity of [kind], compared inside the one settings edit. An unsaved
+     * choice of [id] gives way to no entity, not to an older remembered one: the picker shows, as for a remembered id.
+     */
     private fun forget(kind: EntityKind, id: Long) {
+        if (unsavedChoice.value == UnsavedChoice.Entity(id)) setUnsavedChoice(UnsavedChoice.Cleared)
         viewModelScope.launch {
             try {
                 settingsStore.forgetRemembered(kind, id)
@@ -705,6 +736,11 @@ class NoteListViewModel(
         if (value == null && dialog.value.needsSelection()) setDialog(null)
     }
 
+    private fun setUnsavedChoice(value: UnsavedChoice) {
+        savedStateHandle[KEY_UNSAVED_CHOICE] = value.savedValue
+        unsavedChoice.value = value
+    }
+
     private fun setDialog(value: ListDialog?) {
         savedStateHandle[KEY_LIST_DIALOG] = value?.toKey()
         dialog.value = value
@@ -794,6 +830,39 @@ class NoteListViewModel(
         override fun toString() = "Remembered($id)"
     }
 
+    /**
+     * A primary choice the settings could not save (DEC-99). [Cleared]: its entity was deleted, so the picker shows
+     * rather than an older remembered entity. Saved as one nullable id: null for [None], 0 for [Cleared], which no
+     * entity has (Room's generated ids start at 1).
+     */
+    private sealed interface UnsavedChoice {
+        val savedValue: Long?
+
+        data object None : UnsavedChoice {
+            override val savedValue: Long? = null
+        }
+
+        data class Entity(val id: Long) : UnsavedChoice {
+            override val savedValue: Long get() = id
+
+            override fun toString() = "Entity($id)"
+        }
+
+        data object Cleared : UnsavedChoice {
+            override val savedValue: Long = CLEARED
+        }
+
+        companion object {
+            private const val CLEARED = 0L
+
+            fun of(saved: Long?): UnsavedChoice = when (saved) {
+                null -> None
+                CLEARED -> Cleared
+                else -> Entity(saved)
+            }
+        }
+    }
+
     private class EntityFilters(val person: Long?, val personName: String?, val project: Long?, val projectName: String?) {
         fun chipValue(dimension: FilterDimension, date: DateFilter): ChipValue = when (dimension) {
             FilterDimension.Person -> entityValue(person, personName)
@@ -821,6 +890,7 @@ class NoteListViewModel(
         const val KEY_MONTH = "month"
         const val KEY_LIST_DIALOG = "listDialog"
         const val KEY_SELECTION = "selection"
+        const val KEY_UNSAVED_CHOICE = "unsavedChoice"
         const val KEY_HANDLED_LEAVES = "handledLeaves"
 
         private const val DATE_ANY = "Any"

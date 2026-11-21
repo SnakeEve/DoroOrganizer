@@ -154,6 +154,16 @@ class MaintenanceStatusHostTest {
         }
 
         @Test
+        fun theDatabasePasswordQuestion_saysStorageIsFull_forAnAttemptThatCouldNotBeCounted() {
+            onTheCorruptScreen()
+            scene.maintenance.status.value = MaintenanceStatus.NeedsDatabasePassword(AppError.StorageFull)
+            ui.awaitText(DATABASE_PASSWORD_TITLE)
+            // DEC-75: the password was not checked, so it is not called wrong.
+            compose.onNodeWithText(PASSWORD_STORAGE_FULL).assertExists()
+            compose.onNodeWithText(WRONG_PASSWORD).assertDoesNotExist()
+        }
+
+        @Test
         fun lockMode_waitsWithTheRestoreQuestions_butShowsAFailedErase() {
             scene.launch(GateState.Locked(Resume.Ready, password = entry))
             ui.awaitPasswordScreen()
@@ -270,6 +280,8 @@ class MaintenanceStatusHostTest {
         const val CORRUPT_TITLE = "The database is damaged"
         const val DATABASE_PASSWORD_TITLE = "Enter your startup password"
         const val WRONG_PASSWORD = "Wrong password."
+        const val PASSWORD_STORAGE_FULL =
+            "Not enough free storage, so the password was not checked. Free up some space and try again."
         const val CONFIRM_TITLE = "Restore this backup?"
         const val ERASE_FAILED = "Erase failed"
         const val START_FRESH_FAILED = "Start fresh failed"

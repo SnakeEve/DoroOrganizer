@@ -22,6 +22,12 @@ class LockError(val code: Int, val message: String?) {
     companion object {
         /** Not a BiometricPrompt code: the slot cipher failed (T44, T11); the screen shows `gate_slot_failed`. */
         const val SLOT_FAILED = -1
+
+        /**
+         * Not a BiometricPrompt code: the key-state could not be read at prompt time, so no prompt ran (DEC-96); the
+         * screen shows `gate_key_state_unreadable`.
+         */
+        const val KEY_STATE_UNREADABLE = -2
     }
 }
 

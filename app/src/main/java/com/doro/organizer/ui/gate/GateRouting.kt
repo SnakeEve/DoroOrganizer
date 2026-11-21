@@ -9,8 +9,9 @@ import com.doro.organizer.session.Resume
 /**
  * What the password screen shows (ui.md § 10.2), from `NeedsPassword`, from a `Locked` password entry or, busy, from
  * `Opening(viaPassword)`. [maintenance]: the operation running behind a locked password screen, whose text replaces
- * the reason line; the field is disabled and "Forgot password?" hidden meanwhile. `retryAt` is on the
- * `AppTime.elapsedMillis()` base.
+ * the reason line; the field is disabled and "Forgot password?" hidden meanwhile. [storageFull]: the last password
+ * was not checked, because its attempt could not be counted (DEC-75). `retryAt` is on the `AppTime.elapsedMillis()`
+ * base.
  */
 data class PasswordScreenModel(
     val reason: PasswordReason,
@@ -21,22 +22,26 @@ data class PasswordScreenModel(
     val busy: Boolean = false,
     val checkFailed: Boolean = false,
     val maintenance: MaintenanceOp? = null,
+    val storageFull: Boolean = false,
 ) {
     override fun toString() = "PasswordScreenModel(reason=$reason, fingerprintUsable=$fingerprintUsable, " +
         "failures=$failures, retryAt=$retryAt, couldNotOpen=$couldNotOpen, busy=$busy, checkFailed=$checkFailed, " +
-        "maintenance=$maintenance)"
+        "maintenance=$maintenance, storageFull=$storageFull)"
 }
 
 /** The password screen of [gate], or null when the gate shows another screen (architecture.md § Rendering). */
 fun passwordScreenOf(gate: GateState): PasswordScreenModel? = when (gate) {
-    is GateState.NeedsPassword ->
-        PasswordScreenModel(gate.reason, gate.fingerprintUsable, gate.failures, gate.retryAt, gate.couldNotOpen)
+    is GateState.NeedsPassword -> PasswordScreenModel(
+        gate.reason, gate.fingerprintUsable, gate.failures, gate.retryAt, gate.couldNotOpen,
+        storageFull = gate.storageFull,
+    )
     is GateState.Locked -> gate.password?.let { entry ->
         PasswordScreenModel(
             entry.reason, entry.fingerprintUsable, entry.failures, entry.retryAt,
             busy = entry.checking,
             checkFailed = entry.checkFailed,
             maintenance = (gate.resume as? Resume.Maintenance)?.state?.op,
+            storageFull = entry.storageFull,
         )
     }
     // The open error screen replaces the busy password screen after a transient failure (ui.md § 10.5).

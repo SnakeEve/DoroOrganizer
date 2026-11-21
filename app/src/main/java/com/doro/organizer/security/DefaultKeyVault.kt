@@ -67,8 +67,9 @@ class DefaultKeyVault(
     private var freshSlot: KeySlot? = null
 
     /**
-     * The wait answered while `SettingsStore` could not be written or read. It is not persisted (security.md § 3.6),
-     * but it binds every later attempt in this process, so a failing store never yields a free extra guess.
+     * The wait answered while `SettingsStore` could not be read. It is not persisted (security.md § 3.6), but it
+     * binds every later attempt in this process, so a failing store never yields a free extra guess. A failing write
+     * needs none: an attempt whose count cannot be written is not checked (DEC-75).
      */
     private var memoryBackoff: Backoff? = null
 
@@ -310,28 +311,54 @@ class DefaultKeyVault(
         if (kdfParams == null || innerIv == null) return UnlockResult.KeyFailed
         // (3) The Keystore layer. A failure here never counts: it is KeyUnavailable (security.md § 5.2).
         val inner = outerUnwrapLocked(slot) ?: return UnlockResult.KeyFailed
-        // (4) PBKDF2 and the inner GCM: only its tag failure is a wrong password; any other failure on the password
-        // layer is KeyUnavailable (security.md § 5.2).
+        // (4) The attempt is counted before its password is checked (DEC-75): a process that dies during the check
+        // has already paid for the guess, and an attempt that cannot be counted is not checked at all.
+        val counted = countAttemptLocked(failures)
+        if (counted == null) {
+            inner.fill(0)
+            return UnlockResult.StorageFull(failures, retryAt)
+        }
+        // (5) PBKDF2 and the inner GCM: only its tag failure is a wrong password; any other failure on the password
+        // layer is KeyUnavailable (security.md § 5.2), which never counts, so the counted attempt is taken back.
         val plain = try {
             deriveLocked(password, kdfParams.salt, kdfParams.iterations)
                 .zeroAfter { passwordLayer(Cipher.DECRYPT_MODE, it, innerIv, inner) }
         } catch (e: AEADBadTagException) {
-            return countFailureLocked(failures)
+            return rejectedLocked(counted)
         } catch (e: Exception) {
             AppLog.d("KeyVault: password layer failed: ${e.javaClass.simpleName}")
+            bestEffortWrite { settings.setBackoff(failures, retryAt) }
             return UnlockResult.KeyFailed
         } finally {
             inner.fill(0)
         }
         if (plain.size != SECRET_SIZE) {
             plain.fill(0)
+            bestEffortWrite { settings.setBackoff(failures, retryAt) }
             return UnlockResult.KeyFailed
         }
         val rawKey = plain.intoSecret().zeroAfter { sqlcipherRawKey(it, newSecret) }
         memoryBackoff = null
-        // One edit, best effort: a correct password never fails because of it; the reminder then stays due.
-        bestEffortWrite { settings.recordPasswordVerified(appTime.nowMillis()) }
+        // One edit, best effort: a correct password never fails because of it. If it fails, the reminder stays due
+        // and the pair from before the attempt is written back, so a correct password never leaves the stricter
+        // backoff counted in (4) (DEC-75); only if that write fails too does the counted attempt stay stored.
+        if (!bestEffortWrite { settings.recordPasswordVerified(appTime.nowMillis()) }) {
+            bestEffortWrite { settings.setBackoff(failures, retryAt) }
+        }
         return UnlockResult.Key(rawKey)
+    }
+
+    /**
+     * The answer to a wrong password whose attempt was counted as [counted] (DEC-62): its wait runs from the end of the
+     * check, so the derivation never shortens it. The counted pair, whose wait started before the derivation, binds
+     * if the restarted one cannot be written.
+     */
+    private suspend fun rejectedLocked(counted: Backoff): UnlockResult {
+        val delay = UnlockBackoff.delayMillis(counted.failures)
+        if (delay == 0L) return UnlockResult.PasswordRejected(counted.failures, counted.retryAt)
+        val retryAt = appTime.elapsedMillis() + delay
+        val written = bestEffortWrite { settings.setBackoff(counted.failures, retryAt) }
+        return UnlockResult.PasswordRejected(counted.failures, if (written) retryAt else counted.retryAt)
     }
 
     /**
@@ -356,24 +383,21 @@ class DefaultKeyVault(
     }
 
     /**
-     * Counts a wrong password and persists the pair before answering (DEC-62). If the write fails, the answer is a
-     * wait computed in memory and not persisted: never a crash and never a free extra guess (security.md § 3.6).
-     * The wait and the count are kept in [memoryBackoff], so the next attempt still waits and still counts up.
+     * Persists the pair of one more failure before the password is checked (DEC-62, DEC-75): the pair a wrong
+     * password answers, and that a correct one resets. Null when the write fails: the password must then not be
+     * checked, and nothing is kept in memory, because no guess was made.
      */
-    private suspend fun countFailureLocked(previous: Int): UnlockResult {
+    private suspend fun countAttemptLocked(previous: Int): Backoff? {
         val failures = previous + 1
-        val now = appTime.elapsedMillis()
         val delay = UnlockBackoff.delayMillis(failures)
-        val retryAt = if (delay == 0L) 0L else now + delay
+        val retryAt = if (delay == 0L) 0L else appTime.elapsedMillis() + delay
         return try {
             settings.setBackoff(failures, retryAt)
-            memoryBackoff = null
-            UnlockResult.PasswordRejected(failures, retryAt)
+            memoryBackoff = null // the stored pair now holds at least the floor's count, and its wait has passed
+            Backoff(failures, retryAt)
         } catch (e: Exception) {
             AppLog.d("KeyVault: backoff write failed: ${e.javaClass.simpleName}")
-            val wait = now + maxOf(delay, UnlockBackoff.FIRST_DELAY_MS)
-            memoryBackoff = Backoff(failures, wait)
-            UnlockResult.Throttled(previous, wait)
+            null
         }
     }
 
@@ -594,13 +618,13 @@ class DefaultKeyVault(
         }
     }
 
-    /** Settings writes after a decision never change the answer (security.md § 3.6). */
-    private suspend fun bestEffortWrite(write: suspend () -> Unit) {
-        try {
-            write()
-        } catch (e: Exception) {
-            AppLog.d("KeyVault: settings write failed: ${e.javaClass.simpleName}")
-        }
+    /** Settings writes after a decision never change its outcome (security.md § 3.6); true when [write] succeeded. */
+    private suspend fun bestEffortWrite(write: suspend () -> Unit): Boolean = try {
+        write()
+        true
+    } catch (e: Exception) {
+        AppLog.d("KeyVault: settings write failed: ${e.javaClass.simpleName}")
+        false
     }
 
     /** A copy of this provider-allocated secret in an array from [newSecret]; this array is zeroed. */

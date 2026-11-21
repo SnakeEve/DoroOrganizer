@@ -84,6 +84,7 @@
     <string name="a11y_day_range_start">start of range</string>
     <string name="a11y_day_range_end">end of range</string>
     <string name="a11y_day_in_range">in range</string>
+    <string name="primary_not_remembered">Not enough free storage to remember this choice for next time.</string>
 
     <!-- Selection mode and batch actions (ui.md § 11.5). -->
     <plurals name="selected_count">
@@ -245,7 +246,9 @@
     <string name="gate_password_reminder">Your regular password check: enter it so you keep remembering it.</string>
     <string name="gate_password_fingerprint_changed">The fingerprints on this phone changed, so your password is needed.</string>
     <string name="gate_password_check_failed">The password could not be checked. Try again.</string>
+    <string name="gate_password_storage_full">Not enough free storage, so the password was not checked. Free up some space and try again.</string>
     <string name="gate_password_kek_failed">This phone\'s secure storage failed, so your password cannot open the app right now. Your fingerprint still can: as soon as fingerprint unlock works again, \"Use fingerprint\" appears here. If it does not come back, a backup is the way back: choose \"Forgot password?\", erase all data, then restore the backup from Settings.</string>
+    <string name="gate_key_state_unreadable">The app\'s key file could not be read. Tap \"Unlock\" to try again.</string>
     <string name="gate_slot_failed">Fingerprint unlock did not work. Try again or use your password.</string>
     <string name="forgot_body_fingerprint">You can set a new startup password with your fingerprint. Your notes stay as they are.</string>
     <string name="action_reset_with_fingerprint">Set a new password with your fingerprint</string>
@@ -254,6 +257,7 @@
     <string name="gate_could_not_open">Your password was accepted, but the database could not be opened. Enter it again to try again.</string>
     <string name="gate_unlocking">Unlocking…</string>
     <string name="forgot_title">Forgot password?</string>
+    <string name="forgot_body_fingerprint_unknown">Your fingerprint could not be checked right now, so it cannot set a new password at the moment. Try again later.\n\nIf you cannot wait, you can erase all data and start over. Afterwards you can restore a backup from Settings; an encrypted backup needs the password it was made with.</string>
     <string name="forgot_body">The password cannot be recovered or reset, and without it the data in this app cannot be opened.\n\nYou can erase all data and start over. Afterwards you can restore a backup from Settings; an encrypted backup needs the password it was made with.</string>
     <string name="action_erase_start_over">Erase all data and start over</string>
     <string name="erase_title">Erase all data?</string>

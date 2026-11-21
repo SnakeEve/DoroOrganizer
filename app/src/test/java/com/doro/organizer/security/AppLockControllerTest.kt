@@ -111,6 +111,7 @@ class AppLockControllerTest {
         val setups: List<suspend LockFixture.() -> Unit> = listOf(
             { passwordMode(lock = false) },
             { passwordMode(bio = BioSlotStatus.Dead) },
+            { passwordMode(bio = BioSlotStatus.Unknown) },
             { passwordMode(bio = BioSlotStatus.None) },
             { passwordMode(); gateway.availability = BiometricAvailability.Unavailable },
             { passwordMode(); gateway.deviceSecure = false },
@@ -130,6 +131,7 @@ class AppLockControllerTest {
             Triple(KeyMode.PASSWORD, true, BioSlotStatus.Live),
             Triple(KeyMode.PASSWORD, false, BioSlotStatus.Live),
             Triple(KeyMode.PASSWORD, true, BioSlotStatus.Dead),
+            Triple(KeyMode.PASSWORD, true, BioSlotStatus.Unknown), // DEC-77: never loops back to the slot
             Triple(KeyMode.PASSWORD, true, BioSlotStatus.None),
             Triple(KeyMode.DEVICE, true, BioSlotStatus.None),
         )
@@ -173,6 +175,8 @@ class AppLockControllerTest {
     fun keyStoreReason_dependsOnTheSlotAndTheLock() = runTest {
         val expectations = listOf(
             Triple(BioSlotStatus.Dead, true, UnlockRoute.Password(PasswordReason.FingerprintChanged, false)),
+            // DEC-77: a slot that could not be looked up may still be good, so no text says the fingerprints changed.
+            Triple(BioSlotStatus.Unknown, true, UnlockRoute.Password(PasswordReason.None, false)),
             Triple(BioSlotStatus.None, true, UnlockRoute.Password(PasswordReason.None, false)),
             Triple(BioSlotStatus.Live, false, UnlockRoute.Password(PasswordReason.None, false)),
         )
@@ -217,6 +221,7 @@ class AppLockControllerTest {
             Pair({ gateway.availability = BiometricAvailability.NoneEnrolled }, false),
             Pair({ gateway.deviceSecure = false }, false),
             Pair({ vault.bioStatus = BioSlotStatus.Dead }, false),
+            Pair({ vault.bioStatus = BioSlotStatus.Unknown }, false),
         )
         for ((setup, usable) in cases) {
             val f = LockFixture(this)
@@ -254,7 +259,13 @@ class AppLockControllerTest {
 
     @Test
     fun offer_isPublishedAfterAPasswordUnlock_forAMissingOrDeadSlot_onlyInContent() = runTest {
-        for ((bio, expected) in listOf(BioSlotStatus.None to SlotOffer.Missing, BioSlotStatus.Dead to SlotOffer.Invalidated, BioSlotStatus.Live to null)) {
+        val expectations = listOf(
+            BioSlotStatus.None to SlotOffer.Missing,
+            BioSlotStatus.Dead to SlotOffer.Invalidated,
+            BioSlotStatus.Live to null,
+            BioSlotStatus.Unknown to null, // DEC-77: no set-up while the slot may still be good
+        )
+        for ((bio, expected) in expectations) {
             val f = LockFixture(this)
             f.passwordMode(bio = bio)
             f.controller.onGateScreenChanged(LockScreen.Content, showsError = false)
@@ -313,6 +324,24 @@ class AppLockControllerTest {
         assertTrue(fine.slots.calls.isEmpty())
     }
 
+    @Test
+    fun reconcileLock_deletesNothing_whileTheSlotCannotBeLookedUp() = runTest {
+        val f = LockFixture(this)
+        f.passwordMode(lock = false, bio = BioSlotStatus.Unknown)
+
+        f.controller.reconcileLock()
+
+        assertTrue("DEC-77: nothing is deleted on an unknown answer", f.slots.calls.isEmpty())
+    }
+
+    @Test
+    fun availability_ofASlotThatCannotBeLookedUp_isUnknown_neverMissing() = runTest {
+        val f = LockFixture(this)
+        f.passwordMode(bio = BioSlotStatus.Unknown)
+
+        assertEquals(SlotState.Unknown, f.controller.availability().slot)
+    }
+
     // L-40, controller part: the PASSWORD-mode toggles (security.md § 7.1)
 
     @Test
@@ -359,9 +388,18 @@ class AppLockControllerTest {
     fun fingerprintUnlockAvailable_ignoresTheReminder() = runTest {
         val f = LockFixture(this)
         f.passwordMode(reminder = true)
-        assertTrue(f.controller.fingerprintUnlockAvailable())
+        assertEquals(FingerprintAvailability.Available, f.controller.fingerprintUnlockAvailable())
         f.vault.bioStatus = BioSlotStatus.Dead
-        assertFalse(f.controller.fingerprintUnlockAvailable())
+        assertEquals(FingerprintAvailability.Unavailable, f.controller.fingerprintUnlockAvailable())
+    }
+
+    @Test
+    fun fingerprintUnlockAvailable_ofASlotThatCannotBeLookedUp_isUnknown_onlyWhereTheSlotRouteWouldBeOpen() = runTest {
+        val f = LockFixture(this)
+        f.passwordMode(bio = BioSlotStatus.Unknown)
+        assertEquals(FingerprintAvailability.Unknown, f.controller.fingerprintUnlockAvailable())
+        f.gateway.availability = BiometricAvailability.Unavailable
+        assertEquals(FingerprintAvailability.Unavailable, f.controller.fingerprintUnlockAvailable())
     }
 
     @Test
@@ -415,7 +453,8 @@ class AppLockControllerTest {
             f.gateway.availability = BiometricAvailability.NoneEnrolled // would be the credential, or AutoOff
             f.controller.onGateScreenChanged(screen, showsError = true)
             f.controller.prompt()
-            assertEquals("$screen secure=$secure", listOf("AuthError(5, null)"), f.events.calls)
+            // DEC-96 as the owner signed it off: a line says so, no longer the silent cancel (5).
+            assertEquals("$screen secure=$secure", listOf("AuthError(${LockError.KEY_STATE_UNREADABLE}, null)"), f.events.calls)
             assertEquals(0, f.gateway.prompts.size)
             assertTrue("no auto-off", f.settings.snapshot().biometricLock)
             assertEquals(UnlockRoute.Biometric, f.controller.lockRoute.value)

@@ -13,6 +13,7 @@ import com.doro.organizer.data.maintenance.MaintenanceOp
 import com.doro.organizer.data.maintenance.MaintenanceOrigin
 import com.doro.organizer.data.maintenance.MaintenanceStatus
 import com.doro.organizer.model.PasswordReason
+import com.doro.organizer.security.FingerprintAvailability
 import com.doro.organizer.session.GateState
 import com.doro.organizer.session.Origin
 import com.doro.organizer.session.PasswordEntry
@@ -27,7 +28,8 @@ import org.junit.runner.RunWith
 /**
  * I-52 (DEC-59, DEC-63, ui.md § 10.3): the flag that selects the Forgot password screen, driven by a scripted gate state
  * and a scripted `DbMaintenance.status`, with the failure dialogs of a failed Erase and of a failed fingerprint reset
- * that the maintenance status host shows there (ui.md § 8.12).
+ * that the maintenance status host shows there (ui.md § 8.12); the screen restored after Android closed the app
+ * (DEC-59) and its text for a fingerprint slot that could not be looked up (DEC-77).
  */
 @RunWith(AndroidJUnit4::class)
 class ForgotFlagTest : ScriptedGateComposeTest() {
@@ -71,7 +73,7 @@ class ForgotFlagTest : ScriptedGateComposeTest() {
 
     @Test
     fun d_aStartedFingerprintReset_neverReturnsToTheForgotScreen() {
-        scene.lock.fingerprintAvailable = true
+        scene.lock.fingerprintAvailable = FingerprintAvailability.Available
         scene.launch(needsPassword)
         openTheForgotScreen()
         ui.awaitTag(GateUi.FORGOT_RESET)
@@ -90,7 +92,7 @@ class ForgotFlagTest : ScriptedGateComposeTest() {
         assertEquals(listOf(MaintenanceOrigin.NeedsPassword), scene.maintenance.resets)
         scene.gate.moveTo(GateState.Maintenance(MaintenanceOp.KeyChange, Origin.NeedsPassword, resetFrom = entry))
         ui.awaitTag(GateUi.MAINTENANCE)
-        scene.lock.fingerprintAvailable = false // the slot became unusable meanwhile
+        scene.lock.fingerprintAvailable = FingerprintAvailability.Unavailable // the slot became unusable meanwhile
         val failed = AppResult.Err(AppError.KeyUnavailable)
         scene.maintenance.finishReset(failed)
         scene.maintenance.status.value = MaintenanceStatus.Finished(MaintenanceOp.KeyChange, failed)
@@ -131,6 +133,33 @@ class ForgotFlagTest : ScriptedGateComposeTest() {
         scene.launch(GateState.Locked(Resume.Maintenance(running), password = entry))
         ui.awaitPasswordScreen()
         compose.onNodeWithTag(GateUi.FORGOT).assertDoesNotExist()
+    }
+
+    @Test
+    fun g_aForgotScreenRestoredAfterAndroidClosedTheApp_asksForTheAnswerAgain() {
+        scene.lock.fingerprintAvailable = FingerprintAvailability.Available
+        scene.launch(needsPassword)
+        openTheForgotScreen()
+        ui.awaitTag(GateUi.FORGOT_RESET)
+        assertEquals(1, scene.lock.availabilityCalls.get())
+
+        scene.recreateAfterProcessDeath()
+
+        // Without an answer the screen would stay blank below its top app bar until reopened.
+        ui.awaitTag(GateUi.FORGOT_RESET)
+        assertEquals(2, scene.lock.availabilityCalls.get())
+    }
+
+    @Test
+    fun h_aSlotThatCannotBeLookedUp_saysToTryAgainLater_insteadOfUnrecoverable() {
+        scene.lock.fingerprintAvailable = FingerprintAvailability.Unknown
+        scene.launch(needsPassword)
+        openTheForgotScreen()
+
+        ui.awaitText(UNKNOWN_BODY)
+        compose.onNodeWithText(NOT_AVAILABLE_BODY).assertDoesNotExist()
+        compose.onNodeWithTag(GateUi.FORGOT_RESET).assertDoesNotExist()
+        compose.onNodeWithTag(GateUi.FORGOT_ERASE).assertExists()
     }
 
     /** (a): NeedsPassword → Maintenance(Erase, NeedsPassword) → Starting → NeedsPassword, the Erase having failed. */
@@ -237,5 +266,8 @@ class ForgotFlagTest : ScriptedGateComposeTest() {
         const val NOT_AVAILABLE_BODY = "The password cannot be recovered or reset, and without it the data in this " +
             "app cannot be opened.\n\nYou can erase all data and start over. Afterwards you can restore a backup " +
             "from Settings; an encrypted backup needs the password it was made with."
+        const val UNKNOWN_BODY = "Your fingerprint could not be checked right now, so it cannot set a new password at " +
+            "the moment. Try again later.\n\nIf you cannot wait, you can erase all data and start over. Afterwards you " +
+            "can restore a backup from Settings; an encrypted backup needs the password it was made with."
     }
 }

@@ -85,7 +85,9 @@ internal fun RestoreBackupPasswordDialog(retry: Boolean, onAnswer: (CharArray?) 
 
 /**
  * `NeedsDatabasePassword` (a restore from the Corrupt screen in `PASSWORD` mode): [error] `WrongPassword` shows
- * "Wrong password."; `Throttled` disables the field and Continue with the countdown of the password screen.
+ * "Wrong password."; `StorageFull` (the attempt could not be counted, so the password was not checked, DEC-75) shows
+ * the storage line of the password screen; `Throttled` disables the field and Continue with the countdown of the
+ * password screen.
  */
 @Composable
 internal fun RestoreDatabasePasswordDialog(error: AppError?, appTime: AppTime, onAnswer: (CharArray?) -> Unit) {

@@ -49,6 +49,11 @@ sealed interface GateEvent {
         override fun toString() = "PasswordRejected(failures=$failures, retryAt=$retryAt)"
     }
 
+    /** The password was not checked, because its attempt could not be counted (DEC-75); the backoff is unchanged. */
+    data class PasswordStorageFull(val failures: Int, val retryAt: Long) : GateEvent {
+        override fun toString() = "PasswordStorageFull(failures=$failures, retryAt=$retryAt)"
+    }
+
     data class PasswordNeeded(val failures: Int, val retryAt: Long, val reason: PasswordReason) : GateEvent {
         override fun toString() = "PasswordNeeded(failures=$failures, retryAt=$retryAt, reason=$reason)"
     }

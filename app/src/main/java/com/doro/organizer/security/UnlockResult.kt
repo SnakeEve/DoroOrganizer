@@ -19,6 +19,12 @@ sealed interface UnlockResult {
     /** A backoff runs: no key derivation was attempted. */
     data class Throttled(val failures: Int, val retryAtElapsedMs: Long) : UnlockResult
 
+    /**
+     * The attempt could not be counted, because `SettingsStore` could not be written (a full disk), so its password
+     * was not checked (DEC-75). [failures] and [retryAtElapsedMs] are the backoff in force, unchanged.
+     */
+    data class StorageFull(val failures: Int, val retryAtElapsedMs: Long) : UnlockResult
+
     /** A `PASSWORD` slot and no password supplied. */
     data object PasswordNeeded : UnlockResult
 

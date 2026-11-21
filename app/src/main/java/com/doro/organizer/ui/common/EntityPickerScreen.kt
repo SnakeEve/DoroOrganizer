@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,6 +58,11 @@ private fun pickerFactory(graph: UiGraph, key: PickerKey) = viewModelFactory {
 fun EntityPickerScreen(key: PickerKey, onResult: (PickerResult) -> Unit, onBack: () -> Unit) {
     val graph = LocalUiGraph.current
     val vm: EntityPickerViewModel = viewModel(factory = pickerFactory(graph, key))
+    if (vm.selectionLost) {
+        // As the Set date and Delete dialogs: nothing is left to act on, so the picker closes (DEC-57).
+        LaunchedEffect(vm) { onBack() }
+        return
+    }
     val state by vm.uiState.collectAsStateWithLifecycle()
     val multi = key.purpose.isMultiSelect
     val title = stringResource(pickerTitle(key))
@@ -97,7 +103,7 @@ fun EntityPickerScreen(key: PickerKey, onResult: (PickerResult) -> Unit, onBack:
         snackbarHost = { AppSnackbarHost() },
     ) { padding ->
         Column(Modifier.padding(padding).consumeWindowInsets(padding).imePadding()) {
-            if (key.purpose == PickerPurpose.BatchAssociate) PickerTabs(state, vm::selectTab)
+            if (key.purpose is PickerPurpose.BatchAssociate) PickerTabs(state, vm::selectTab)
             EntityPicker(
                 kind = state.tab,
                 purpose = key.purpose,
@@ -141,7 +147,7 @@ private fun pickerTitle(key: PickerKey): Int {
     val person = key.kind == EntityKind.Person
     return when (key.purpose) {
         is PickerPurpose.EditorLinks -> if (person) R.string.picker_title_add_people else R.string.picker_title_add_projects
-        PickerPurpose.BatchAssociate -> R.string.picker_title_associate
+        is PickerPurpose.BatchAssociate -> R.string.picker_title_associate
         is PickerPurpose.PerspectivePrimary ->
             if (person) R.string.picker_title_choose_person else R.string.picker_title_choose_project
         is PickerPurpose.SecondaryFilter ->
@@ -152,4 +158,4 @@ private fun pickerTitle(key: PickerKey): Int {
 }
 
 private fun confirmLabel(purpose: PickerPurpose): Int =
-    if (purpose == PickerPurpose.BatchAssociate) R.string.action_associate else R.string.action_done
+    if (purpose is PickerPurpose.BatchAssociate) R.string.action_associate else R.string.action_done

@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.data.maintenance.MaintenanceOp
 import com.doro.organizer.model.PasswordReason
@@ -27,8 +28,8 @@ import org.junit.runner.RunWith
 
 /**
  * I-51, the gate screens' part (DEC-63, DEC-65, DEC-86; literals copied from ui.md § 11), from a scripted gate state:
- * the slot failure of the lock screen (T44), the check failure of the password screen (T50) and the password screen
- * over a running operation. The § 8.16 dialog and the `RestoreKey` prompt are `SettingsLockUiTest`, the kekBroken
+ * the slot failure and the unreadable key-state (DEC-96) of the lock screen (T44), the check failure (T50) and the
+ * uncounted attempt (DEC-75) of the password screen, and the password screen over a running operation. The § 8.16 dialog and the `RestoreKey` prompt are `SettingsLockUiTest`, the kekBroken
  * notice `ShellDialogsTest`.
  */
 @RunWith(AndroidJUnit4::class)
@@ -42,6 +43,25 @@ class FingerprintStringsTest : ScriptedGateComposeTest() {
         ui.awaitTag(GateUi.USE_PASSWORD)
         compose.onNodeWithTag(GateUi.UNLOCK).assertTouchTarget()
         compose.onNodeWithTag(GateUi.USE_PASSWORD).assertTouchTarget()
+    }
+
+    @Test
+    fun anUnreadableKeyState_onTheLockScreen_saysSo_andHowToTryAgain() {
+        scene.launch(GateState.Locked(Resume.Ready, authError = LockError(LockError.KEY_STATE_UNREADABLE, null)))
+        ui.awaitLockScreen()
+        val line = compose.onNodeWithTag(KEY_STATE_LINE)
+        line.assertTextEquals(KEY_STATE_UNREADABLE)
+        line.assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+        compose.onNodeWithTag(GateUi.UNLOCK).assertTouchTarget()
+    }
+
+    @Test
+    fun anUncountedAttempt_onThePasswordScreen_saysStorageIsFull_notWrongPassword() {
+        val entry = PasswordEntry(PasswordReason.None, fingerprintUsable = false, failures = 3, retryAt = 0, storageFull = true)
+        scene.launch(GateState.Locked(Resume.Ready, password = entry))
+        ui.awaitPasswordScreen()
+        ui.awaitText(STORAGE_FULL)
+        compose.onNodeWithText(WRONG_PASSWORD, useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test
@@ -73,6 +93,10 @@ class FingerprintStringsTest : ScriptedGateComposeTest() {
     private companion object {
         const val SLOT_FAILED = "Fingerprint unlock did not work. Try again or use your password."
         const val CHECK_FAILED = "The password could not be checked. Try again."
+        const val KEY_STATE_LINE = "gate_key_state_unreadable_text"
+        const val KEY_STATE_UNREADABLE = "The app's key file could not be read. Tap \"Unlock\" to try again."
+        const val STORAGE_FULL = "Not enough free storage, so the password was not checked. Free up some space and try again."
+        const val WRONG_PASSWORD = "Wrong password."
 
         /** Each operation that can run behind a locked password screen, with its text (ui.md § 10.6). */
         val operations = listOf(

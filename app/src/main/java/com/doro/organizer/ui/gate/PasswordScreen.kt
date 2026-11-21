@@ -86,6 +86,9 @@ internal fun PasswordScreen(
             enabled = inputEnabled,
             message = when {
                 throttled -> FieldMessage(throttledText, isError = false) // not a live region (ui.md § 12.3)
+                // Not a wrong password: it was not checked, because its attempt could not be counted (DEC-75).
+                model.storageFull && !model.busy && model.maintenance == null ->
+                    FieldMessage(stringResource(R.string.gate_password_storage_full), isError = true)
                 model.failures > 0 && !model.busy && model.maintenance == null ->
                     FieldMessage(stringResource(R.string.password_wrong), isError = true)
                 else -> null

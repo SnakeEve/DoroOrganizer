@@ -18,6 +18,7 @@ import com.doro.organizer.model.UnlockRoute
 import com.doro.organizer.security.AppLockController
 import com.doro.organizer.security.AuthPurpose
 import com.doro.organizer.security.BiometricAvailability
+import com.doro.organizer.security.FingerprintAvailability
 import com.doro.organizer.security.LockAvailability
 import com.doro.organizer.security.SlotOffer
 import com.doro.organizer.security.SlotState
@@ -86,7 +87,7 @@ class ScriptedLockController : AppLockController by unused() {
     @Volatile var restoreKeyHeld: CompletableDeferred<AppResult<SlotCipher?>>? = null
 
     /** The answer of `fingerprintUnlockAvailable()`. */
-    @Volatile var fingerprintAvailable = false
+    @Volatile var fingerprintAvailable = FingerprintAvailability.Unavailable
     val availabilityCalls = AtomicInteger()
 
     /** The answer of the next `slotPrompt(ResetPassword)`. */
@@ -97,7 +98,7 @@ class ScriptedLockController : AppLockController by unused() {
 
     override fun detach(activity: FragmentActivity) = Unit
 
-    override suspend fun fingerprintUnlockAvailable(): Boolean {
+    override suspend fun fingerprintUnlockAvailable(): FingerprintAvailability {
         availabilityCalls.incrementAndGet()
         return fingerprintAvailable
     }

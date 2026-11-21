@@ -14,7 +14,8 @@ interface KeyVault {
     /**
      * Effect E2, password path: `PLAIN` gives `Key(ByteArray(0))`, `DEVICE` the unwrapped key, `PASSWORD` without
      * a password [UnlockResult.PasswordNeeded]. A missing or invalid file gives [UnlockResult.KeyFailed]. An empty
-     * [password] means "supplied but unusable" and is rejected without counting.
+     * [password] means "supplied but unusable" and is rejected without counting. A password is counted before it is
+     * checked; one whose count cannot be written is not checked: [UnlockResult.StorageFull] (DEC-75).
      */
     suspend fun unlock(password: ByteArray?): UnlockResult
 
@@ -23,7 +24,7 @@ interface KeyVault {
 
     /**
      * Proves the password of the committed `PASSWORD` slot and zeroes the key it built: [UnlockResult.Verified],
-     * `PasswordRejected`, `Throttled` or `KeyFailed` (also for a slot that is not `PASSWORD`).
+     * `PasswordRejected`, `Throttled`, `StorageFull` or `KeyFailed` (also for a slot that is not `PASSWORD`).
      */
     suspend fun verifyPassword(password: ByteArray): UnlockResult
 
@@ -59,7 +60,7 @@ interface KeyVault {
      * The committed slot's condition: `Live` only while its own key (`bioSlot.keyAlias`, DEC-98) exists. Asks the
      * Keystore only whether that alias exists (no operation, no authentication): the single slot query of
      * `UnlockPolicy`, availability and `reconcileLock`. An alias check that fails twice (retried after 1 s, § 5.2) is
-     * `Dead`: a slot that cannot be looked up is not live.
+     * `Unknown` (DEC-77): a slot that cannot be looked up is not live, and not known to be dead either.
      */
     suspend fun biometricSlotStatus(): BioSlotStatus
 

@@ -7,7 +7,6 @@ import com.doro.organizer.model.KeyMode
 import com.doro.organizer.testing.LockFixture
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -24,7 +23,7 @@ class SlotPromptGatingTest {
         val f = LockFixture(this)
         f.mode(KeyMode.PASSWORD, lock = true, bio = BioSlotStatus.Live)
         f.vault.reminderDue = true
-        assertTrue(f.controller.fingerprintUnlockAvailable())
+        assertEquals(FingerprintAvailability.Available, f.controller.fingerprintUnlockAvailable())
     }
 
     @Test
