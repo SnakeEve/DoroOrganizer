@@ -84,7 +84,7 @@ The shell is what `DoroRoot` composes in `Ready` (and under the overlay in `Main
 - Leaving a tab clears its selection (DEC-36, section 5.5). Tapping the tab that is already current scrolls its list to the top (animated) and changes nothing else. Neither event can be derived from composition or lifecycle: a tab that is not current is not passed to `NavDisplay`, and `onDispose` or `ON_STOP` also fire on rotation, on a lock and while a picker covers the list, all of which must keep the selection (section 5.5). Both are explicit counters:
   - `NavigationState` keeps two saveable `IntArray`s indexed by `Perspective`: `leaves` and `reselects`. `Navigator.selectTab(p)` increments `leaves[current]` when `p != current` and `reselects[p]` when `p == current`. Back from the root of a tab other than All increments `leaves[current]` ([architecture.md § Back behavior](architecture.md#back-behavior)).
   - The `TabKey` entry passes `leaveCount = leaves[p]` and `reselectCount = reselects[p]` to `NoteListScreen`.
-  - `LaunchedEffect(leaveCount) { vm.onTabLeft(leaveCount) }`: the ViewModel keeps `handledLeaves` in its `SavedStateHandle` (section 3.10) and clears the selection only when `leaveCount > handledLeaves`.
+  - `LaunchedEffect(leaveCount) { vm.onTabLeft(leaveCount) }`: the ViewModel keeps `handledLeaves` in its `SavedStateHandle` (section 3.10) and clears the selection only when `leaveCount > handledLeaves`. `handledLeaves` is also read-only snapshot state of the ViewModel, and `NoteListScreen` shows its state with `selection = null` while `leaveCount > vm.handledLeaves`: a tab that is not current is not composed, so its retained state still holds the old selection, and a returning tab never shows it, not even in the frames before `onTabLeft` runs.
   - `LaunchedEffect(reselectCount)`: when `reselectCount` exceeds a `rememberSaveable` handled value, the list (in Individual and Project without a chosen entity, the embedded picker list) animates to item 0.
   - Neither effect uses `onDispose` or `ON_STOP`. The counters are part of `NavigationState` ([architecture.md § Keys and stacks](architecture.md#keys-and-stacks)) and start again with it after a data reset.
 - Icon assets: section 13.5.
@@ -201,7 +201,7 @@ data class PerspectiveSpec(
 ### 3.3 Search bar
 
 - The Search action (section 2.2) replaces the top app bar with a search bar. It is its own composable, not the title slot of a `TopAppBar`, whose fixed 64 dp content height would clip the field at 200 % font: `Surface(color = <top app bar container color>) { Row(Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets).heightIn(min = 64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) { <close button>; TextField(Modifier.weight(1f), <transparent container, no indicator>); <clear button> } }`. It is 64 dp high at 100 % font and grows with the font size. Content: navigation icon `ic_arrow_back` ("Close search", `action_close_search`), a single-line `TextField` with placeholder "Search notes" (`search_hint`), and a trailing `ic_close` icon button ("Clear search text", `action_clear_search`) while the text is not empty. The filter chips stay visible below.
-- Opening the bar with the Search action focuses the field and shows the keyboard; the focus request is UI-local and not saved, so a bar that reappears after a rotation or a process death has neither focus nor keyboard. Keyboard options: `KeyboardType.Text`, `ImeAction.Search`, `autoCorrectEnabled = false`, `KeyboardCapitalization.None`. The field is always wrapped in `NoPersonalizedLearning` ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)), which sets `EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING` on every input session of the field (DEC-71, Q11: the keyboard must never learn). The flag is unconditional: it depends on no setting, not on screenshot protection and not on the window policy, so there is no `CompositionLocal` for it and nothing reads `SettingsStore` for it. The wrapper is always present and never changes, so the field never moves in the composition and keeps its focus and state.
+- Opening the bar with the Search action focuses the field and shows the keyboard; the focus request is UI-local, not saved and used once (`SearchBar(focusOnStart, onFocusedOnStart)`: the screen drops its request when the bar reports that it took focus), so a bar that reappears after a rotation, a process death or selection mode (section 5.1) has neither focus nor keyboard. Keyboard options: `KeyboardType.Text`, `ImeAction.Search`, `autoCorrectEnabled = false`, `KeyboardCapitalization.None`. The field is always wrapped in `NoPersonalizedLearning` ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)), which sets `EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING` on every input session of the field (DEC-71, Q11: the keyboard must never learn). The flag is unconditional: it depends on no setting, not on screenshot protection and not on the window policy, so there is no `CompositionLocal` for it and nothing reads `SettingsStore` for it. The wrapper is always present and never changes, so the field never moves in the composition and keeps its focus and state.
 - The field shows what was typed, capped at `SearchText.MAX_TERM_CHARS` (1,000) characters, surrogate pairs kept whole and without a message (`model.capChars`; [data-layer.md § Search](data-layer.md#search); the cap keeps the saved state small, section 3.10). `NoteListViewModel` stores the raw text at once (`searchText`, Compose snapshot state written inside the field's `onValueChange` and mirrored to the `SavedStateHandle`, so the field never waits for a flow round trip, DEC-99) and copies it into `NoteFilter.search` after 300 ms without further input (debounce). Trimming, case folding and wildcard escaping happen in `SearchText.toLikeTerm` ([data-layer.md § Search](data-layer.md#search)); input that is blank after trimming means no search filter (DEC-29). The ImeAction, the clear button and closing the bar apply at once, without the debounce.
 - The ImeAction hides the keyboard and keeps the bar open. The clear button empties the field and keeps focus.
 - Closing the bar (navigation icon or Back, section 2.5) clears the text and the search filter. A search filter applies only while the bar is open, or while selection mode has temporarily replaced an open bar (section 5.1), so the user always sees or returns to the active query.
@@ -223,7 +223,7 @@ data class PerspectiveSpec(
 - Semantics: the chip replaces its default checkbox semantics with `Modifier.clearAndSetSemantics { role = Role.DropdownList; contentDescription = …; onClick(label = …) { … } }`. The content description is "Person filter: %1$s" (`a11y_filter_person`; `a11y_filter_project` and `a11y_filter_date` for the other chips) with the displayed value, or with "Any" (`filter_any`) when not set. The click label is "Change filter" (`a11y_change_filter`).
 - Tap: Person and Project open the single-select `EntityPicker` (`PickerKey(kind, PickerPurpose.SecondaryFilter(...))`, section 7). Its first row, "Any person" / "Any project", clears the dimension. Date opens the date filter sheet (section 3.5).
 - A filter whose person or project is deleted is cleared automatically (DEC-34; existence probe in [data-layer.md § Reactivity](data-layer.md#reactivity)).
-- At most one person and one project (DEC-28). Every change clears the selection (DEC-36); in selection mode the chips are disabled (section 5.1).
+- At most one person and one project (DEC-28). Every change clears the selection (DEC-36); in selection mode the chips are disabled (section 5.1): `FilterChipRow(enabled = false)` passes `enabled` to each `FilterChip`, and a disabled chip's semantics carry `disabled()` and no click action.
 
 ### 3.5 Date filter sheet
 
@@ -322,6 +322,7 @@ The row container uses `Modifier.combinedClickable` (it merges the row's text in
 | Tap on the checkbox | Mark done or not done (section 3.9) | Same; it never changes the selection (DEC-54) |
 | Accessibility custom action on the row node, labelled "Mark note as done" / "Mark note as not done" (`a11y_mark_done`, `a11y_mark_not_done`) | Same as the checkbox | Same as the checkbox |
 
+- `NoteRowItem(row, formats, onCheckedChange, onLongClick, modifier, selected: Boolean? = null, onClick: (() -> Unit)? = null)`: `selected` is null outside selection mode; `onLongClick` enters selection mode or, in it, does what a tap does. Until the editor exists (SPEC T18), a row outside selection mode gets `onClick = null` and with it a long-press only: `pointerInput { detectTapGestures(onLongPress = …) }` with the `LongPress` haptic and a semantics `onLongClick` action labelled "Select note", and no tap, ripple or focus target, so the row never offers a click that does nothing; a keyboard user has no way into selection mode until then. T18 gives every row its `combinedClickable` and removes this branch.
 - There is no swipe gesture on rows.
 - A note that disappears while its row is being tapped (deleted elsewhere, a restore) is handled by the editor, which closes with "This note no longer exists." (`note_gone`, section 6.8).
 
@@ -350,10 +351,14 @@ data class NoteListUiState(
     val searchOpen: Boolean,
     val dateFilter: DateFilter,          // the date chip's value, shown by the date filter sheet
     val selection: Set<Long>?,           // null = not in selection mode
+    val batchRunning: Boolean,           // Select all or a batch action runs (section 5.3)
     val calendar: CalendarUi?,           // Date only: displayed month, marked days, today, selection
     val dialog: ListDialog?,             // the open sheet or dialog of this screen
     val message: UserMessage?,
-) { override fun toString() = "NoteListUiState(${spec.perspective}, rows=${rows.size})" }
+) {
+    override fun toString() = "NoteListUiState(${spec.perspective}, rows=${rows.size})"
+    val selecting: Boolean get() = selection != null   // selection mode is on (section 5)
+}
 
 enum class RangeEnd { From, Until }
 sealed interface ListDialog {            // saved as the String key listDialog, below
@@ -374,15 +379,15 @@ Saved per perspective in the entry's `SavedStateHandle` (DEC-28): it survives ro
 | `personId`, `projectId` | `Long?` | Secondary person and project filters |
 | `dateKind`, `dateFrom`, `dateTo` | `String`, `Long?`, `Long?` | Date filter: `"Any"`, `"Undated"` or `"Range"` with epoch days |
 | `searchOpen`, `searchText` | `Boolean`, `String` | Search bar state and raw text |
-| `selection` | `LongArray?` | Selected note ids; absent = not in selection mode. Written only while it holds at most 1,000 ids (budget below) |
+| `selection` | `LongArray?` | Selected note ids; absent = not in selection mode, or a selection of more than 1,000 ids (budget below): a larger selection removes the key rather than leaving an older, smaller value, so absent always means no saved selection |
 | `day`, `rangeFrom`, `rangeTo`, `month` | `Long?` | Date only: selected day, or range ends; first day of the displayed month (epoch days) |
 | `listDialog` | `String?` | The open `ListDialog`: its simple name, with the end for `DateEndPicker`, for example `"DateEndPicker:From"`; absent = none |
 | `handledLeaves` | `Int` | The last `leaveCount` of section 2.1 this ViewModel has handled |
 
 - The Individual and Project primary is not in the `SavedStateHandle`: it is `SettingsStore.rememberedPersonId` / `rememberedProjectId` (DEC-28, architecture.md § Dependency injection), cleared by the existence probe when the entity disappears.
-- A restored `selection` is pruned to the ids of the first emission; if nothing remains, selection mode ends, and a restored `SetDate` or `BatchDelete` dialog is dropped with it.
+- A restored `selection` is pruned to the ids of the first emission; if nothing remains, selection mode ends, and a restored `SetDate` or `BatchDelete` dialog is dropped with it. A restored `SetDate` or `BatchDelete` dialog without a restored `selection` (it held more than 1,000 ids) is dropped when the ViewModel starts, and its `listDialog` key is cleared.
 - Every sheet and dialog of the list screen is a `ListDialog`, so each survives rotation and process death (section 8.1). The selection inside an open `DatePicker` is UI-local (`rememberDatePickerState` is saveable) and not part of the ViewModel. Overflow `DropdownMenu`s are UI-local and are not restored after process death.
-- Saved-state budget: the whole activity state stays below 500 KB, because it crosses Binder in `onStop` and a transaction above about 1 MB raises `TransactionTooLargeException` (API 24+), which could lose the `ON_STOP` draft save. Hence the 1,000-id limit on `selection` (a larger selection survives rotation in the ViewModel but not process death) and the cap on the search text (section 3.3). The editor draft, the largest entry, is budgeted in section 6.14.
+- Saved-state budget: the whole activity state stays below 500 KB (500,000 bytes, DEC-57), because it crosses Binder in `onStop` and a transaction above about 1 MB raises `TransactionTooLargeException` (API 24+), which could lose the `ON_STOP` draft save. Hence the 1,000-id limit on `selection` (a larger selection survives rotation in the ViewModel but not process death) and the cap on the search text (section 3.3). The editor draft, the largest entry, is budgeted in section 6.14.
 
 ## 4. Perspective specifics
 
@@ -449,6 +454,7 @@ fun MonthGrid(
     onDayClick: (Long) -> Unit,
     onToday: () -> Unit,
     modifier: Modifier = Modifier,
+    daysEnabled: Boolean = true,    // false in selection mode (section 5.1): day cells and "Today" disabled, months still change
 )
 ```
 
@@ -488,6 +494,7 @@ The row below the grid labels the list (a heading):
 - "Select range" opens a `DatePickerDialog` that hosts a `DateRangePicker` (DEC-11, DEC-53) initialised with the current day as start and no end (day mode) or with the current range. Buttons "Cancel" and "OK"; OK is enabled only when both a start and an end are selected. Conversion follows section 3.5 rule 8. Verify at setup: `DateRangePicker` inside `DatePickerDialog` lays out at 200 % font on a compact phone.
 - OK with start = end gives day mode on that day, otherwise range mode. Either way the displayed month becomes the month of the start, so the selection is never off screen (as "Today" does).
 - "Clear range" returns to day mode with the range's first day selected; the displayed month stays.
+- `CalendarSelectionHeader(…, enabled: Boolean = true)`: false in selection mode disables "Select range" and "Clear range" (section 5.1).
 - The list shows every note dated inside the range, inclusive, in canonical order, never grouped by day (DEC-23, DEC-53); each row shows its date.
 - New notes are prefilled with the selected day in day mode and with nothing in range mode (DEC-38).
 
@@ -516,29 +523,33 @@ Batch mode exists in all five perspectives with one action set (DEC-36). It is a
 | Action 2 | `ic_add_link`, "Associate" (`action_associate`) |
 | Action 3 | `ic_more_vert`, "More options" (`action_more`), a `DropdownMenu` with "Set date…" (`action_set_date`, leading `ic_edit_calendar`) and "Delete" (`action_delete`, leading `ic_delete`) |
 
-- Colors: `TopAppBarDefaults.topAppBarColors(containerColor = secondaryContainer)`, so the mode change is visible beyond the text.
+- The composable is `SelectionTopBar` (`ui/notes`). Colors: `TopAppBarDefaults.topAppBarColors(containerColor = secondaryContainer, scrolledContainerColor = secondaryContainer)`, so the mode change is visible beyond the text whether the list is scrolled or not; the bar has no scroll behavior. While an action runs (section 5.3) its actions are disabled; "Exit selection" stays enabled.
+- Until the batch associate picker exists (`PickerKey`, SPEC T18) the bar has no Associate action; `NoteListViewModel.associate` already takes the picker's result.
 - There is no batch check or uncheck action (§7, DEC-36).
 
 ### 5.3 Actions
 
-All actions work on the current selection pruned to the ids of the latest list emission ([data-layer.md § Batch operations](data-layer.md#batch-operations)). N in every message is the number of selected notes, not the number of changed rows (DEC-36).
+All actions work on the current selection pruned to the ids of the current query, read once with `NoteRepository.selectIds` when the action starts, after Individual or Project has decided its primary ([data-layer.md § Batch operations](data-layer.md#batch-operations)). The last list emission is not used: the list stops collecting 5 s after the screen stops observing it (`WhileSubscribed(5_000)`), so behind a full-screen picker it can be stale. If no selected id is left, selection mode ends with no repository call and no snackbar. N in every message is the number of selected notes, not the number of changed rows (DEC-36).
 
 | Action | Flow | On success |
 |---|---|---|
 | Select all | `NoteRepository` returns the ids of the full current query (the same `NoteQuery`: primary, chips, search; checked and off-screen notes included; `selectIds` in [data-layer.md § Perspective query](data-layer.md#perspective-query)). They replace the selection | Selection mode stays; the title shows the new count |
 | Associate | Opens `PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate)`: the two-tab picker of section 7.6. Its "Associate" button returns the chosen persons and projects, including names created there (DEC-33). The ViewModel calls `NoteRepository.associate(noteIds, personIds, projectIds, newPersons, newProjects)`: one transaction, additive, existing links ignored (DEC-36). Back in the picker returns nothing and keeps the selection | Snackbar "N notes associated" (`batch_associated`); selection mode ends |
-| Set date… | Opens a `DatePickerDialog` titled "Set date" (`dialog_set_date_title`), initially showing the date that every selected note shares, else no selection and the current month. Buttons, end-aligned: "Remove date" (`action_remove_date`), "Cancel", "OK" (enabled while a day is selected), mapped onto the two slots of `DatePickerDialog`: `confirmButton = { TextButton(onClick = ok, enabled = state.selectedDateMillis != null) { Text(action_ok) } }` and `dismissButton = { Row { TextButton(removeDate) { Text(action_remove_date) }; TextButton(cancel) { Text(action_cancel) } } }`. OK calls `NoteRepository.setDate(noteIds, day)`; "Remove date" calls it with `null` (DEC-36). Conversion as in section 3.5 rule 8 | "Date set on N notes" (`batch_date_set`) or "Date removed from N notes" (`batch_date_removed`); selection mode ends |
+| Set date… | Opens a `DatePickerDialog` titled "Set date" (`dialog_set_date_title`; the `DatePicker`'s title slot holds that `Text` with the padding of the default title: start 24 dp, end 12 dp, top 16 dp), initially showing the date that every selected note shares, else no selection and the current month. Buttons, end-aligned: "Remove date" (`action_remove_date`), "Cancel", "OK" (enabled while a day is selected), mapped onto the two slots of `DatePickerDialog`: `confirmButton = { TextButton(onClick = ok, enabled = state.selectedDateMillis != null) { Text(action_ok) } }` and `dismissButton = { Row { TextButton(removeDate) { Text(action_remove_date) }; TextButton(cancel) { Text(action_cancel) } } }`. OK calls `NoteRepository.setDate(noteIds, day)`; "Remove date" calls it with `null` (DEC-36). Conversion as in section 3.5 rule 8 | "Date set on N notes" (`batch_date_set`) or "Date removed from N notes" (`batch_date_removed`); selection mode ends |
 | Delete | Opens the batch delete dialog (section 8.3). Confirm calls `NoteRepository.deleteNotes(noteIds)`: one transaction (DEC-35, DEC-36) | "N notes deleted" (`batch_deleted`); selection mode ends |
 
 - Every action is one repository call and one transaction (§9, DEC-36). The UI never loops over notes.
-- While an action runs, the contextual bar's actions are disabled; a second tap does nothing.
-- A failed action shows its `AppError` text (section 11.13) in a Long snackbar and keeps the selection, so the user can retry.
+- ViewModel entry points: `enterSelection(noteId)`, `toggleSelection(noteId)`, `exitSelection()`, `onTabLeft(leaveCount)`, `selectAll()`, `openSetDate()`, `setDateOfSelection(epochDay: Long?)` (null = "Remove date"), `openBatchDelete()`, `deleteSelection()` and `associate(personIds, projectIds, newPersons, newProjects)`.
+- While Select all or an action runs, `NoteListUiState.batchRunning` is true: the contextual bar's actions and the buttons of the Set date and batch delete dialogs are disabled, and a second call does nothing. "Exit selection", Back and a new long-press stay available. Select all is single-flight like the actions and shows no snackbar on success.
+- The Set date and batch delete dialogs stay open, with their buttons disabled, while their action runs. Success closes the dialog together with selection mode; a failure closes the dialog and keeps the selection.
+- A failed action, a failed Select all or a failed read of the current ids shows its `AppError` text (section 11.13) in a Long snackbar and keeps the selection, so the user can retry.
+- Select all and each action belong to the selection they started from. If that selection ended meanwhile (Exit, then a new long-press while it ran), the result never replaces, prunes or ends the later selection and never closes its dialog; the snackbar still shows.
 - Snackbars are Short, without an action: there is no undo (§7, DEC-36).
 
 ### 5.4 Selection in the pickers and dialogs
 
 - The picker and the dialogs do not change the selection. The list screen below them keeps it, and the result arrives in its ViewModel through the Result API (section 7.7).
-- If the list changes while the picker is open (for example a save on leave from an editor closed just before, still running in `applicationScope`, unlinks or re-dates a selected note), the ViewModel prunes the selection before calling the repository. A restore never reaches this point: it resets navigation and every ViewModel with it (DEC-84, section 5.5 rule 6).
+- If the list changes while the picker is open (for example a save on leave from an editor closed just before, still running in `applicationScope`, unlinks or re-dates a selected note), the ViewModel prunes the selection to a fresh read of the current query's ids before calling the repository (section 5.3). A restore never reaches this point: it resets navigation and every ViewModel with it (DEC-84, section 5.5 rule 6).
 
 ### 5.5 Exit rules
 
@@ -549,6 +560,8 @@ Selection mode ends, and the selection is cleared, when:
 4. pruning to a new list emission leaves no selected id (for example, every selected orphan received a link);
 5. the user switches to another tab (DEC-36);
 6. the list's filter changes in any other way: a filter cleared by an existence probe, the Individual or Project entity replaced or cleared, a restore (DEC-34, DEC-36, DEC-84).
+
+Rule 6 is checked where each value changes, not by watching the query: `setEntityFilter` (also when the existence probe clears a vanished filter), the date filter, the Calendar's day or range and the applied search (the debounce, the ImeAction, clearing and closing the search bar) end selection mode only when the new value differs from the current one, so setting a filter to its current value keeps the selection. In Individual and Project another entity id ends it and a rename (same id) keeps it; a primary that resolves to `Primary.None` (the picker body, which has no rows to select) always ends it, also for a selection restored over a remembered entity that is gone (testing.md I-42 (g)), and a restored `SetDate` or `BatchDelete` dialog closes with it.
 
 A lock and unlock cycle, rotation and process death keep the selection (section 3.10).
 
@@ -2023,7 +2036,7 @@ Targets: TalkBack, Switch Access and hardware keyboards work on every screen; te
 
 | Node | Semantics |
 |---|---|
-| Row (merged) | The row container carries `combinedClickable(...)` and `Modifier.semantics { contentDescription = rowDescription; stateDescription = …; customActions = listOf(…) }`, so it is one node (testing.md I-35). The headline `Text`, the supporting `Text`, the metadata `FlowRow` and the trailing selection mark each carry `Modifier.clearAndSetSemantics {}`, so TalkBack reads `rowDescription` and not the merged texts and the alternate texts of the inline icons. The leading checkbox keeps its own toggleable semantics, which stay a separate node. Click and long-click labels as in section 3.8. `stateDescription`: "Done" (`state_done`) for a checked note; in selection mode "Selected" or "Not selected" (`state_selected`, `state_not_selected`), followed by ", Done" for a checked note. One custom action: "Mark note as done" or "Mark note as not done" (`a11y_mark_done`, `a11y_mark_not_done`), doing what the checkbox does |
+| Row (merged) | The row container carries `combinedClickable(...)` (before SPEC T18, outside selection mode, the long-press-only modifier of section 3.8) and `Modifier.semantics { contentDescription = rowDescription; stateDescription = …; customActions = listOf(…) }`, so it is one node (testing.md I-35). The headline `Text`, the supporting `Text`, the metadata `FlowRow` and the trailing selection mark each carry `Modifier.clearAndSetSemantics {}`, so TalkBack reads `rowDescription` and not the merged texts and the alternate texts of the inline icons. The leading checkbox keeps its own toggleable semantics, which stay a separate node. Click and long-click labels as in section 3.8. `stateDescription`: "Done" (`state_done`) for a checked note; in selection mode "Selected" or "Not selected" (`state_selected`, `state_not_selected`), followed by ", Done" for a checked note, the parts joined with `names_separator` (for example "Not selected, Done"). One custom action: "Mark note as done" or "Mark note as not done" (`a11y_mark_done`, `a11y_mark_not_done`), doing what the checkbox does |
 | Checkbox | A separate node (it merges its own descendants, so the row does not absorb it): `Role.Checkbox` and the toggle state from M3 `Checkbox`; `contentDescription` "Mark note as done" while unchecked and "Mark note as not done" while checked (verbatim §4); `stateDescription` "Not done" / "Done" (DEC-55) |
 
 `rowDescription` joins these parts with ", " (`names_separator`), skipping absent ones: the title (or "(No data)"), the body text, the date (`FormatStyle.MEDIUM`), "Overdue", "People: …" (`a11y_row_people`, names joined with ", "), "Projects: …" (`a11y_row_projects`), or "Orphaned" instead of both. Example: "Weekly sync, Budget and hiring, 17 Nov 2026, Overdue, People: Alice, Bob, Projects: Alpha".
