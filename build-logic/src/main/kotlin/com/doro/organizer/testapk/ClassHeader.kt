@@ -7,8 +7,8 @@ import java.util.zip.ZipFile
 
 /**
  * The type relations of one class file: its binary name (`a/b/C`), its superclass (null for `java/lang/Object` and
- * `module-info`), its direct interfaces, whether it is an interface, and [lambdaTypes]. Only the constant pool and the
- * header are read, never the members.
+ * `module-info`), its direct interfaces, whether it is an interface, [lambdaTypes] and whether it is public. Only the
+ * constant pool and the header are read, never the members.
  */
 internal data class ClassHeader(
     val name: String,
@@ -21,12 +21,18 @@ internal data class ClassHeader(
      * implements it, a class no class file shows.
      */
     val lambdaTypes: List<String> = emptyList(),
+    /**
+     * Whether the class file is `ACC_PUBLIC`. A nested class is public here only if its class file is: Kotlin and javac
+     * compile a private or protected nested class to a package-private class file, which is what the runtime checks.
+     */
+    val isPublic: Boolean = false,
 ) {
     /** Direct supertypes: the superclass, then the interfaces. */
     val supertypes: List<String> get() = listOfNotNull(superName) + interfaces
 
     companion object {
         private const val MAGIC = 0xCAFEBABE.toInt()
+        private const val ACC_PUBLIC = 0x0001
         private const val ACC_INTERFACE = 0x0200
 
         /** Reads the header of a class file (JVMS § 4.1). */
@@ -65,7 +71,7 @@ internal data class ClassHeader(
                 val descriptor = checkNotNull(utf8[descriptorIndex[nameAndType]]) { "bad invokedynamic descriptor" }
                 RETURNED_OBJECT.find(descriptor)?.groupValues?.get(1)
             }.distinct().sorted()
-            return ClassHeader(name, superName, interfaces, access and ACC_INTERFACE != 0, lambdaTypes)
+            return ClassHeader(name, superName, interfaces, access and ACC_INTERFACE != 0, lambdaTypes, access and ACC_PUBLIC != 0)
         }
 
         /** The object return type of a method descriptor: `(…)La/b/C;` gives `a/b/C`. */

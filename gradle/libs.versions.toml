@@ -35,6 +35,7 @@ uiautomator = "2.4.1"
 [libraries]
 # Build classpath (root buildscript) and build-logic
 android-gradle-api = { module = "com.android.tools.build:gradle-api", version.ref = "agp" }
+android-builder = { module = "com.android.tools.build:builder", version.ref = "agp" }  # build-logic tests only: the R8 that AGP runs
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 ksp-gradle-plugin = { module = "com.google.devtools.ksp:symbol-processing-gradle-plugin", version.ref = "ksp" }
 

@@ -31,6 +31,16 @@ class ClassHeaderTest {
         assertNull(ClassHeader.read(classBytes(Any::class.java).inputStream()).superName)
     }
 
+    // A private nested class or interface compiles to a package-private class file: the access the runtime checks.
+    @Test
+    fun read_isPublicOnlyForAnAccPublicClassFile() {
+        assertTrue(ClassHeader.read(classBytes(ClassHeaderTest::class.java).inputStream()).isPublic)
+        assertTrue(ClassHeader.read(classBytes(Runnable::class.java).inputStream()).isPublic)
+        assertFalse(ClassHeader.read(classBytes(Sample::class.java).inputStream()).isPublic)
+        assertFalse(ClassHeader.read(classBytes(Marker::class.java).inputStream()).isPublic)
+        assertFalse(ClassHeader.read(classBytes(IndyLambdaSample::class.java).inputStream()).isPublic)
+    }
+
     @Test
     fun read_givesTheTypesThatInvokedynamicSitesReturn_theLambdasFunctionalInterfaces() {
         val header = ClassHeader.read(classBytes(IndyLambdaSample::class.java).inputStream())

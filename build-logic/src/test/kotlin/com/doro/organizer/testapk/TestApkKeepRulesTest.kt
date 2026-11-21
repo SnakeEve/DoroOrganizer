@@ -2,8 +2,10 @@ package com.doro.organizer.testapk
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class TestApkKeepRulesTest {
     private fun header(name: String, superName: String? = "java/lang/Object", vararg interfaces: String) =
@@ -132,6 +134,164 @@ class TestApkKeepRulesTest {
         )
         assertEquals(emptyList<String>(), TestApkKeepRules.unexpectedMissing(report.take(4), allowlist))
         assertEquals(listOf("Missing class java.beans.BeanInfo"), TestApkKeepRules.unexpectedMissing(report.take(1), listOf("java.*")))
+    }
+
+    // The T22 qa crash: the test APK calls the facade CollectionsKt.collectionSizeOrDefault, which the package-private
+    // multifile part CollectionsKt__IterablesKt defines, so TraceReferences keeps the part. R8 moved its subtype
+    // CollectionsKt__MutableCollectionsJVMKt to the root package: IllegalAccessError when the app starts.
+    private val parts = mapOf(
+        "kotlin/collections/CollectionsKt__IterablesKt" to ClassHeader("kotlin/collections/CollectionsKt__IterablesKt", "kotlin/collections/CollectionsKt__CollectionsKt", emptyList()),
+        "kotlin/collections/CollectionsKt__MutableCollectionsJVMKt" to ClassHeader("kotlin/collections/CollectionsKt__MutableCollectionsJVMKt", "kotlin/collections/CollectionsKt__IterablesKt", emptyList()),
+        "kotlin/collections/CollectionsKt" to ClassHeader("kotlin/collections/CollectionsKt", "kotlin/collections/CollectionsKt___CollectionsKt", emptyList(), isPublic = true),
+        "a/b/Hidden\$Callback" to ClassHeader("a/b/Hidden\$Callback", "java/lang/Object", emptyList(), isInterface = true),
+        "a/b/Visible" to ClassHeader("a/b/Visible", "java/lang/Object", emptyList(), isInterface = true, isPublic = true),
+    )
+
+    private val traced = """
+        -keep class kotlin.collections.CollectionsKt {
+        }
+        -keep class kotlin.collections.CollectionsKt__IterablesKt {
+          public static int collectionSizeOrDefault(java.lang.Iterable, int);
+        }
+        -keep interface a.b.Visible {
+        }
+        -keeppackagenames androidx.concurrent.futures
+    """.trimIndent() + "\n"
+
+    @Test
+    fun obfuscates_unlessAConfigurationHoldsADontobfuscateOption() {
+        assertTrue(TestApkKeepRules.obfuscates(emptyList()))
+        assertTrue(TestApkKeepRules.obfuscates(listOf("-allowaccessmodification\n-keep class a.B { *; }\n")))
+        assertTrue(TestApkKeepRules.obfuscates(listOf("# -dontobfuscate\n-keep class a.B # not -dontobfuscate\n", "-dontobfuscated\n")))
+        assertFalse(TestApkKeepRules.obfuscates(listOf("-keep class a.B\n", "# Benchmark\n-dontobfuscate\n")))
+        assertFalse(TestApkKeepRules.obfuscates(listOf("  -dontoptimize\t-dontobfuscate   # both\r\n")))
+    }
+
+    @Test
+    fun obfuscates_failsOnAnIncludeItCannotFollow() {
+        val failure = assertThrows(IllegalStateException::class.java) {
+            TestApkKeepRules.obfuscates(listOf("-keep class a.B\n", "-include benchmark-extra.pro\n"))
+        }
+        assertTrue(failure.message!!.contains("-include"))
+        assertTrue(TestApkKeepRules.obfuscates(listOf("# -include other.pro\n-keep class a.B\n")))
+    }
+
+    // qa has release's proguardFiles (AGP's default file and proguard-rules.pro); benchmark adds proguard-benchmark.pro.
+    // The benchmark rules hash, which perf comparability depends on, holds only while benchmark is non-obfuscating.
+    @Test
+    fun obfuscates_theRealFiles_qaObfuscates_benchmarkDoesNot() {
+        val appDir = File(checkNotNull(System.getProperty("doro.appDir")) { "doro.appDir is not set" })
+        val rules = File(appDir, "proguard-rules.pro").readText()
+        val benchmark = File(appDir, "proguard-benchmark.pro").readText()
+        assertTrue(TestApkKeepRules.obfuscates(listOf(rules)))
+        assertFalse(TestApkKeepRules.obfuscates(listOf(rules, benchmark)))
+    }
+
+    @Test
+    fun unreadableOptions_areTheOptionLinesKeptTypesCannotRead() {
+        val rules = traced.lines() + listOf(
+            "-keep class a.b.Whole\$Nested { *; }", "-keep class a.b.NoSpace{", "-keep,allowshrinking class a.b.NotPinned",
+            "-keep class * extends a.b.Wildcard", "-keepclassmembers class a.b.Members {", "  public static void m();", "}",
+            "  -dontwarn a.b.**",
+        )
+        assertEquals(
+            listOf(
+                "-keep class a.b.NoSpace{", "-keep,allowshrinking class a.b.NotPinned", "-keep class * extends a.b.Wildcard",
+                "-keepclassmembers class a.b.Members {", "  -dontwarn a.b.**",
+            ),
+            TestApkKeepRules.unreadableOptions(rules),
+        )
+    }
+
+    // Without the check, a kept non-public type in an unreadable rule would silently get no rule of set 4.
+    @Test
+    fun render_failsOnAnOptionLineKeptTypesCannotRead_inEveryVariant() {
+        val unreadable = traced + "-keep class kotlin.collections.CollectionsKt__MapsKt{\n}\n"
+        for (obfuscates in listOf(true, false)) {
+            val failure = assertThrows(IllegalStateException::class.java) {
+                TestApkKeepRules.render(":app:generateQaTestApkKeepRules", 3, 7, unreadable, emptyList(), emptyList(), parts, obfuscates)
+            }
+            assertTrue(failure.message!!.contains("-keep class kotlin.collections.CollectionsKt__MapsKt{"))
+        }
+    }
+
+    @Test
+    fun ownConfigurations_leaveOutTheBuildDirectory() {
+        val project = File("project").absoluteFile
+        val build = File(project, "build")
+        val own = File(project, "proguard-benchmark.pro")
+        val rules = File(project, "proguard-rules.pro")
+        val default = File(build, "intermediates/default_proguard_files/global/proguard-android-optimize.txt-9.5.1")
+        assertEquals(listOf(rules, own), TestApkKeepRules.ownConfigurations(listOf(default, rules, own, rules), build))
+    }
+
+    @Test
+    fun keptTypes_areTheTypesOfPlainKeepRules() {
+        val rules = traced.lines() + listOf(
+            "-keep enum a.b.Mode {", "-keep @interface a.b.Marker {", "-keep class a.b.Whole\$Nested { *; }",
+            "-keep,allowshrinking class a.b.NotPinned", "-keep class * extends a.b.Wildcard", "-keepclassmembers class a.b.Members {",
+            "  public static void m();", "}",
+        )
+        assertEquals(
+            listOf(
+                "a/b/Marker", "a/b/Mode", "a/b/Visible", "a/b/Whole\$Nested",
+                "kotlin/collections/CollectionsKt", "kotlin/collections/CollectionsKt__IterablesKt",
+            ),
+            TestApkKeepRules.keptTypes(rules),
+        )
+    }
+
+    @Test
+    fun packageRules_keepTheSubtypesOfEveryNonPublicKeptAppType_byExtendsOrImplements() {
+        assertEquals(
+            listOf(
+                "-keep,allowshrinking,allowoptimization,allowaccessmodification class * implements a.b.Hidden\$Callback",
+                "-keep,allowshrinking,allowoptimization,allowaccessmodification class * extends kotlin.collections.CollectionsKt__IterablesKt",
+            ),
+            TestApkKeepRules.packageRules(
+                listOf("kotlin/collections/CollectionsKt__IterablesKt", "kotlin/collections/CollectionsKt", "a/b/Visible", "a/b/Hidden\$Callback", "a/b/NotInTheApp", "kotlin/collections/CollectionsKt__IterablesKt"),
+                parts,
+            ),
+        )
+    }
+
+    @Test
+    fun render_aNonObfuscatingVariant_getsRuleSetsOneToThreeOnly() {
+        assertEquals(
+            """
+            # doro.test-apk-keep-rules: generated by :app:generateBenchmarkTestApkKeepRules (DEC-103 (5)); never edit. Test APK: 3 inputs, app: 7 inputs.
+            # 1. R8 TraceReferences: every class, field and method of the app that the test APK references.
+            -keep class kotlin.collections.CollectionsKt {
+            }
+            -keep class kotlin.collections.CollectionsKt__IterablesKt {
+              public static int collectionSizeOrDefault(java.lang.Iterable, int);
+            }
+            -keep interface a.b.Visible {
+            }
+            -keeppackagenames androidx.concurrent.futures
+
+            # 2. The 1 app types that test-APK classes or lambdas extend or implement, with their app supertypes, kept whole.
+            -keep class a.b.Hidden${'$'}Callback { *; }
+            # 3. The 0 app types the test APK provides META-INF/services implementations of, pinned: R8 then keeps
+            #    the app's ServiceLoader.load of them and their names (kotlinx-coroutines-test's providers, which runTest needs).
+
+            """.trimIndent(),
+            TestApkKeepRules.render(":app:generateBenchmarkTestApkKeepRules", 3, 7, traced.replace("\n", "\r\n"), listOf("a/b/Hidden\$Callback"), emptyList(), parts, obfuscates = false),
+        )
+    }
+
+    @Test
+    fun render_anObfuscatingVariant_addsRuleSetFour_forTheNonPublicTypesOfEveryRuleSet() {
+        val rendered = TestApkKeepRules.render(":app:generateQaTestApkKeepRules", 3, 7, traced, listOf("a/b/Hidden\$Callback"), emptyList(), parts, obfuscates = true)
+        val withoutFour = TestApkKeepRules.render(":app:generateQaTestApkKeepRules", 3, 7, traced, listOf("a/b/Hidden\$Callback"), emptyList(), parts, obfuscates = false)
+        assertEquals(
+            withoutFour +
+                "# 4. The 2 non-public app types that rule sets 1 to 3 keep: R8 keeps their access, so every app subtype\n" +
+                "#    keeps its name and package, or R8 may move it away from them (IllegalAccessError). Obfuscating variants only.\n" +
+                "-keep,allowshrinking,allowoptimization,allowaccessmodification class * implements a.b.Hidden\$Callback\n" +
+                "-keep,allowshrinking,allowoptimization,allowaccessmodification class * extends kotlin.collections.CollectionsKt__IterablesKt\n",
+            rendered,
+        )
     }
 
     @Test
