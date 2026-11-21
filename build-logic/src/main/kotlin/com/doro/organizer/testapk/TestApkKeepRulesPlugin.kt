@@ -1,6 +1,7 @@
 package com.doro.organizer.testapk
 
 import com.android.build.api.artifact.ScopedArtifact
+import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import com.android.build.api.variant.DeviceTestBuilder
 import com.android.build.api.variant.ScopedArtifacts
@@ -11,8 +12,10 @@ import org.gradle.api.Project
  * DEC-103 (5): for the minified build types whose instrumented tests run in the app's process, `qa` and `benchmark`,
  * adds a generated keep-rules file to the app's R8 configuration ([GenerateTestApkKeepRulesTask],
  * `generate<Variant>TestApkKeepRules`). Only a variant that has a test APK gets one: AGP builds androidTest for the
- * `-PtestBuildType` build type alone ([TestApkKeepRules.appliesTo]). `release` never gets one; its R8 configuration
- * stays as DEC-13 sets it, and the `release-logs` gate fails a release configuration that holds generated rules.
+ * `-PtestBuildType` build type alone ([TestApkKeepRules.appliesTo]). The task reads the variant's own R8 configuration
+ * files to tell whether R8 obfuscates it (`qa`) or not (`benchmark`, `-dontobfuscate`). `release` never gets one; its
+ * R8 configuration stays as DEC-13 sets it, and the `release-logs` gate fails a release configuration that holds
+ * generated rules.
  */
 class TestApkKeepRulesPlugin : Plugin<Project> {
     override fun apply(project: Project) {
@@ -32,6 +35,7 @@ class TestApkKeepRulesPlugin : Plugin<Project> {
             }
         }
         val allowlist = project.isolated.rootProject.projectDirectory.file("config/test-apk-missing-references.txt")
+        val android = project.extensions.getByType(ApplicationExtension::class.java)
         components.onVariants { variant ->
             val testApk = variant.deviceTests[DeviceTestBuilder.ANDROID_TEST_TYPE]
             if (!TestApkKeepRules.appliesTo(variant.buildType, variant.isMinifyEnabled, testApk != null)) return@onVariants
@@ -44,6 +48,12 @@ class TestApkKeepRulesPlugin : Plugin<Project> {
                 libraryJars.set(components.sdkComponents.bootClasspath)
                 optionalLibraryJars.from(optionalJars)
                 missingReferenceAllowlist.set(allowlist)
+                // The DSL's proguardFiles of the variant (defaultConfig, build type, flavors): -dontobfuscate there
+                // (proguard-benchmark.pro) means no rule set 4.
+                val dslFiles = android.defaultConfig.proguardFiles +
+                    android.buildTypes.getByName(checkNotNull(variant.buildType)).proguardFiles +
+                    variant.productFlavors.flatMap { (_, flavor) -> android.productFlavors.getByName(flavor).proguardFiles }
+                r8Configurations.from(TestApkKeepRules.ownConfigurations(dslFiles, project.layout.buildDirectory.get().asFile))
                 val output = "intermediates/doro_test_apk_keep_rules/${variant.name}"
                 keepRules.set(project.layout.buildDirectory.file("$output/test-apk-keep-rules.pro"))
                 missingReferences.set(project.layout.buildDirectory.file("$output/missing-references.txt"))
