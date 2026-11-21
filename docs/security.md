@@ -1250,7 +1250,7 @@ class KeySlot(val mode: KeyMode, val outerIv: ByteArray?, val wrappedDek: ByteAr
 }
 // data-layer.md's entities follow the same rule, e.g. NoteEntity(id=…) and NewEntity(key=…)
 ```
-- Enforcement (owned by [testing.md](testing.md)): I-39 `RedactionTest` constructs each class above with `SENTINEL` ([testing.md](testing.md) § 7 Fixtures and fakes) in every text field and asserts that `toString()` lacks it; I-40 `LogPrivacyTest` (including a malformed `persons_json` containing `SENTINEL`, which must leave no sentinel in logcat); I-41 `ArchitectureTest` enforces the banned tokens and the `toString` rule of [architecture.md § Boundary test](architecture.md#boundary-test), the single list of rules (this section does not repeat the patterns); the `release-logs` CI job; manual QA M-17 (no line containing user data; framework lines under the app's pid are expected).
+- Enforcement (owned by [testing.md](testing.md)): I-39 `RedactionTest` constructs each class above with `SENTINEL` ([testing.md](testing.md) § 7 Fixtures and fakes) in every text field and asserts that `toString()` lacks it; I-40 `LogPrivacyTest` (including a malformed `person_ids` containing `SENTINEL`, which must leave no sentinel in logcat; DEC-106); I-41 `ArchitectureTest` enforces the banned tokens and the `toString` rule of [architecture.md § Boundary test](architecture.md#boundary-test), the single list of rules (this section does not repeat the patterns); the `release-logs` CI job; manual QA M-17 (no line containing user data; framework lines under the app's pid are expected).
 
 ## 11. Keyboard and autofill (DEC-71, Q11)
 
