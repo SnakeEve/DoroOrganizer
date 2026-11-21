@@ -3,13 +3,102 @@
 <resources>
     <string name="app_name">Doro Organizer</string>
 
+    <!-- App, navigation and shared actions (ui.md § 11.1). -->
+    <string name="tab_all">All</string>
+    <string name="tab_people">People</string>
+    <string name="tab_projects">Projects</string>
+    <string name="tab_calendar">Calendar</string>
+    <string name="tab_orphans">Orphans</string>
+    <string name="title_all">All notes</string>
+    <string name="action_back">Back</string>
     <string name="action_cancel">Cancel</string>
-    <string name="action_use_password">Use password</string>
+    <string name="action_ok">OK</string>
+    <string name="a11y_loading">Loading</string>
 
-    <!-- System authentication prompts (ui.md § 8.11). -->
+    <!-- Restore errors (ui.md § 11.10), the InvalidBackup texts of AppError.messageRes(). -->
+    <string name="restore_error_not_backup">This file is not a Doro Organizer backup.</string>
+    <string name="restore_error_newer">This backup was made by a newer version of Doro Organizer. Update the app, then try again.</string>
+    <string name="restore_error_incompatible">This backup does not match this version of Doro Organizer.</string>
+    <string name="restore_error_damaged">This backup is damaged or incomplete.</string>
+
+    <!-- Passwords, encryption and authentication prompts (ui.md § 11.11). -->
+    <string name="password_label">Password</string>
+    <string name="password_new">New password</string>
+    <string name="password_repeat">Repeat new password</string>
+    <string name="password_ack">I understand this cannot be recovered</string>
+    <string name="password_show">Show password</string>
+    <string name="password_hide">Hide password</string>
+    <string name="password_too_short">Use at least 8 characters.</string>
+    <string name="password_mismatch">The passwords do not match.</string>
+    <string name="password_malformed">This password contains characters that cannot be used.</string>
+    <string name="password_wrong">Wrong password.</string>
+    <string name="password_throttled">Too many attempts. Try again in %1$s.</string>
+    <string name="pw_set_body">You will enter this password when the app starts, unless fingerprint unlock is on. It cannot be recovered: if you forget it and cannot use your fingerprint, the only way back in is to erase all data.</string>
+    <string name="pw_reset_title">Set a new password</string>
+    <string name="pw_reset_body">Choose a new startup password. It replaces the old one; your notes stay as they are. After you confirm, touch the fingerprint sensor.</string>
+    <string name="action_set_password">Set password</string>
+    <string name="key_change_failed_title">Encryption was not changed</string>
     <string name="biometric_unlock_title">Unlock Doro Organizer</string>
     <string name="biometric_enable_title">Turn on biometric lock</string>
     <string name="biometric_disable_title">Turn off biometric lock</string>
     <string name="biometric_slot_title">Set up fingerprint unlock</string>
     <string name="biometric_reset_title">Confirm with your fingerprint</string>
+    <string name="action_use_password">Use password</string>
+
+    <!-- Gate screens and notices (ui.md § 11.12). -->
+    <string name="gate_password_title">Enter your password</string>
+    <string name="gate_password_body">Doro Organizer is protected by a startup password.</string>
+    <string name="action_unlock">Unlock</string>
+    <string name="gate_forgot">Forgot password?</string>
+    <string name="action_use_fingerprint">Use fingerprint</string>
+    <string name="gate_fingerprint_available">Fingerprint unlock is available again.</string>
+    <string name="gate_password_reminder">Your regular password check: enter it so you keep remembering it.</string>
+    <string name="gate_password_fingerprint_changed">The fingerprints on this phone changed, so your password is needed.</string>
+    <string name="gate_password_check_failed">The password could not be checked. Try again.</string>
+    <string name="gate_password_kek_failed">This phone\'s secure storage failed, so your password cannot open the app right now. Your fingerprint still can: as soon as fingerprint unlock works again, \"Use fingerprint\" appears here. If it does not come back, a backup is the way back: choose \"Forgot password?\", erase all data, then restore the backup from Settings.</string>
+    <string name="gate_slot_failed">Fingerprint unlock did not work. Try again or use your password.</string>
+    <string name="forgot_body_fingerprint">You can set a new startup password with your fingerprint. Your notes stay as they are.</string>
+    <string name="action_reset_with_fingerprint">Set a new password with your fingerprint</string>
+    <string name="forgot_erase_heading">Or start over</string>
+    <string name="forgot_erase_body">If you cannot use your fingerprint, erase all data and start over. Afterwards you can restore a backup from Settings; an encrypted backup needs the password it was made with.</string>
+    <string name="gate_could_not_open">Your password was accepted, but the database could not be opened. Enter it again to try again.</string>
+    <string name="gate_unlocking">Unlocking…</string>
+    <string name="forgot_title">Forgot password?</string>
+    <string name="forgot_body">The password cannot be recovered or reset, and without it the data in this app cannot be opened.\n\nYou can erase all data and start over. Afterwards you can restore a backup from Settings; an encrypted backup needs the password it was made with.</string>
+    <string name="action_erase_start_over">Erase all data and start over</string>
+    <string name="erase_title">Erase all data?</string>
+    <string name="erase_body">All notes, people and projects, the encryption key and the security settings will be deleted from this device. This cannot be undone.</string>
+    <string name="erase_prompt">Type %1$s to confirm</string>
+    <string name="erase_word">ERASE</string>
+    <string name="action_erase">Erase all data</string>
+    <string name="gate_locked_body">Doro Organizer is locked.</string>
+    <string name="gate_open_error_title">The database could not be opened</string>
+    <string name="gate_open_error_body">Something prevented opening your data, for example full storage, or the app was replaced by an older version. Your data was not changed. Free up space or install the latest version, then try again.</string>
+    <string name="action_try_again">Try again</string>
+    <string name="maintenance_backup">Creating backup…</string>
+    <string name="maintenance_restore">Restoring backup…</string>
+    <string name="maintenance_key_change">Updating encryption…</string>
+    <string name="maintenance_start_fresh">Starting fresh…</string>
+    <string name="maintenance_erase">Erasing all data…</string>
+    <string name="maintenance_keep_open">Keep the app open until this finishes.</string>
+    <string name="gate_corrupt_title">The database is damaged</string>
+    <string name="gate_corrupt_body">Doro Organizer cannot read its database. The file is kept until you choose what to do: restore a backup, or start fresh with an empty database.</string>
+    <string name="gate_key_title">The database cannot be unlocked</string>
+    <string name="gate_key_body">The key that protects your data could not be read from this device\'s secure storage. This can happen after a system update or a security reset. Without the key the data cannot be opened. Restore a backup, or start fresh with an empty database.</string>
+    <string name="action_start_fresh">Start fresh</string>
+    <string name="start_fresh_title">Start fresh?</string>
+    <string name="start_fresh_body">The current database and everything in it will be deleted from this device, and the app will start empty and unencrypted. This cannot be undone. If you have a backup, choose Restore from backup instead.</string>
+    <string name="action_start_fresh_confirm">Delete and start fresh</string>
+
+    <!-- Errors (ui.md § 11.13): AppError.messageRes(). -->
+    <string name="error_ack_missing">Confirm that you understand the password cannot be recovered.</string>
+    <string name="error_blank_name">Enter a name.</string>
+    <string name="error_storage_full">Not enough free storage, so nothing was changed. Free up some space and try again.</string>
+    <string name="error_file_access">The file could not be read or written. Try again, or choose another location.</string>
+    <string name="error_key_unavailable">The encryption key could not be accessed, so nothing was changed. Try again later.</string>
+    <string name="error_auth_failed">Authentication failed. The setting was not changed.</string>
+    <string name="error_busy">Another operation is still running. Try again when it has finished.</string>
+    <string name="error_database_unavailable">Your data is not available right now. Try again.</string>
+    <string name="error_outcome_unknown">The app could not confirm whether this change was applied, so it reloaded your data. Check that your notes are as you expect. If the app asks for a password after a password change, try the new password first, then the old one.</string>
+    <string name="error_unexpected">Something went wrong. Your data was not changed.</string>
 </resources>

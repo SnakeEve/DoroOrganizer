@@ -1,10 +1,13 @@
 package com.doro.organizer.session
 
 import androidx.biometric.BiometricPrompt
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.PasswordReason
-import com.doro.organizer.testing.GateTest
+import com.doro.organizer.testing.GateComposeTest
+import com.doro.organizer.testing.GateUi
 import java.time.Duration
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -13,9 +16,12 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** L-32 (gate half): "Use password" at cold start and on return from background (DEC-62, DEC-65). */
+/**
+ * L-32: "Use password" at cold start and on return from background (DEC-62, DEC-65), through the password screen's
+ * own controls; no `NavDisplay` until Ready.
+ */
 @RunWith(AndroidJUnit4::class)
-class UsePasswordTest : GateTest() {
+class UsePasswordTest : GateComposeTest() {
     @Before
     fun passwordModeWithFingerprint() = runBlocking {
         scene.plant(KeyMode.PASSWORD, PASSWORD, lock = true, slot = true)
@@ -26,10 +32,14 @@ class UsePasswordTest : GateTest() {
         scene.gateway.fail(BiometricPrompt.ERROR_NEGATIVE_BUTTON)
         scene.coldStart()
         scene.awaitGate(GateState.NeedsPassword(0, 0, false, PasswordReason.None, fingerprintUsable = true))
+        ui.awaitPasswordScreen()
+        compose.onNodeWithTag(GateUi.USE_FINGERPRINT).assertExists()
+        compose.onNodeWithTag(GateUi.FORGOT).assertExists()
         assertEquals("no prompt starts again on its own", 1, scene.gateway.prompts.size)
         scene.time.advanceBy(Duration.ofHours(1))
-        scene.submit(PASSWORD)
+        ui.enterPassword(PASSWORD)
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
         assertEquals(scene.time.nowMillis(), scene.settings.snapshot().passwordVerifiedAt)
         assertEquals(1, scene.gateway.prompts.size)
     }
@@ -39,7 +49,8 @@ class UsePasswordTest : GateTest() {
         scene.gateway.fail(BiometricPrompt.ERROR_NEGATIVE_BUTTON)
         scene.coldStart()
         scene.awaitGate { it is GateState.NeedsPassword }
-        scene.submit("wrong password")
+        ui.awaitPasswordScreen()
+        ui.enterPassword("wrong password")
         val state = scene.awaitGate { it is GateState.NeedsPassword && it.failures == 1 } as GateState.NeedsPassword
         assertEquals("the screen variant is kept", true, state.fingerprintUsable)
         assertEquals(1, scene.settings.snapshot().unlockFailures)
@@ -50,9 +61,11 @@ class UsePasswordTest : GateTest() {
         scene.gateway.fail(BiometricPrompt.ERROR_NEGATIVE_BUTTON)
         scene.coldStart()
         scene.awaitGate { it is GateState.NeedsPassword }
+        ui.awaitPasswordScreen()
         scene.gateway.succeed()
-        scene.dispatch(GateEvent.UseFingerprintChosen)
+        compose.onNodeWithTag(GateUi.USE_FINGERPRINT).performClick()
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
         assertEquals(2, scene.gateway.prompts.size)
         assertEquals(true, scene.gateway.prompts.last().withCrypto)
     }
@@ -66,11 +79,13 @@ class UsePasswordTest : GateTest() {
         scene.gateway.fail(BiometricPrompt.ERROR_NEGATIVE_BUTTON)
         scene.backgroundTrip()
         scene.awaitGate { it is GateState.Locked && it.password?.fingerprintUsable == true }
-        scene.submit("wrong password")
+        ui.awaitPasswordScreen() // the database stays open behind it, the content is not composed (DEC-66)
+        ui.enterPassword("wrong password")
         scene.awaitGate { it is GateState.Locked && it.password?.failures == 1 && it.password?.checking == false }
         scene.time.advanceBy(Duration.ofHours(1))
-        scene.submit(PASSWORD)
+        ui.enterPassword(PASSWORD)
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
         assertSame("the same Room instance: no close and reopen", open, scene.holderState())
         assertEquals(scene.time.nowMillis(), scene.settings.snapshot().passwordVerifiedAt)
     }
@@ -83,9 +98,11 @@ class UsePasswordTest : GateTest() {
         scene.gateway.fail(BiometricPrompt.ERROR_NEGATIVE_BUTTON)
         scene.backgroundTrip()
         scene.awaitGate { it is GateState.Locked && it.password != null }
+        ui.awaitPasswordScreen()
         scene.gateway.succeed()
-        scene.dispatch(GateEvent.UseFingerprintChosen)
+        compose.onNodeWithTag(GateUi.USE_FINGERPRINT).performClick()
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
         assertEquals(3, scene.gateway.prompts.size)
     }
 

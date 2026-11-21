@@ -12,6 +12,7 @@ import com.doro.organizer.security.KeyVault
 import com.doro.organizer.session.GateEvent
 import com.doro.organizer.session.GateState
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,13 +26,15 @@ import org.junit.Assert.assertEquals
  * the key-state, the data and the settings through a [MaintenanceSetup] on the same files, vault directory and
  * settings; [coldStart] then starts the gate of [app]'s container and launches `MainActivity`, whose
  * `AppLockController.attach` runs the auto-prompt. Everything below the platform is real except [gateway] (the
- * fingerprint sensor), [settings], [time] and [process]. Declare [app] as `@get:Rule(order = 3)` after [databases],
- * [vaults] and [scope].
+ * fingerprint sensor), [settings], [time], [process] (unless [realProcessLifecycle]) and the idle-unless-targeted
+ * [faultHook]; every announcement is recorded in [announcements]. Declare [app] as `@get:Rule(order = 3)` after
+ * [databases], [vaults] and [scope].
  */
 class GateScene(
     private val databases: TestDatabases,
     private val vaults: KeyVaultRule,
     private val scope: ApplicationScopeRule,
+    private val realProcessLifecycle: Boolean = false,
 ) {
     val time = FakeAppTime()
     val settings = FakeSettingsStore().apply { load() }
@@ -41,13 +44,18 @@ class GateScene(
     val kek = FaultyKekKeystore()
     val bio = FaultyBioKeystore()
 
+    /** Blocks or fails the app's maintenance operations at a chosen step; idle until a test targets one. */
+    val faultHook = ScriptedFaultHook()
+
     /** Every secret the app's vault allocated, to check their zeroing (L-03). */
     val secrets = SecretRecorder()
+
+    val announcements = Announcements()
 
     /** Wraps the app's vault, for the cases that script a vault answer. */
     var wrapVault: (KeyVault) -> KeyVault = { it }
 
-    private lateinit var lock: OfferCountingLockController
+    private lateinit var lock: CountingLockController
 
     /** The API level the controller decides its credential branch by; null: the phone's. Set before [coldStart]. */
     var controllerSdkInt: Int? = null
@@ -55,26 +63,42 @@ class GateScene(
     val app = DoroAppRule(autoStart = false) {
         appTime = time
         settingsStore = settings
-        processLifecycle = process
+        processLifecycle = process.takeUnless { realProcessLifecycle }
         biometricGateway = gateway
+        faultHook = this@GateScene.faultHook
         files = maintenanceFiles(databases, vaults)
         keyVault = { store, _, dispatchers ->
             wrapVault(vaults.vault(store, time, dispatchers, kek, newSecret = secrets, kdf = kdf, bio = bio))
         }
-        wrapLockController = { OfferCountingLockController(it).also { lock = it } }
+        wrapLockController = { CountingLockController(it).also { lock = it } }
         lockSdkInt = { controllerSdkInt }
+        wrapAnnouncer = announcements::wrap
     }
 
     private var scenario: ActivityScenario<MainActivity>? = null
 
     val gate get() = app.container.sessionGate
 
-    /** Data in [mode] (with [password] for `PASSWORD`), the lock setting and, with [slot], a live biometric slot. */
-    suspend fun plant(mode: KeyMode, password: String? = null, lock: Boolean = false, slot: Boolean = false) {
+    /**
+     * Data in [mode] (with [password] for `PASSWORD`), the lock setting and, with [slot], a live biometric slot; with
+     * [sentinel], a note and a person that hold it (L-21).
+     */
+    suspend fun plant(
+        mode: KeyMode,
+        password: String? = null,
+        lock: Boolean = false,
+        slot: Boolean = false,
+        sentinel: String? = null,
+    ) {
         val setup = MaintenanceSetup(databases, vaults, scope.scope, settings, time, kek, bio)
         setup.start()
         if (mode != KeyMode.PLAIN) setup.changeKey(mode, null, password)
         if (slot) assertEquals(AppResult.Ok(Unit), setup.maintenance.createBiometricSlot(setup.armCipher()))
+        sentinel?.let { text ->
+            val rows = TestRows(setup.holder.openDatabase().openHelper.writableDatabase)
+            val note = rows.note(content = text, createdAt = time.nowMillis())
+            rows.linkPerson(note, rows.person(text, createdAt = time.nowMillis()))
+        }
         settings.setBiometricLock(lock)
         setup.holder.close()
     }
@@ -86,8 +110,9 @@ class GateScene(
         scenario = ActivityScenario.launch(MainActivity::class.java)
     }
 
-    /** A trip to the background and back through the process lifecycle (security.md § 7.7). */
+    /** A trip to the background and back through the fake process lifecycle (security.md § 7.7). */
     fun backgroundTrip() = onMain {
+        check(!realProcessLifecycle) { "the real process lifecycle moves with the activities" }
         process.moveTo(Lifecycle.State.CREATED)
         process.moveTo(Lifecycle.State.RESUMED)
     }
@@ -106,6 +131,14 @@ class GateScene(
     /** The slot offers (E5) finished so far. */
     val offerSetups: Int get() = lock.offerSetups.value
 
+    /** The calls of `fingerprintUnlockAvailable()` so far (the Forgot password screen asks it, ui.md § 10.3). */
+    val availabilityCalls: Int get() = lock.availabilityCalls.get()
+
+    /** Makes `fingerprintUnlockAvailable()` wait until [releaseAvailability], so a test sees the screen before it. */
+    fun holdAvailability() = lock.holdAvailability()
+
+    fun releaseAvailability() = lock.releaseAvailability()
+
     /** Waits until [count] prompts in all were shown. */
     suspend fun awaitPrompts(count: Int) = withTimeout(TIMEOUT_MS) { gateway.shownCount.first { it >= count } }
 
@@ -121,6 +154,11 @@ class GateScene(
     /** Runs [block] on the main thread with the launched `MainActivity`. */
     fun onActivity(block: (MainActivity) -> Unit) {
         checkNotNull(scenario) { "not started" }.onActivity(block)
+    }
+
+    /** Recreates the launched `MainActivity` as a rotation does: its state saved, the ViewModelStore kept. */
+    fun recreateActivity() {
+        checkNotNull(scenario) { "not started" }.recreate()
     }
 
     /** Moves the launched `MainActivity` to [state] (CREATED: stopped, its state saved). */
@@ -149,10 +187,29 @@ class GateScene(
     }
 }
 
-/** The real controller, counting each finished E5 (`offerSlotSetup`), which reports through no flow. */
-private class OfferCountingLockController(private val inner: AppLockController) : AppLockController by inner {
+/**
+ * The real controller, counting each finished E5 (`offerSlotSetup`), which reports through no flow, and each
+ * availability question, whose answer it can hold back.
+ */
+private class CountingLockController(private val inner: AppLockController) : AppLockController by inner {
     private val finished = MutableStateFlow(0)
     val offerSetups: StateFlow<Int> = finished.asStateFlow()
+    val availabilityCalls = AtomicInteger()
+    private val held = MutableStateFlow(false)
+
+    fun holdAvailability() {
+        held.value = true
+    }
+
+    fun releaseAvailability() {
+        held.value = false
+    }
+
+    override suspend fun fingerprintUnlockAvailable(): Boolean {
+        availabilityCalls.incrementAndGet()
+        held.first { !it }
+        return inner.fingerprintUnlockAvailable()
+    }
 
     override suspend fun offerSlotSetup() {
         try {

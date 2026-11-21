@@ -7,13 +7,13 @@ import android.view.WindowManager
 import android.view.contentcapture.ContentCaptureManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Surface
-import androidx.compose.ui.Modifier
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.doro.organizer.session.GateState
+import com.doro.organizer.ui.DoroRoot
+import com.doro.organizer.ui.LocalUiGraph
 import com.doro.organizer.ui.theme.DoroTheme
 import kotlinx.coroutines.launch
 
@@ -48,8 +48,8 @@ class MainActivity : FragmentActivity() {
         container.externalActivities.bind(this) // every result launcher (DEC-90)
         container.appLockController.attach(this) // one BiometricPrompt per activity instance (DEC-04)
         setContent {
-            DoroTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {}
+            CompositionLocalProvider(LocalUiGraph provides container) { // no keyboard-privacy local: always on (DEC-71)
+                DoroTheme { DoroRoot() }
             }
         }
         window.decorView.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS // after setContent (DEC-71)

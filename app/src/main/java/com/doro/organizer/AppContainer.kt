@@ -39,6 +39,7 @@ import com.doro.organizer.session.SessionGate
 import com.doro.organizer.session.windowPolicyOf
 import com.doro.organizer.settings.DefaultSettingsStore
 import com.doro.organizer.settings.SettingsStore
+import com.doro.organizer.ui.UiGraph
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
@@ -51,20 +52,21 @@ import kotlinx.coroutines.launch
  * Manual DI root (DEC-06, architecture.md § Dependency injection). Members are open and lazy, so the instrumented
  * test container overrides them before first use (testing.md § 7). Construction does no I/O. Raisers receive their
  * listeners as providers resolved at each event, so no constructor takes the gate and the lazy members never recurse
- * (architecture.md § Event wiring). [app] is for the members that need the application `Context`.
+ * (architecture.md § Event wiring). [app] is for the members that need the application `Context`. The UI reaches it
+ * only as a [UiGraph] (architecture.md § Dependency injection).
  */
-open class AppContainer(protected val app: Application) {
+open class AppContainer(protected val app: Application) : UiGraph {
     open val dispatchers: AppDispatchers by lazy { AppDispatchers.production() }
 
     /** Never cancelled; detached work survives its caller and its failures still crash the app. */
-    open val applicationScope: CoroutineScope by lazy { CoroutineScope(SupervisorJob() + dispatchers.default) }
+    override val applicationScope: CoroutineScope by lazy { CoroutineScope(SupervisorJob() + dispatchers.default) }
 
     open val processLifecycle: LifecycleOwner by lazy { ProcessLifecycleOwner.get() }
 
-    open val appTime: AppTime by lazy { DefaultAppTime.system(applicationScope) }
+    override val appTime: AppTime by lazy { DefaultAppTime.system(applicationScope) }
 
     /** DataStore does blocking file I/O, so it runs on the IO dispatcher of the never-cancelled application scope. */
-    open val settingsStore: SettingsStore by lazy {
+    override val settingsStore: SettingsStore by lazy {
         DefaultSettingsStore.create(app, CoroutineScope(applicationScope.coroutineContext + dispatchers.io))
     }
 
@@ -73,7 +75,7 @@ open class AppContainer(protected val app: Application) {
 
     open val keyVault: KeyVault by lazy { DefaultKeyVault.create(app, settingsStore, appTime, dispatchers) }
 
-    open val appMessages: AppMessages by lazy { DefaultAppMessages() }
+    override val appMessages: AppMessages by lazy { DefaultAppMessages() }
 
     open val databaseHolder: DatabaseHolder by lazy {
         DefaultDatabaseHolder(
@@ -86,27 +88,27 @@ open class AppContainer(protected val app: Application) {
     /** No-op in production; test containers throw, block or kill the process at a pipeline step (testing.md § 5). */
     open val faultHook: MaintenanceFaultHook by lazy { MaintenanceFaultHook.None }
 
-    open val dbMaintenance: DbMaintenance by lazy {
+    override val dbMaintenance: DbMaintenance by lazy {
         DefaultDbMaintenance(
             app, files, keyVault, databaseHolder, settingsStore, appTime, dispatchers, applicationScope, faultHook,
             listener = { gate },
         )
     }
 
-    open val noteRepository: NoteRepository by lazy {
+    override val noteRepository: NoteRepository by lazy {
         DefaultNoteRepository(databaseHolder, appTime, applicationScope, dispatchers)
     }
 
-    open val entityRepository: EntityRepository by lazy {
+    override val entityRepository: EntityRepository by lazy {
         DefaultEntityRepository(databaseHolder, appTime, applicationScope, dispatchers)
     }
 
-    open val externalActivities: ExternalActivities by lazy { DefaultExternalActivities { appLockController } }
+    override val externalActivities: ExternalActivities by lazy { DefaultExternalActivities { appLockController } }
 
     open val biometricGateway: BiometricGateway by lazy { DefaultBiometricGateway(app) }
 
     /** Built on the main thread (the gate's first use): it observes [processLifecycle] from then on. */
-    open val appLockController: AppLockController by lazy {
+    override val appLockController: AppLockController by lazy {
         DefaultAppLockController(
             biometricGateway, keyVault, slotWriter = { dbMaintenance }, externalActivities, settingsStore, appTime,
             processLifecycle, listener = { gate }, texts = { PromptTexts.from(app) }, dispatchers, applicationScope,
@@ -121,7 +123,7 @@ open class AppContainer(protected val app: Application) {
         )
     }
 
-    open val sessionGate: SessionGate by lazy { gate }
+    override val sessionGate: SessionGate by lazy { gate }
 
     /** The single source of the window flags; closed until the settings and the key mode are known (DEC-67). */
     open val windowPolicy: StateFlow<WindowPolicy> by lazy {

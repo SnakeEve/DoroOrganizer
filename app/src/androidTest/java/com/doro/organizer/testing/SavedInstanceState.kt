@@ -1,0 +1,64 @@
+package com.doro.organizer.testing
+
+import android.app.Activity
+import android.app.Application
+import android.os.Bundle
+import android.os.Parcel
+import androidx.test.platform.app.InstrumentationRegistry
+
+/** The Bundle `MainActivity.onSaveInstanceState` filled while [block] ran (testing.md L-03). */
+fun captureSavedState(block: () -> Unit): Bundle {
+    val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
+    var saved: Bundle? = null
+    val callbacks = object : Application.ActivityLifecycleCallbacks {
+        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {
+            saved = outState
+        }
+
+        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+        override fun onActivityStarted(activity: Activity) = Unit
+        override fun onActivityResumed(activity: Activity) = Unit
+        override fun onActivityPaused(activity: Activity) = Unit
+        override fun onActivityStopped(activity: Activity) = Unit
+        override fun onActivityDestroyed(activity: Activity) = Unit
+    }
+    app.registerActivityLifecycleCallbacks(callbacks)
+    try {
+        block()
+    } finally {
+        app.unregisterActivityLifecycleCallbacks(callbacks)
+    }
+    return checkNotNull(saved) { "onSaveInstanceState did not run" }
+}
+
+/**
+ * The state Compose saved for the activity's composition: the nested Bundle under the `SaveableStateRegistry:<id>`
+ * key of the activity's `SavedStateRegistry`; null when Compose saved nothing.
+ */
+fun Bundle.composeSavedState(): Bundle? {
+    for (key in keySet()) {
+        @Suppress("DEPRECATION") // the value's type is not known up front
+        val nested = get(key) as? Bundle ?: continue
+        if (key.startsWith("SaveableStateRegistry:")) return nested
+        nested.composeSavedState()?.let { return it }
+    }
+    return null
+}
+
+/** The bytes of [this] as a Binder transaction would carry them. */
+fun Bundle.marshalled(): ByteArray {
+    val parcel = Parcel.obtain()
+    try {
+        parcel.writeBundle(this)
+        return parcel.marshall()
+    } finally {
+        parcel.recycle()
+    }
+}
+
+/** True when [text] appears in the marshalled bytes as a Parcel string (UTF-16) or a serialized one (UTF-8). */
+fun ByteArray.holdsText(text: String): Boolean =
+    contains(text.toByteArray(Charsets.UTF_16LE)) || contains(text.toByteArray(Charsets.UTF_8))
+
+private fun ByteArray.contains(part: ByteArray): Boolean =
+    (0..size - part.size).any { start -> part.indices.all { this[start + it] == part[it] } }

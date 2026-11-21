@@ -5,7 +5,8 @@ import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.PasswordReason
 import com.doro.organizer.security.BioSlotStatus
 import com.doro.organizer.security.SlotOffer
-import com.doro.organizer.testing.GateTest
+import com.doro.organizer.testing.GateComposeTest
+import com.doro.organizer.testing.GateUi
 import java.time.Duration
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -18,15 +19,24 @@ import org.junit.runner.RunWith
  * gate, controller, vault and DbMaintenance (DEC-62, DEC-65, DEC-74).
  */
 @RunWith(AndroidJUnit4::class)
-class ReturnRouteMatrixTest : GateTest() {
+class ReturnRouteMatrixTest : GateComposeTest() {
     private val offer get() = app.container.appLockController.slotOffer
 
     private suspend fun coldStartPassword(reason: PasswordReason = PasswordReason.None) {
         scene.coldStart()
         val state = scene.awaitGate { it is GateState.NeedsPassword } as GateState.NeedsPassword
         assertEquals(reason, state.reason)
-        scene.submit(PASSWORD)
+        ui.awaitPasswordScreen()
+        ui.assertReasonLine(
+            when (reason) {
+                PasswordReason.Reminder -> GateUi.REMINDER_LINE
+                PasswordReason.FingerprintChanged -> GateUi.FINGERPRINT_CHANGED_LINE
+                else -> null
+            },
+        )
+        ui.enterPassword(PASSWORD)
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
     }
 
     @Test
@@ -35,6 +45,7 @@ class ReturnRouteMatrixTest : GateTest() {
         scene.gateway.deviceSecure = false
         scene.coldStart()
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
         assertEquals(true, scene.settings.snapshot().lockAutoOffNotice)
         assertEquals(0, scene.gateway.prompts.size)
     }
@@ -70,8 +81,10 @@ class ReturnRouteMatrixTest : GateTest() {
         scene.gateway.deviceSecure = false
         scene.backgroundTrip()
         scene.awaitGate { it is GateState.Locked && it.password != null }
-        scene.submit(PASSWORD)
+        ui.awaitPasswordScreen()
+        ui.enterPassword(PASSWORD)
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
         scene.awaitOfferSetups(1) // the password's
         assertFalse(scene.settings.snapshot().biometricLock)
         assertEquals(true, scene.settings.snapshot().lockAutoOffNotice)
@@ -89,8 +102,9 @@ class ReturnRouteMatrixTest : GateTest() {
         assertEquals(SlotOffer.Missing, offer.value)
         scene.backgroundTrip() // R6: the password question again, the offer was dropped with the content
         scene.awaitGate { it is GateState.Locked && it.password != null }
+        ui.awaitPasswordScreen()
         assertEquals(null, offer.value)
-        scene.submit(PASSWORD)
+        ui.enterPassword(PASSWORD)
         scene.awaitGate(GateState.Ready)
         scene.awaitOfferSetups(2)
         assertEquals(SlotOffer.Missing, offer.value)
@@ -106,6 +120,8 @@ class ReturnRouteMatrixTest : GateTest() {
         scene.backgroundTrip()
         val locked = scene.awaitGate { it is GateState.Locked && it.password != null } as GateState.Locked
         assertEquals(PasswordReason.FingerprintChanged, locked.password?.reason)
+        ui.awaitPasswordScreen()
+        ui.assertReasonLine(GateUi.FINGERPRINT_CHANGED_LINE)
     }
 
     @Test
@@ -129,6 +145,7 @@ class ReturnRouteMatrixTest : GateTest() {
         scene.gateway.deviceSecure = false
         scene.backgroundTrip()
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
         assertFalse(scene.settings.snapshot().biometricLock)
         assertEquals(1, scene.gateway.prompts.size)
     }

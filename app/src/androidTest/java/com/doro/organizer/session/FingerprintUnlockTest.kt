@@ -5,8 +5,8 @@ import com.doro.organizer.data.HolderState
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.security.PromptResult
 import com.doro.organizer.testing.FakeBiometricGateway
+import com.doro.organizer.testing.GateComposeTest
 import com.doro.organizer.testing.GateScene
-import com.doro.organizer.testing.GateTest
 import com.doro.organizer.testing.openDescriptors
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -19,24 +19,33 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** L-31: the fingerprint alone opens at cold start, in every key mode with the lock on (DEC-65, Q8). */
+/**
+ * L-31: the fingerprint alone opens at cold start, in every key mode with the lock on (DEC-65, Q8); no password screen
+ * and no `NavDisplay` until Ready.
+ */
 @RunWith(AndroidJUnit4::class)
-class FingerprintUnlockTest : GateTest() {
+class FingerprintUnlockTest : GateComposeTest() {
     @Test
     fun plainMode_oneStrongPrompt_withoutCryptoObject() = runBlocking {
         scene.plant(KeyMode.PLAIN, lock = true)
-        scene.gateway.succeed()
         scene.coldStart()
+        scene.awaitPrompts(1)
+        ui.awaitLockScreen() // neither the password screen nor NavDisplay before the prompt succeeded
+        GateScene.onMain { scene.gateway.answer(PromptResult.Succeeded(cryptoMatches = true)) }
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
         assertEquals(listOf(FakeBiometricGateway.Prompt("Unlock Doro Organizer", false, "Cancel", withCrypto = false)), scene.gateway.prompts)
     }
 
     @Test
     fun deviceMode_oneStrongPrompt_withoutCryptoObject() = runBlocking {
         scene.plant(KeyMode.DEVICE, lock = true)
-        scene.gateway.succeed()
         scene.coldStart()
+        scene.awaitPrompts(1)
+        ui.awaitLockScreen() // neither the password screen nor NavDisplay before the prompt succeeded
+        GateScene.onMain { scene.gateway.answer(PromptResult.Succeeded(cryptoMatches = true)) }
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
         assertEquals(listOf(FakeBiometricGateway.Prompt("Unlock Doro Organizer", false, "Cancel", withCrypto = false)), scene.gateway.prompts)
     }
 
@@ -53,8 +62,10 @@ class FingerprintUnlockTest : GateTest() {
         // L-17: nothing is open before the prompt succeeds.
         assertEquals(HolderState.Closed, scene.holderState())
         assertEquals(0, openDescriptors(scene.liveFile()))
+        ui.awaitLockScreen()
         GateScene.onMain { scene.gateway.answer(PromptResult.Succeeded(cryptoMatches = true)) }
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
         assertTrue("never the password screen", states.await().none { it is GateState.NeedsPassword })
         assertEquals(listOf(FakeBiometricGateway.Prompt("Unlock Doro Organizer", false, "Use password", withCrypto = true)), scene.gateway.prompts)
         // L-03: the DEK unwrapped from the slot is zeroed once the raw key exists; the holder keeps only the raw key.
@@ -71,9 +82,12 @@ class FingerprintUnlockTest : GateTest() {
         scene.plant(KeyMode.PASSWORD, PASSWORD, lock = false, slot = false)
         scene.coldStart()
         scene.awaitGate { it is GateState.NeedsPassword }
+        ui.awaitPasswordScreen()
+        ui.assertReasonLine(null)
         assertEquals(0, scene.gateway.prompts.size)
-        scene.submit(PASSWORD)
+        ui.enterPassword(PASSWORD)
         scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
         assertEquals(0, scene.gateway.prompts.size)
     }
 

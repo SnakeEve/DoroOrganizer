@@ -2,4 +2,6 @@
 <resources>
     <!-- Themed icons (API 33+) use only the alpha of this layer, so the foreground glyph serves as is. -->
     <drawable name="ic_launcher_monochrome">@drawable/ic_launcher_foreground</drawable>
+    <!-- The gate screens' logo is the launcher foreground glyph (ui.md § 10.1, § 13.6). -->
+    <drawable name="ic_app_logo">@drawable/ic_launcher_foreground</drawable>
 </resources>

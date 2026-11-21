@@ -4,6 +4,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 plugins {
     alias(libs.plugins.android.application) // Kotlin is built into AGP 9: no org.jetbrains.kotlin.android (DEC-02)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization) // the @Serializable navigation keys (DEC-05)
     id("com.google.devtools.ksp") // on the root buildscript classpath: applied by id, without a version
     alias(libs.plugins.room)
     id("doro.verification-gates") // build-logic: local verification gates (testing.md § 9)
@@ -142,6 +143,13 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material3.adaptive.navigation.suite) // the shell's bar or rail (DEC-50)
+    implementation(libs.androidx.navigation3.runtime) // DEC-05
+    implementation(libs.androidx.navigation3.ui)
+    implementation(libs.androidx.lifecycle.viewmodel.navigation3) // one ViewModelStore per NavEntry
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.kotlinx.serialization.core) // the navigation keys (DEC-05)
     implementation(libs.sqlcipher.android) // DEC-08: the only SQLite engine
     implementation(libs.androidx.room.runtime) // DEC-07: on SQLCipher through SupportOpenHelperFactory
     ksp(libs.androidx.room.compiler)
@@ -162,6 +170,9 @@ dependencies {
     androidTestImplementation(libs.kotlinx.coroutines.test) // virtual time for the AppTime wiring
     androidTestImplementation(libs.turbine) // waits for Flow emissions (testing.md § 1)
     androidTestImplementation(libs.androidx.test.espresso.intents) // answers the API 28–29 credential screen (L-19)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4) // the Compose halves of the gate tests (SPEC T15)
+    androidTestImplementation(libs.androidx.test.uiautomator) // L-21: Home and the relaunch of the task
     androidTestUtil(libs.androidx.test.orchestrator)
 }
 
