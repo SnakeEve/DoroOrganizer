@@ -40,7 +40,7 @@ Setup check, done: every DEC-02 version was re-checked against its release page 
 - `targetSdk = 35` is explicit: AGP 9 otherwise defaults it to compileSdk (37). Because targetSdk 35 is intentional (DEC-01, Q3), lint's `OldTargetApi` check is disabled (`disable += "OldTargetApi"`); no other check is disabled.
 - `androidx.sqlite:sqlite` 2.7.1 is an explicit `implementation` dependency (DEC-02): `net.zetetic:sqlcipher-android` 4.20.0 declares it with runtime scope only, but its `net.zetetic.database.sqlcipher.SQLiteDatabase` extends `SupportSQLiteDatabase`, so every compile against the SQLCipher classes needs the type on the compile classpath.
 - Release builds run R8 with `proguard-android-optimize.txt` (AGP 9 rejects `proguard-android.txt`) and resource shrinking. `proguard-rules.pro` carries the log-stripping rules from [security.md § 10](security.md#10-logging-and-leak-hygiene-dec-70): `-maximumremovedandroidloglevel 7` plus `-assumenosideeffects class android.util.Log { v d i w e wtf println }`, because on AGP 9.5.1 the level rule alone left 28 `Log` calls in the release dex (DEC-13, DEC-70).
-- The verification gates of [testing.md § 9](testing.md#9-ci-pipeline) are Gradle tasks from the build-only included build `build-logic` (`pluginManagement { includeBuild("build-logic") }`, plugin id `doro.verification-gates`, DEC-03, DEC-14); see [Build logic and gate configuration](#build-logic-and-gate-configuration-dec-03-dec-14).
+- The verification gates of [testing.md § 9](testing.md#9-ci-pipeline) are Gradle tasks from the build-only included build `build-logic` (`pluginManagement { includeBuild("build-logic") }`, plugin id `doro.verification-gates`, DEC-03, DEC-14); the same included build provides `doro.test-apk-keep-rules`, which adds generated keep rules to the R8 configuration of `qa` and `benchmark` only (DEC-103 (5)); see [Build logic and gate configuration](#build-logic-and-gate-configuration-dec-03-dec-14).
 - Room Gradle plugin: `room { schemaDirectory("$projectDir/schemas") }`; `app/schemas/` is committed (DEC-07, DEC-14).
 - `buildConfig` and `resValues` stay off (AGP default). Per-build-type code lives in `src/debug` and `src/release` ([Per-build-type files](#per-build-type-files)).
 - Lint: `NewApi` stays an error and `abortOnError` stays true (DEC-14); `OldTargetApi` is disabled (above, DEC-01).
@@ -162,35 +162,40 @@ com.doro.organizer
 
 #### Build logic and gate configuration (DEC-03, DEC-14)
 
-The verification gates of [testing.md § 9](testing.md#9-ci-pipeline) are Gradle tasks that live in a separate, build-only **included build**, not in an app module. DEC-03 allows it explicitly: it contributes no code, resource or dependency to any APK, has no Android plugin of its own and is not a Gradle subproject of the app build.
+The verification gates of [testing.md § 9](testing.md#9-ci-pipeline) are Gradle tasks that live in a separate, build-only **included build**, not in an app module. DEC-03 allows it explicitly: it contributes no code, resource or dependency to any APK (its `doro.test-apk-keep-rules` plugin only adds a generated keep-rules file to the R8 configuration of `qa` and `benchmark`, DEC-103 (5)), has no Android plugin of its own and is not a Gradle subproject of the app build.
 
 ```
 DoroOrganizer/
 ├── settings.gradle.kts      pluginManagement { includeBuild("build-logic") }; include(":app")
-├── app/                     the one app module; applies id("doro.verification-gates")
+├── app/                     the one app module; applies id("doro.verification-gates") and id("doro.test-apk-keep-rules")
 ├── build-logic/             included build (rootProject.name = "build-logic"), `kotlin-dsl`
 │   ├── settings.gradle.kts  reads the version catalog from ../gradle/libs.versions.toml
-│   ├── build.gradle.kts     compileOnly com.android.tools.build:gradle-api (AGP's public API); testImplementation JUnit4
-│   └── src/main/kotlin/com/doro/organizer/gates/
-│       ├── VerificationGatesPlugin   plugin "doro.verification-gates": registers the gate tasks on :app
-│       ├── manifest/         CheckManifestTask (:app:checkReleaseManifestPolicy), ManifestRules, FilePaths, Xml
-│       ├── pagesize/         CheckPageSizeTask (:app:checkReleasePageSize), PageSizeRules, ElfLoadSegments
-│       ├── logs/             CheckReleaseLogsTask (:app:checkReleaseLogs), DexLogScanner, R8Outputs
-│       ├── dependencies/     CheckBannedDependenciesTask (:app:checkBannedDependencies), BannedDependencies, ModuleGraph
-│       └── devicetests/      CheckDeviceTestResultsTask (:app:checkDeviceTestResults), DeviceTestResults
-└── config/                  the gates' reviewed lists and scripts (root directory, read by the gates and their tests)
+│   ├── build.gradle.kts     compileOnly com.android.tools.build:gradle-api (AGP's public API); testImplementation JUnit4; registers both plugins
+│   └── src/main/kotlin/com/doro/organizer/
+│       ├── gates/
+│       │   ├── VerificationGatesPlugin   plugin "doro.verification-gates": registers the gate tasks on :app
+│       │   ├── manifest/     CheckManifestTask (:app:checkReleaseManifestPolicy), ManifestRules, FilePaths, Xml
+│       │   ├── pagesize/     CheckPageSizeTask (:app:checkReleasePageSize), PageSizeRules, ElfLoadSegments
+│       │   ├── logs/         CheckReleaseLogsTask (:app:checkReleaseLogs), DexLogScanner, R8Outputs
+│       │   ├── dependencies/ CheckBannedDependenciesTask (:app:checkBannedDependencies), BannedDependencies, ModuleGraph
+│       │   └── devicetests/  CheckDeviceTestResultsTask (:app:checkDeviceTestResults), DeviceTestResults
+│       └── testapk/          TestApkKeepRulesPlugin (plugin "doro.test-apk-keep-rules"), GenerateTestApkKeepRulesTask
+│                             (:app:generate<Variant>TestApkKeepRules), TestApkKeepRules, ClassHeader (DEC-103 (5))
+└── config/                  the reviewed lists and scripts of the gates and the keep-rule generator (root directory, read by them and their tests)
     ├── permission-allowlist.txt        security.md § 9.3
     ├── banned-dependencies.txt         security.md § 9.3 and testing.md § 9
     ├── native-library-allowlist.txt    the reviewed native libraries (ABI and 16 KB pages)
     ├── released-schema-versions.txt    released Room schema versions (DEC-14, DEC-88)
+    ├── test-apk-missing-references.txt the test-APK references nothing defines that are harmless (DEC-103 (5))
     ├── check-schemas.sh                the schema gate
     └── check-released-schemas.sh       its released-schema part
 ```
 
 - The plugin registers `checkReleaseManifestPolicy`, `checkReleasePageSize`, `checkReleaseLogs`, `checkBannedDependencies` and the aggregate `verificationGates` (all in the `verification` group), and `checkDeviceTestResults`, the result check of the `device-tests` job ([testing.md § 9](testing.md#9-ci-pipeline)), which finalizes `connected<TestBuildType>AndroidTest`, reads AGP's results folder of that run by its path and is not part of `verificationGates`. `checkReleaseManifest` is not used as a name because AGP already defines a task of that name. `app/build.gradle.kts` makes `:app:verificationGates` also depend on `:build-logic:test`, so the unit tests that pin the gate rules run with the gates.
 - The gate tasks read only AGP's public variant API (`androidComponents.onVariants`: the `APK`, `MERGED_MANIFEST` and `OBFUSCATION_MAPPING_FILE` artifacts, `applicationId`, the resource sources, each component's `runtimeConfiguration`) and the build-tools binaries `zipalign` and `dexdump` of the SDK's `buildToolsVersion`. They write nothing and are not cacheable.
-- The `build-logic` tests are JVM-only JUnit4 tests (no Android, no SQLCipher); they read the real `config/` files, compare the banned-dependency bullets of security.md § 9.3 and testing.md § 9 with `config/banned-dependencies.txt`, and run `config/check-released-schemas.sh` in a throwaway git repository (they need `git` and `sh` on the path; on Windows `sh` comes from Git).
-- The package-layer rules, [Import rules](#import-rules) and [Boundary test](#boundary-test) apply to the app sources only, not to `build-logic`. The `com.doro.organizer.gates` package exists only in `build-logic`.
+- `doro.test-apk-keep-rules` (`TestApkKeepRulesPlugin`, DEC-103 (5)) registers `generate<Variant>TestApkKeepRules` only for a minified `qa` or `benchmark` variant that has an androidTest component (AGP creates one only for the `-PtestBuildType` build type), never for `release`. The task reads the `ScopedArtifact.CLASSES` (scope ALL) of the app and of its androidTest component, `sdkComponents.bootClasspath` with compileSdk's optional `android.test.*` jars, and `config/test-apk-missing-references.txt`; it runs R8 TraceReferences from AGP's own `builder` artifact (a detached configuration) in a separate JVM and writes `build/intermediates/doro_test_apk_keep_rules/<variant>/`, which the plugin adds with `variant.proguardFiles.add`. It is cacheable and configuration-cache safe. The `release-logs` gate fails a release R8 configuration that holds these rules.
+- The `build-logic` tests are JVM-only JUnit4 tests (no Android, no SQLCipher); they read the real `config/` files, compare the banned-dependency bullets of security.md § 9.3 and testing.md § 9 with `config/banned-dependencies.txt`, and run `config/check-released-schemas.sh` in a throwaway git repository (they need `git` and `sh` on the path; on Windows `sh` comes from Git). `ClassHeaderTest` and `TestApkKeepRulesTest` pin the class-file reader and the rule logic of `doro.test-apk-keep-rules` (`appliesTo` is never true for `release`); their fixture `IndyLambdaSample.java` lives in `src/test/java`, because javac always compiles a Java lambda to an `invokedynamic` site.
+- The package-layer rules, [Import rules](#import-rules) and [Boundary test](#boundary-test) apply to the app sources only, not to `build-logic`. The `com.doro.organizer.gates` and `com.doro.organizer.testapk` packages exist only in `build-logic`.
 
 ### Per-build-type files
 
@@ -202,7 +207,7 @@ DoroOrganizer/
 | `DebugTools.kt` | `install(app)` installs StrictMode ([Threading](#threading)); `configure(activity)`, called from `MainActivity.attachBaseContext`, applies the font scale an instrumented test set in `DebugTools.fontScale` through `applyOverrideConfiguration`, so dialog and sheet windows inherit it (testing.md I-35); `fontScale` null keeps the phone's | both no-op |
 | `debug/CrashTestService.kt` | the `:crashtest` service of [testing.md § 5](testing.md#5-security-and-lifecycle-tests); declared only in the debug manifest | absent |
 
-Each pair is two files with the same fully qualified class name in `src/debug/java` and `src/release/java`. `src/main` never contains `Log` calls. Instrumented-test sources follow the same split: tests and fixtures that reach the `debug` package or `DebugTools.fontScale` live in `src/androidTestDebug/java`, and their counterparts for the `qa` and `benchmark` test APKs in `src/androidTestRelease/java` (DEC-103, [testing.md § 1](testing.md#1-test-layers)).
+Each pair is two files with the same fully qualified class name in `src/debug/java` and `src/release/java`. `src/main` never contains `Log` calls. Instrumented-test sources follow the same split: tests and fixtures that reach the `debug` package or `DebugTools.fontScale` live in `src/androidTestDebug/java`, and their counterparts for the `benchmark` test APK in `src/androidTestRelease/java`; the `qa` test APK compiles only `src/androidTestQa` (DEC-103, [testing.md § 1](testing.md#1-test-layers)).
 
 ### Import rules
 
