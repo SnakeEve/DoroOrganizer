@@ -202,6 +202,8 @@ adb="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"
 "$adb" shell 'CLASSPATH=$(pm path androidx.test.services) app_process / androidx.test.services.shellexecutor.ShellMain am instrument -r -w -e targetInstrumentation com.doro.organizer.debug.test/com.doro.organizer.testing.DoroTestRunner -e clearPackageData true -e class com.doro.organizer.data.db.NoteRowTest androidx.test.orchestrator/.AndroidTestOrchestrator'
 ```
 
+**Perf tests this way (`benchmark` app and test APK):** `PerfRecorder.openOutput` writes through TestStorage and fails every JSON write and `exportSeedBackup` without the runner argument, so add `-e useTestStorageService true`. Gradle then does not copy the output either: pull it by hand with `MSYS_NO_PATHCONV=1 "$adb" pull /sdcard/googletest/test_outputfiles <dir>` (testing.md § 8, § 9 `perf`). The test services app also needs the all-files grant that Gradle gives it on each run (`appops set androidx.test.services MANAGE_EXTERNAL_STORAGE allow`; it stays while the app is installed).
+
 **Verifying it before relying on it:**
 - Run one small class this way and through Gradle, and compare the results. The raw output (`-r`) ends with the test counts. Failures print in full, and `println` lines go to logcat (`-s System.out:I`).
 - Find out whether an `install -r` **update** of an installed package passes without a popup on HyperOS 3.0. If it does, a code change costs at most two popups, and test-only changes cost one.
