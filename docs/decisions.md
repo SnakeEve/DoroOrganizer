@@ -27,6 +27,21 @@ None open. A new question takes the next free number, and the decisions it affec
 | Q11 | The keyboard must never learn: every note, person, project and search field always asks for no personalized learning | DEC-71 |
 | Q12 | applicationId and package root `com.doro.organizer` | DEC-03 |
 
+### Sign-off of build decisions
+
+The owner reviewed the decisions the build made without them, from a plain-language summary checked against these rows, the docs and the code. Items 2–8 change the rows named in "Applied in"; where a row and an item disagree, the item wins.
+
+| # | Owner's answer (2026-11-21) | Applied in |
+|---|---|---|
+| 1 | Approved as recorded: DEC-58, DEC-76, DEC-78, DEC-79, DEC-92 to DEC-95, DEC-97, DEC-100 and DEC-102; the T15–T21 changes to DEC-50, DEC-57 and DEC-90; DEC-59, DEC-75, DEC-77, DEC-96, DEC-99 and DEC-101 as items 2–8 change them. DEC-98 was already the owner's decision (2026-11-20). DEC-103 is reviewed after T22's device runs | — |
+| 2 | Password attempts while the phone's storage is full: the stricter rule. An attempt is counted before its password is checked. When the count cannot be saved, the password is not checked and the screen says that storage is full. Closing and reopening the app therefore never gives an extra guess. While storage is full the password cannot unlock until space is freed; fingerprint unlock still works | DEC-75 |
+| 3 | When the phone cannot tell whether the fingerprint key exists, the app still asks for the password and deletes nothing, but every text stays true. It does not say the fingerprints changed or that fingerprint unlock was switched off, it offers no fingerprint set-up, Settings does not say fingerprint unlock is not set up, and "Forgot password?" says the fingerprint could not be checked and to try again later instead of saying the password cannot be recovered | DEC-77 |
+| 4 | When the app's key file cannot be read at unlock, the lock screen shows a short line saying so and how to try again, instead of staying silent. Protection is unchanged | DEC-96 |
+| 5 | Picking a person or project when the choice cannot be saved (storage full): that person's or project's notes open anyway. The choice is not remembered for the next start, and a short message says it could not be saved | DEC-99 |
+| 6 | "Biometric lock turned off" closes only with its OK button; Back and a tap outside do nothing. "Started fresh", "Database encryption is now off" and "Your startup password needs renewing" keep Back and a tap outside as OK | DEC-101 |
+| 7 | Fix: an Associate screen that comes back after Android closed the app, without its selection, closes like the Set date and Delete dialogs, instead of linking nothing without a message | DEC-57 |
+| 8 | Fix: a Forgot password screen that comes back after Android closed the app asks again for the fingerprint answer when it has none and no reset is running, instead of staying blank until it is reopened | DEC-59 |
+
 
 ## Spec errata
 

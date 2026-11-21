@@ -41,7 +41,8 @@ For Claude Code on any machine that continues this build, and for the owner. Rea
      - The first install of the `.qa` and `.benchmark` apps and their test apps needs the owner's tap on HyperOS (section 4.2). Updates after that do not.
   2. **T23:** the manual QA checklist (testing.md §10) with the owner, L-10 over the M-20 fixtures, and the visual check of the icons drawn offline in T16–T19.
 - **Not in SPEC yet: release signing.** Where the owner's signing key lives and how it is backed up is still open, and the owner has not been asked yet. Ask at the next chance, then add it as a task; it must be settled before any release. A lost key means updates cannot install over the app without deleting the user's notes.
-- **Waiting for the owner's sign-off:** the decisions made without them while building: DEC-75–79 and DEC-92–98; from T15–T21 the new DEC-58, DEC-59 and DEC-99–103 and the amended DEC-50, DEC-57 and DEC-90; plus the SPEC row amendments recorded in the "docs: record Tn …" and "spec: …" commits. Offer the owner a one-page plain-language summary.
+- **Owner sign-off, 2026-11-21:** the owner approved the 20 decisions the build made without them (docs/decisions.md § Sign-off of build decisions). They chose the stricter or clearer option in DEC-75, DEC-77, DEC-96, DEC-99 and DEC-101 and asked for two fixes (DEC-57, DEC-59). That follow-up batch runs before T22, outside SPEC §T: FORMAT.md lets only the spec skill add a row, and this machine has none.
+- **Still waiting for the owner's sign-off:** DEC-103, after T22's device runs, and the SPEC row amendments recorded in the "docs: record Tn …" and "spec: …" commits.
 - **SPEC tidy-up, for the spec skill** (FORMAT.md lets a build change only the status cell): B3 still reads OPEN although T24 fixed it, and the L-15 wording in the T19 and T22 rows predates the 260/260 run above.
 
 ## 2. The owner's working preferences
