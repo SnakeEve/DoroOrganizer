@@ -41,6 +41,7 @@ The owner reviewed the decisions the build made without them, from a plain-langu
 | 6 | "Biometric lock turned off" closes only with its OK button; Back and a tap outside do nothing. "Started fresh", "Database encryption is now off" and "Your startup password needs renewing" keep Back and a tap outside as OK | DEC-101 |
 | 7 | Fix: an Associate screen that comes back after Android closed the app, without its selection, closes like the Set date and Delete dialogs, instead of linking nothing without a message | DEC-57 |
 | 8 | Fix: a Forgot password screen that comes back after Android closed the app asks again for the fingerprint answer when it has none and no reset is running, instead of staying blank until it is reopened | DEC-59 |
+| 9 | The texts that items 2–5 added are approved as worded: `gate_password_storage_full`, `gate_key_state_unreadable`, `forgot_body_fingerprint_unknown` and `primary_not_remembered` (ui.md) | DEC-75, DEC-77, DEC-96, DEC-99 |
 
 
 ## Spec errata
