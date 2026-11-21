@@ -6,6 +6,7 @@ import com.doro.organizer.core.result.AppError
 import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.data.HolderState
 import com.doro.organizer.data.OpenFailureKind
+import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.settings.Settings
 import com.doro.organizer.testing.ApplicationScopeRule
@@ -195,7 +196,8 @@ class ForgotPasswordTest {
         setup.settings.setBiometricLock(true)
         setup.settings.setScreenshotProtection(true)
         setup.settings.setEncryptBackups(true)
-        setup.settings.setRemembered(personId = 1, projectId = 1)
+        setup.settings.setRemembered(EntityKind.Person, 1)
+        setup.settings.setRemembered(EntityKind.Project, 1)
     }
 
     /** L-24's end state after Erase: no key-state, no generation file, no key, empty temporary dirs, settings reset. */

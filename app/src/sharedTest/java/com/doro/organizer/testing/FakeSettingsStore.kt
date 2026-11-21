@@ -1,6 +1,7 @@
 package com.doro.organizer.testing
 
 import com.doro.organizer.model.DraftInsert
+import com.doro.organizer.model.EntityKind
 import com.doro.organizer.settings.DraftInserts
 import com.doro.organizer.settings.Settings
 import com.doro.organizer.settings.SettingsStore
@@ -61,8 +62,12 @@ class FakeSettingsStore(initial: Settings = Settings()) : SettingsStore {
     override suspend fun recordPasswordVerified(epochMillis: Long) =
         edit { it.copy(unlockFailures = 0, unlockRetryAtElapsedMs = 0, passwordVerifiedAt = epochMillis) }
 
-    override suspend fun setRemembered(personId: Long?, projectId: Long?) =
-        edit { it.copy(rememberedPersonId = personId, rememberedProjectId = projectId) }
+    override suspend fun setRemembered(kind: EntityKind, id: Long) = edit { it.withRemembered(kind, id) }
+
+    override suspend fun forgetRemembered(kind: EntityKind, id: Long) = edit {
+        val current = if (kind == EntityKind.Person) it.rememberedPersonId else it.rememberedProjectId
+        if (current == id) it.withRemembered(kind, null) else it
+    }
 
     override suspend fun putDraftInsert(draftKey: String, record: DraftInsert) = update {
         draftInserts = DraftInserts.with(draftInserts, draftKey, record)
@@ -103,4 +108,9 @@ class FakeSettingsStore(initial: Settings = Settings()) : SettingsStore {
         edits++
         if (visible.value != null) visible.value = values
     }
+}
+
+private fun Settings.withRemembered(kind: EntityKind, id: Long?): Settings = when (kind) {
+    EntityKind.Person -> copy(rememberedPersonId = id)
+    EntityKind.Project -> copy(rememberedProjectId = id)
 }

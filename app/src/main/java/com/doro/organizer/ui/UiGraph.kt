@@ -2,6 +2,7 @@ package com.doro.organizer.ui
 
 import android.view.View
 import androidx.compose.runtime.staticCompositionLocalOf
+import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.external.ExternalActivities
 import com.doro.organizer.core.messages.AppMessages
 import com.doro.organizer.core.time.AppTime
@@ -38,6 +39,9 @@ interface UiGraph : GateGraph {
 
     /** The editor's save-on-leave (architecture.md § Threading). */
     val applicationScope: CoroutineScope
+
+    /** The list ViewModels map rows on `default` (architecture.md § Threading: heavy list mapping). */
+    val dispatchers: AppDispatchers
 }
 
 val LocalUiGraph = staticCompositionLocalOf<UiGraph> { error("MainActivity provides the UiGraph") }

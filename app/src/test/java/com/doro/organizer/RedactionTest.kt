@@ -55,6 +55,16 @@ import com.doro.organizer.security.PreparedKey
 import com.doro.organizer.security.UnlockResult
 import com.doro.organizer.testing.SENTINEL
 import com.doro.organizer.testing.TEST_SLOT_KEY_ALIAS
+import com.doro.organizer.ui.common.EntityPickerUiState
+import com.doro.organizer.ui.common.EntityRowUi
+import com.doro.organizer.ui.common.NoteRowUi
+import com.doro.organizer.ui.notes.ChipValue
+import com.doro.organizer.ui.notes.FilterChipUi
+import com.doro.organizer.ui.notes.FilterDimension
+import com.doro.organizer.ui.notes.NoteListUiState
+import com.doro.organizer.ui.notes.PerspectiveSpec
+import com.doro.organizer.ui.notes.Primary
+import java.time.LocalDate
 import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -395,5 +405,54 @@ class RedactionTest {
         assertEquals("InvalidState", e.message)
         assertEquals(null, e.cause)
         assertFalse(e.toString().contains(SENTINEL))
+    }
+
+    @Test
+    fun listUiTypes_printIdsAndCountsOnly() {
+        val row = NoteRowUi(
+            id = 21,
+            title = SENTINEL,
+            body = SENTINEL,
+            checked = false,
+            date = null,
+            overdue = false,
+            people = listOf(SENTINEL),
+            projects = listOf(SENTINEL),
+            orphan = false,
+        )
+        val chip = FilterChipUi(FilterDimension.Person, ChipValue.Entity(3, SENTINEL))
+        val state = NoteListUiState(
+            spec = PerspectiveSpec.of(Perspective.Individual),
+            loading = false,
+            primary = Primary.Entity(2, SENTINEL),
+            rows = listOf(row),
+            today = LocalDate.of(2026, 11, 17),
+            chips = listOf(chip),
+            filtersActive = true,
+            searchOpen = true,
+            dateFilter = DateFilter.Undated,
+            calendar = null,
+            dialog = null,
+            message = null,
+        )
+        val picker = EntityPickerUiState(
+            loading = false,
+            anyEntity = true,
+            rows = listOf(EntityRowUi(4, SENTINEL, 1, LocalDate.of(2026, 11, 17))),
+        )
+
+        val printed = listOf(row, chip, state, state.primary, picker, picker.rows.single()).map { it.toString() }
+
+        assertEquals(
+            listOf(
+                "NoteRowUi(id=21)",
+                "FilterChipUi(Person, Entity(id=3))",
+                "NoteListUiState(Individual, rows=1)",
+                "Entity(id=2)",
+                "EntityPickerUiState(loading=false, rows=1)",
+                "EntityRowUi(id=4)",
+            ),
+            printed,
+        )
     }
 }

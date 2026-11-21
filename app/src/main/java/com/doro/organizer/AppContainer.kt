@@ -56,7 +56,7 @@ import kotlinx.coroutines.launch
  * only as a [UiGraph] (architecture.md § Dependency injection).
  */
 open class AppContainer(protected val app: Application) : UiGraph {
-    open val dispatchers: AppDispatchers by lazy { AppDispatchers.production() }
+    override val dispatchers: AppDispatchers by lazy { AppDispatchers.production() }
 
     /** Never cancelled; detached work survives its caller and its failures still crash the app. */
     override val applicationScope: CoroutineScope by lazy { CoroutineScope(SupervisorJob() + dispatchers.default) }

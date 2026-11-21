@@ -5,6 +5,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.core.result.AppError
 import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.data.HolderState
+import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.CorruptRestoreScene
@@ -183,7 +184,8 @@ class CorruptionTest {
         setup.settings.setBiometricLock(true)
         setup.settings.setScreenshotProtection(true)
         setup.settings.setEncryptBackups(true)
-        setup.settings.setRemembered(personId = 1, projectId = 1)
+        setup.settings.setRemembered(EntityKind.Person, 1)
+        setup.settings.setRemembered(EntityKind.Project, 1)
     }
 
     /** L-24's end state after Start fresh: one `PLAIN` generation with five empty tables, nothing else left. */

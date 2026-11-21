@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.model.DraftInsert
+import com.doro.organizer.model.EntityKind
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger
@@ -67,7 +68,8 @@ class SettingsStoreTest {
         store.setEncryptBackups(true)
         store.recordPasswordVerified(1_700_000_000_000)
         store.setBackoff(failures = 6, retryAtElapsedMs = 90_000)
-        store.setRemembered(personId = 5, projectId = 6)
+        store.setRemembered(EntityKind.Person, 5)
+        store.setRemembered(EntityKind.Project, 6)
 
         val expected = Settings(
             screenshotProtection = true,
@@ -81,8 +83,25 @@ class SettingsStoreTest {
         )
         assertEquals(expected, store.snapshot())
         assertEquals(expected, withTimeout(10.seconds) { store.settings.first { it == expected } })
-        store.setRemembered(personId = null, projectId = 6)
+        store.forgetRemembered(EntityKind.Person, 5)
         assertEquals(expected.copy(rememberedPersonId = null), store.snapshot())
+    }
+
+    @Test
+    fun remembered_eachKindIsItsOwnKey_andForgetOnlyClearsTheIdItNames() = runBlocking {
+        val store = store()
+        store.setRemembered(EntityKind.Person, 5)
+        store.setRemembered(EntityKind.Project, 6)
+
+        store.setRemembered(EntityKind.Person, 7)
+        assertEquals(Settings(rememberedPersonId = 7, rememberedProjectId = 6), store.snapshot())
+
+        // The probe of the deleted person 5 answers after the user chose 7: the newer choice stays (ui.md § 4.2).
+        store.forgetRemembered(EntityKind.Person, 5)
+        assertEquals(Settings(rememberedPersonId = 7, rememberedProjectId = 6), store.snapshot())
+
+        store.forgetRemembered(EntityKind.Project, 6)
+        assertEquals(Settings(rememberedPersonId = 7), store.snapshot())
     }
 
     @Test
@@ -115,7 +134,8 @@ class SettingsStoreTest {
         val scope = newScope()
         val dataStore = CountingDataStore(DefaultSettingsStore.dataStoreOn(defaultFile(), scope))
         val store = DefaultSettingsStore(dataStore, scope)
-        store.setRemembered(personId = 5, projectId = 6)
+        store.setRemembered(EntityKind.Person, 5)
+        store.setRemembered(EntityKind.Project, 6)
         store.putDraftInsert("draft", DraftInsert(1, emptyMap(), emptyMap()))
         val editsBefore = dataStore.edits.get()
 
@@ -150,7 +170,8 @@ class SettingsStoreTest {
         store.setLockAutoOff()
         store.recordPasswordVerified(7)
         store.setBackoff(failures = 6, retryAtElapsedMs = 90_000)
-        store.setRemembered(personId = 5, projectId = 6)
+        store.setRemembered(EntityKind.Person, 5)
+        store.setRemembered(EntityKind.Project, 6)
         store.onDataReplaced()
         val draft = DraftInsert(3, mapOf("p" to 4L), emptyMap())
         store.putDraftInsert("draft", draft)

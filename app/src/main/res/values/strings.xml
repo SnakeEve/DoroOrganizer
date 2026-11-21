@@ -14,6 +14,72 @@
     <string name="action_cancel">Cancel</string>
     <string name="action_ok">OK</string>
     <string name="a11y_loading">Loading</string>
+    <string name="action_search">Search</string>
+    <string name="action_done">Done</string>
+    <!-- Quoted: aapt trims unquoted leading and trailing whitespace. -->
+    <string name="names_separator">", "</string>
+
+    <!-- Lists and rows (ui.md § 11.2). -->
+    <string name="no_data">(No data)</string>
+    <string name="action_clear_filters">Clear filters</string>
+    <string name="label_orphaned">Orphaned</string>
+    <string name="label_overdue">Overdue</string>
+    <string name="a11y_mark_done">Mark note as done</string>
+    <string name="a11y_mark_not_done">Mark note as not done</string>
+    <string name="state_done">Done</string>
+    <string name="state_not_done">Not done</string>
+    <string name="announce_marked_done">Marked as done</string>
+    <string name="announce_marked_not_done">Marked as not done</string>
+    <string name="a11y_row_people">People: %1$s</string>
+    <string name="a11y_row_projects">Projects: %1$s</string>
+
+    <!-- Search and filters (ui.md § 11.3). -->
+    <string name="search_hint">Search notes</string>
+    <string name="action_close_search">Close search</string>
+    <string name="action_clear_search">Clear search text</string>
+    <string name="filter_person">Person</string>
+    <string name="filter_project">Project</string>
+    <string name="filter_date">Date</string>
+    <string name="filter_date_undated">Undated</string>
+    <string name="filter_any">Any</string>
+    <string name="date_range_both">%1$s – %2$s</string>
+    <string name="date_range_from">From %1$s</string>
+    <string name="date_range_until">Until %1$s</string>
+    <string name="a11y_filter_person">Person filter: %1$s</string>
+    <string name="a11y_filter_project">Project filter: %1$s</string>
+    <string name="a11y_filter_date">Date filter: %1$s</string>
+    <string name="a11y_change_filter">Change filter</string>
+    <string name="date_filter_title">Filter by date</string>
+    <string name="date_filter_any">Any date</string>
+    <string name="date_filter_range">Date range</string>
+    <string name="date_filter_from">From</string>
+    <string name="date_filter_until">Until</string>
+    <string name="action_clear_from">Clear start date</string>
+    <string name="action_clear_until">Clear end date</string>
+
+    <!-- Perspectives and calendar (ui.md § 11.4). -->
+    <string name="action_today">Today</string>
+    <string name="label_today">Today</string>
+    <string name="a11y_previous_month">Previous month</string>
+    <string name="a11y_next_month">Next month</string>
+    <string name="action_select_range">Select range</string>
+    <string name="action_clear_range">Clear range</string>
+    <string name="a11y_day_click">Show notes for this day</string>
+    <string name="a11y_day_today">today</string>
+    <string name="a11y_day_has_notes">has notes</string>
+    <string name="a11y_day_range_start">start of range</string>
+    <string name="a11y_day_range_end">end of range</string>
+    <string name="a11y_day_in_range">in range</string>
+
+    <!-- EntityPicker (ui.md § 11.7): the embedded body of Individual and Project. -->
+    <string name="picker_search_people">Search people</string>
+    <string name="picker_search_projects">Search projects</string>
+    <plurals name="picker_entity_meta">
+        <item quantity="one">%1$d note · added %2$s</item>
+        <item quantity="other">%1$d notes · added %2$s</item>
+    </plurals>
+    <string name="picker_empty_people_hint">People are created in a note: tap + and use Add person.</string>
+    <string name="picker_empty_projects_hint">Projects are created in a note: tap + and use Add project.</string>
 
     <!-- Restore errors (ui.md § 11.10), the InvalidBackup texts of AppError.messageRes(). -->
     <string name="restore_error_not_backup">This file is not a Doro Organizer backup.</string>

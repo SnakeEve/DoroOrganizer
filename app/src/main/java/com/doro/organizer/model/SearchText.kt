@@ -19,13 +19,10 @@ object SearchText {
      * surrogate pair, with `\`, `%` and `_` escaped for `LIKE … ESCAPE '\'`. Null for blank input: no search filter.
      */
     fun toLikeTerm(input: String): String? {
-        val folded = fold(TextWhitespace.trim(input))
-        var end = minOf(folded.length, MAX_TERM_CHARS)
-        if (end < folded.length && folded[end - 1].isHighSurrogate()) end--
-        if (end == 0) return null
-        return buildString(end + end / 4) {
-            for (i in 0 until end) {
-                val c = folded[i]
+        val term = capChars(fold(TextWhitespace.trim(input)), MAX_TERM_CHARS)
+        if (term.isEmpty()) return null
+        return buildString(term.length + term.length / 4) {
+            for (c in term) {
                 if (c == '\\' || c == '%' || c == '_') append('\\')
                 append(c)
             }

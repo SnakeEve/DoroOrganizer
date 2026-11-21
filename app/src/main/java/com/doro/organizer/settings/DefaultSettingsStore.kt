@@ -14,6 +14,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
 import com.doro.organizer.model.DraftInsert
+import com.doro.organizer.model.EntityKind
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
@@ -64,9 +65,11 @@ class DefaultSettingsStore internal constructor(
         it[PASSWORD_VERIFIED_AT] = epochMillis
     }
 
-    override suspend fun setRemembered(personId: Long?, projectId: Long?) = edit {
-        it.putOrRemove(REMEMBERED_PERSON, personId)
-        it.putOrRemove(REMEMBERED_PROJECT, projectId)
+    override suspend fun setRemembered(kind: EntityKind, id: Long) = edit { it[rememberedKey(kind)] = id }
+
+    override suspend fun forgetRemembered(kind: EntityKind, id: Long) = edit {
+        val key = rememberedKey(kind)
+        if (it[key] == id) it.remove(key)
     }
 
     override suspend fun putDraftInsert(draftKey: String, record: DraftInsert) = edit {
@@ -99,8 +102,9 @@ class DefaultSettingsStore internal constructor(
         dataStore.edit { change(it) }
     }
 
-    private fun <T> MutablePreferences.putOrRemove(key: Preferences.Key<T>, value: T?) {
-        if (value == null) remove(key) else this[key] = value
+    private fun rememberedKey(kind: EntityKind) = when (kind) {
+        EntityKind.Person -> REMEMBERED_PERSON
+        EntityKind.Project -> REMEMBERED_PROJECT
     }
 
     private fun Preferences.toSettings() = Settings(

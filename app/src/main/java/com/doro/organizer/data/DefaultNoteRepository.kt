@@ -49,6 +49,19 @@ class DefaultNoteRepository(
             .map { it.toNoteRows() }
             .flowOn(dispatchers.default)
 
+    override fun observeMarkedDays(query: NoteQuery, monthFirstDay: Long, monthLastDay: Long): Flow<Set<Long>> =
+        databaseHolder.observe { db ->
+            db.noteDao().observeMarkedDays(
+                fromDay = monthFirstDay,
+                toDay = monthLastDay,
+                personId = query.personId,
+                projectId = query.projectId,
+                searchPattern = query.searchPattern,
+            )
+        }
+            .distinctUntilChanged()
+            .map { it.toSet() }
+
     override suspend fun selectIds(query: NoteQuery): AppResult<List<Long>> = databaseHolder.withDb { db ->
         db.noteDao().selectIds(
             personId = query.personId,

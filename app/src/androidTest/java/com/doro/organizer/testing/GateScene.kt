@@ -81,7 +81,7 @@ class GateScene(
 
     /**
      * Data in [mode] (with [password] for `PASSWORD`), the lock setting and, with [slot], a live biometric slot; with
-     * [sentinel], a note and a person that hold it (L-21).
+     * [sentinel], a note and a person that hold it (L-21); with [rows], whatever it writes.
      */
     suspend fun plant(
         mode: KeyMode,
@@ -89,16 +89,18 @@ class GateScene(
         lock: Boolean = false,
         slot: Boolean = false,
         sentinel: String? = null,
+        rows: (TestRows.() -> Unit)? = null,
     ) {
         val setup = MaintenanceSetup(databases, vaults, scope.scope, settings, time, kek, bio)
         setup.start()
         if (mode != KeyMode.PLAIN) setup.changeKey(mode, null, password)
         if (slot) assertEquals(AppResult.Ok(Unit), setup.maintenance.createBiometricSlot(setup.armCipher()))
         sentinel?.let { text ->
-            val rows = TestRows(setup.holder.openDatabase().openHelper.writableDatabase)
-            val note = rows.note(content = text, createdAt = time.nowMillis())
-            rows.linkPerson(note, rows.person(text, createdAt = time.nowMillis()))
+            val sentinelRows = TestRows(setup.holder.openDatabase().openHelper.writableDatabase)
+            val note = sentinelRows.note(content = text, createdAt = time.nowMillis())
+            sentinelRows.linkPerson(note, sentinelRows.person(text, createdAt = time.nowMillis()))
         }
+        rows?.let { write -> TestRows(setup.holder.openDatabase().openHelper.writableDatabase).write() }
         settings.setBiometricLock(lock)
         setup.holder.close()
     }

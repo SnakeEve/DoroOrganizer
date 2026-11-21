@@ -26,6 +26,7 @@ import androidx.window.core.layout.WindowSizeClass
 import com.doro.organizer.model.Perspective
 import com.doro.organizer.ui.common.LocalAppSnackbar
 import com.doro.organizer.ui.common.resolve
+import com.doro.organizer.ui.notes.NoteListScreen
 import com.doro.organizer.ui.navigation.NavigationState
 import com.doro.organizer.ui.navigation.Navigator
 import com.doro.organizer.ui.navigation.TabKey
@@ -45,7 +46,7 @@ fun MainContent(graph: UiGraph, dataEpoch: Int) {
     AppMessagesEffect(graph, appSnackbar)
     val entries = navigation.rememberDisplayedEntries(
         entryProvider<NavKey> {
-            entry<TabKey> { key -> TabRootScreen(key.perspective) }
+            entry<TabKey> { key -> NoteListScreen(key.perspective, navigation.reselectCount(key.perspective)) }
         },
     )
     val compactWidth = !currentWindowAdaptiveInfoV2().windowSizeClass

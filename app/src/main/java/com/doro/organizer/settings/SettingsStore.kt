@@ -1,6 +1,7 @@
 package com.doro.organizer.settings
 
 import com.doro.organizer.model.DraftInsert
+import com.doro.organizer.model.EntityKind
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -34,8 +35,17 @@ interface SettingsStore {
      */
     suspend fun recordPasswordVerified(epochMillis: Long)
 
-    /** The selections of the Individual and Project perspectives (DEC-28); null forgets one. */
-    suspend fun setRemembered(personId: Long?, projectId: Long?)
+    /**
+     * Remembers [id] as the selection of the Individual ([EntityKind.Person]) or Project perspective (DEC-28). One
+     * key per edit, so the two perspectives never write back each other's choice.
+     */
+    suspend fun setRemembered(kind: EntityKind, id: Long)
+
+    /**
+     * Forgets the remembered [kind] id only while it is still [id], compared inside the edit, so the existence probe
+     * of a deleted entity never erases a choice made meanwhile (ui.md § 4.2).
+     */
+    suspend fun forgetRemembered(kind: EntityKind, id: Long)
 
     /** Stores [record] for [draftKey] as the newest record, keeping at most [MAX_DRAFT_INSERTS]. */
     suspend fun putDraftInsert(draftKey: String, record: DraftInsert)

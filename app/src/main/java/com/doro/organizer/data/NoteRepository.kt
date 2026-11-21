@@ -22,6 +22,13 @@ interface NoteRepository {
      */
     fun observeRows(query: NoteQuery): Flow<List<NoteRow>>
 
+    /**
+     * The calendar marks of DEC-53: the distinct epoch days in [monthFirstDay]..[monthLastDay] that hold a note
+     * matching the person, project and search of [query], checked notes included; the query's own date bounds are
+     * replaced by the month's (data-layer.md § Perspective query). Equal results are not emitted again.
+     */
+    fun observeMarkedDays(query: NoteQuery, monthFirstDay: Long, monthLastDay: Long): Flow<Set<Long>>
+
     /** Select all (DEC-36): the ids of every row of [query], checked notes and off-screen rows included; unordered. */
     suspend fun selectIds(query: NoteQuery): AppResult<List<Long>>
 
