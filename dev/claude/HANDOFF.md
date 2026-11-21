@@ -24,6 +24,11 @@ For Claude Code on any machine that continues this build, and for the owner. Rea
   - 875 instrumented tests, 873 pass.
   - The 2 failures are the CS-29 rows of `CrashSafetyTest`: open bug **B3** in SPEC.md, decided as **DEC-98**, fixed by **T24**.
   - JVM tests (391), lint, `:app:verificationGates` and `config/check-schemas.sh` are green.
+- **Crash suite (L-15) after T24, verified on the owner's phone 2026-11-21:**
+  - Run over the T19 working tree (base `8b91fc7`, before T19's commit), because T24 changed the assertions of every `CrashSafetyTest` case and T19 touches the backup code.
+  - `CrashSafetyTest` 260/260, `CrashSafetyCoverageTest` 2/2 and `CrashSafetyMoreCasesTest` 2/2 pass, in 24 minutes; `:app:checkDeviceTestResults` passed. The four CS-29 rows of B3 pass.
+  - This meets T19's precondition "! L-15 green before any Backup/Restore/encryption setting visible". Results are in `build/t19-l15/` (git-ignored).
+  - Still open in T22: the full-suite pass after the fixes.
 - **Next, in this order:**
   1. **T24:** the CS-29 fix, plus guards against test classes that JUnit silently rejects. It needs the phone at the end.
   2. **T15–T21:** the screens and release hardening. These need no phone; the instrumented tests only have to compile.
