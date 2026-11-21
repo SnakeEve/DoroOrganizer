@@ -13,6 +13,10 @@ gradlePlugin {
             id = "doro.verification-gates"
             implementationClass = "com.doro.organizer.gates.VerificationGatesPlugin"
         }
+        register("testApkKeepRules") {
+            id = "doro.test-apk-keep-rules"
+            implementationClass = "com.doro.organizer.testapk.TestApkKeepRulesPlugin"
+        }
     }
 }
 

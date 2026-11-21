@@ -8,6 +8,7 @@ plugins {
     id("com.google.devtools.ksp") // on the root buildscript classpath: applied by id, without a version
     alias(libs.plugins.room)
     id("doro.verification-gates") // build-logic: local verification gates (testing.md § 9)
+    id("doro.test-apk-keep-rules") // build-logic: qa and benchmark keep what their in-process test APK uses (DEC-103 (5))
 }
 
 // testing.md § 9: -PtestBuildType=qa|benchmark selects the build type the instrumented tests run against. With the
@@ -53,6 +54,7 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") // DEC-13
         }
+        // qa and benchmark also get the generated rules of doro.test-apk-keep-rules when they host androidTest (DEC-103 (5)).
         create("qa") { // DEC-12: release configuration with R8, debug-signed, for release smoke tests
             initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
@@ -72,15 +74,33 @@ android {
         // Fakes without Android calls, shared by JVM and instrumented tests (DEC-12). AGP 9 built-in Kotlin compiles
         // .kt files only from kotlin directories, not from java.srcDir (architecture.md § AGP 9 build configuration).
         getByName("test").kotlin.directories.add("src/sharedTest/java")
-        getByName("androidTest").kotlin.directories.add("src/sharedTest/java")
+        // DEC-103 (5): the qa and benchmark test APKs run in the process of their minified app, which keeps everything
+        // they reference, so each holds only what its job runs. androidTest compiles for the -PtestBuildType build type
+        // alone. qa: only src/androidTestQa (ReleaseSmokeTest, @ReleaseSmoke). benchmark: only the perf tests, the
+        // fixtures package and src/sharedTest (a Kotlin source directory may hold a single package).
+        getByName("androidTest") {
+            when (testType) {
+                "qa" -> {
+                    kotlin.setSrcDirs(emptyList<String>())
+                    java.setSrcDirs(emptyList<String>())
+                }
+                "benchmark" -> {
+                    kotlin.setSrcDirs(
+                        listOf("perf", "testing").map { "src/androidTest/java/com/doro/organizer/$it" } + "src/sharedTest/java",
+                    )
+                    java.setSrcDirs(emptyList<String>())
+                }
+                else -> kotlin.directories.add("src/sharedTest/java")
+            }
+        }
         // initWith copies build-type properties, not source sets: qa and benchmark use the release implementations.
         // Only Kotlin files are shared, so src/release holds nothing but .kt files under src/release/java.
         getByName("qa").kotlin.directories.add("src/release/java")
         getByName("benchmark").kotlin.directories.add("src/release/java")
         // The instrumented-test fixtures that reach the debug test hooks (package debug: the test key spec, the
-        // recording documents provider, the crash seams) live in src/androidTestDebug, so the qa and benchmark test
-        // APKs compile without those hooks; their counterparts for both release-like builds live in src/androidTestRelease.
-        getByName("androidTestQa").kotlin.directories.add("src/androidTestRelease/java")
+        // recording documents provider, the crash seams) live in src/androidTestDebug, so the benchmark test APK
+        // compiles without those hooks; their release-like counterparts live in src/androidTestRelease. The qa test APK
+        // holds no fixtures (DEC-103 (5)).
         getByName("androidTestBenchmark").kotlin.directories.add("src/androidTestRelease/java")
     }
 

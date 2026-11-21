@@ -20,7 +20,10 @@ import java.io.File
 import java.util.zip.ZipFile
 import javax.inject.Inject
 
-/** The `release-logs` gate (testing.md § 9, DEC-70, DEC-08): R8 strips every log call from the release dex. */
+/**
+ * The `release-logs` gate (testing.md § 9, DEC-70, DEC-08): R8 strips every log call from the release dex. It also
+ * fails a release R8 configuration that holds the generated test-APK keep rules of `qa` and `benchmark` (DEC-103 (5)).
+ */
 @DisableCachingByDefault(because = "A verification gate has no outputs")
 abstract class CheckReleaseLogsTask @Inject constructor(private val exec: ExecOperations) : DefaultTask() {
     @get:InputDirectory
@@ -50,6 +53,9 @@ abstract class CheckReleaseLogsTask @Inject constructor(private val exec: ExecOp
         val violations = buildList {
             if (!r8Configuration.get().asFile.useLines(block = R8Outputs::hasLogStrippingRule)) {
                 add("the R8 configuration lacks '${R8Outputs.LOG_STRIPPING_RULE}' (DEC-70)")
+            }
+            if (r8Configuration.get().asFile.useLines(block = R8Outputs::hasTestApkKeepRules)) {
+                add("the R8 configuration holds the generated test-APK keep rules, which only qa and benchmark may get (DEC-103 (5))")
             }
             extractDexFiles(singleApk(apkLoader.get(), releaseApkDirectory.get())).forEach { dex ->
                 addAll(disassemble(dex).useLines(block = scanner::violations))

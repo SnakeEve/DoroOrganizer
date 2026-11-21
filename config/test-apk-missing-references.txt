@@ -1,0 +1,14 @@
+# DEC-103 (5): references of the qa or benchmark test APK that neither the minified app, android.jar nor compileSdk's
+# optional android.test.* jars define, by holder class (a.b.C) or package (a.b.*, without subpackages).
+# :app:generate<Variant>TestApkKeepRules fails on any other one: it would be a NoClassDefFoundError or NoSuchMethodError
+# on the phone. Every entry says why it is harmless.
+
+# androidx.test runner: execStartActivity overloads of the hidden android.app.Instrumentation API, which the runner
+# reaches through this stub; the platform provides them at run time.
+androidx.test.internal.runner.hidden.ExposedInstrumentationApi
+
+# hamcrest-library's bean matchers (hasProperty, samePropertyValuesAs), which no test uses; Android has no java.beans.
+java.beans.*
+
+# The element type of Error Prone's @IncompatibleModifiers, a compile-time annotation (proguard-*-test.pro -dontwarn).
+javax.lang.model.element.Modifier
