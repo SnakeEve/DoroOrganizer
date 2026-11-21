@@ -228,6 +228,7 @@ adb="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"
 **Agents and verification:**
 - **Command time limit.** Agent commands time out at 10 minutes. Size device runs, and run long builds in the background.
 - **Verifier refusals.** Verifiers refuse when code departs from the docs without a record. That is why the Record stage exists. Scope splits go into the SPEC rows.
+- **Moved test sources and stale Kotlin output.** After test files move between `src/androidTest` and `src/androidTestDebug` (or another variant source set), the incremental `compileDebugAndroidTestKotlin` output can stay stale and drop the moved classes from the test APK; in T21 only `ArchitectureTest`'s `CrashSafetyTest` check caught it. Before a phone run after such a move, run `./gradlew :app:compileDebugAndroidTestKotlin --rerun` or a clean build. The standard verification does not compile the release-like test APKs, so a debug-only reference in `src/androidTest` breaks them silently: after such a change also run `./gradlew :app:assembleQaAndroidTest -PtestBuildType=qa` and `./gradlew :app:assembleBenchmarkAndroidTest -PtestBuildType=benchmark`, each in its own Gradle invocation (one invocation cannot select two test build types).
 
 **App and test rules:**
 - **Lazy settings.** `SettingsStore.settings` is shared `Lazily`. A caller outside the UI awaits `keyMode` and `settings` before deciding on a backup (DEC-94 (8)); the crash fixture uses `awaitBackupInputs`.
