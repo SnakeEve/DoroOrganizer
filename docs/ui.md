@@ -148,6 +148,7 @@ Stack-level Back (pop an entry, other tab to All, exit from the root of All) is 
 - The Date perspective's range mode is not an in-screen Back state: Back from Calendar goes to All and the range stays selected (section 4.4).
 - The editor closes on Back and saves, with no confirmation (section 6.8). A picker closes without returning a result. Settings closes. Gate screens: section 10.
 - The maintenance overlay and the standalone maintenance screen consume Back (architecture.md § Rendering, section 10.6).
+- While the soft keyboard is shown, the first Back only hides it, ahead of every state in the table (platform behavior: the keyboard registers its back callback after the screen's handlers, at the same priority); the next Back goes to the table.
 
 ## 3. Shared note list
 
@@ -388,7 +389,7 @@ Saved per perspective in the entry's `SavedStateHandle` (DEC-28): it survives ro
 - The Individual and Project primary is not in the `SavedStateHandle`: it is `SettingsStore.rememberedPersonId` / `rememberedProjectId` (DEC-28, architecture.md § Dependency injection), cleared by the existence probe when the entity disappears. The one exception is `unsavedChoice`, a choice whose settings write failed (DEC-99): it is shown in place of the remembered id for the life of this saved state, so a process death keeps it and the next start does not.
 - A restored `selection` is pruned to the ids of the first emission; if nothing remains, selection mode ends, and a restored `SetDate` or `BatchDelete` dialog is dropped with it. A restored `SetDate` or `BatchDelete` dialog without a restored `selection` (it held more than 1,000 ids) is dropped when the ViewModel starts, and its `listDialog` key is cleared.
 - Every sheet and dialog of the list screen is a `ListDialog`, so each survives rotation and process death (section 8.1). The selection inside an open `DatePicker` is UI-local (`rememberDatePickerState` is saveable) and not part of the ViewModel. Overflow `DropdownMenu`s are UI-local and are not restored after process death.
-- Saved-state budget: the whole activity state stays below 500 KB (500,000 bytes, DEC-57), because it crosses Binder in `onStop` and a transaction above about 1 MB raises `TransactionTooLargeException` (API 24+), which could lose the `ON_STOP` draft save. Hence the 1,000-id limit on `selection` (a larger selection survives rotation in the ViewModel but not process death) and the cap on the search text (section 3.3). The editor draft, the largest entry, is budgeted in section 6.14.
+- Saved-state budget: the whole activity state stays below 500 KB (500,000 bytes, DEC-57), because it crosses Binder in `onStop`, in the oneway `activityStopped` call, whose limit is half of `system_server`'s Binder buffer (about 520 KB, shared with other pending oneway calls); above it `TransactionTooLargeException` (API 24+) crashes the app at `ON_STOP` and could lose the draft save (T22: 814,712 bytes failed). Hence the 1,000-id limit on `selection` (a larger selection survives rotation in the ViewModel but not process death) and the cap on the search text (section 3.3). The editor draft, the largest entry, is budgeted in section 6.14.
 
 ## 4. Perspective specifics
 
@@ -577,7 +578,7 @@ A lock and unlock cycle, rotation and process death keep the selection (section 
 +-------------------------------------------------------------+
 | <-  New note                                   (check) (:)  |  top app bar (6.2)
 +-------------------------------------------------------------+
-| Title / content                                             |  content field (6.3), grows with the text
+| Title / content                                             |  content field (6.3), grows with the text up to the viewport, then scrolls inside
 |                                                             |
 | People                                                      |  association area (6.4)
 | (Alice  x) (Bob  x) (+ Add person)                          |
@@ -590,7 +591,7 @@ A lock and unlock cycle, rotation and process death keep the selection (section 
 ```
 
 - The order is the §3 order: content, associations, date, checklist toggle; the icon menu is the top app bar's overflow.
-- The body is one vertically scrolling column with 16 dp side padding, at most 720 dp wide and centered on wider windows. Sections are separated by 16 dp; the association area and the rows below it have a minimum height of 56 dp per row.
+- The body is one vertically scrolling column with 16 dp side padding, at most 720 dp wide and centered on wider windows. Sections are separated by 16 dp; the association area and the rows below it have a minimum height of 56 dp per row. The content field is at most the viewport high (section 6.3, DEC-105).
 - The navigation bar is hidden (DEC-50).
 
 ### 6.2 Top app bar and overflow menu
@@ -615,12 +616,12 @@ There is no "Discard changes" item: the editor saves on leave (DEC-37).
 
 ### 6.3 Content field
 
-- One multiline M3 `TextField` for title and content (DEC-39): transparent container, no indicator line, `bodyLarge`, `TextFieldLineLimits.MultiLine(minHeightInLines = 6)`, no internal scrolling (it grows and the page scrolls).
+- One multiline M3 `TextField` for title and content (DEC-39): transparent container, no indicator line, `bodyLarge`, `TextFieldLineLimits.MultiLine(minHeightInLines = 6)`, `Modifier.heightIn(max = <viewport height>)` (section 6.13): it grows with the text up to the viewport's height, and a longer text scrolls inside the field, which keeps the caret in view and hands the rest of a drag or fling to the page (nested scrolling, DEC-105). Unbounded, the field crashed on a note taller than 262,142 px, the largest size a Compose `Constraints` holds (T22). A note taller than 16,777,215 px, Compose's layout limit, still crashes it: more than about 122,000 line breaks at 200 % font (Q14, known issue).
 - Placeholder "Title / content" (`content_hint`, DEC-39) in `onSurfaceVariant`, shown while the field is empty. A blank existing note shows this placeholder, never "(No data)" (DEC-25).
 - The text is plain and stored exactly as typed, Markdown included; nothing is rendered or trimmed (DEC-39, §12).
 - Keyboard: `KeyboardType.Text`, `KeyboardCapitalization.Sentences`, autocorrect on, `ImeAction.Default` (Enter inserts a line break). The field is always wrapped in `NoPersonalizedLearning`, which always asks the keyboard not to learn (DEC-71, Q11), as in section 3.3 ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)).
 - Focus: a new note (opened with `noteId = null`) requests focus once, on the first composition after `loading` becomes false (section 6.14), and shows the keyboard, for low-friction capture (§10). A `focusRequested` flag in the `SavedStateHandle` prevents a second request after rotation or process death. An existing note opens without focus, so the keyboard does not cover it.
-- State: `EditorViewModel` owns a `TextFieldState` saved through `SavedStateHandle.saveable(key = "content", saver = TextFieldState.Saver)`. The field uses the `ContentCap` input transformation (section 6.9). Verify at setup: `SavedStateHandle.saveable` for `TextFieldState` in the pinned lifecycle-viewmodel-compose; the fallback is a value-based `TextField` whose `onValueChange` applies the same cap and writes the text to the `SavedStateHandle`.
+- State: `EditorViewModel` owns a `TextFieldState` saved through `SavedStateHandle.saveable(key = "content", saver = ContentStateSaver)`. That saver keeps the text and the selection only, never the undo history (DEC-37), so the history survives a rotation but not a process death. Opening a stored note starts with an empty undo history (DEC-104), so undo cannot empty the field and leaving cannot then save the empty text over the note. The field uses the `ContentCap` input transformation (section 6.9). Settled: `SavedStateHandle.saveable` works for `TextFieldState` in the pinned lifecycle-viewmodel-compose (T18). `TextFieldState.Saver` was replaced in T22 because it also saves the undo history.
 
 ### 6.4 Association area
 
@@ -717,7 +718,7 @@ Entities created in a picker during this edit are not in the database yet, so th
 
 ### 6.13 Keyboard and insets
 
-- The body is `Column(Modifier.fillMaxSize().padding(innerPadding).consumeWindowInsets(innerPadding).imePadding().verticalScroll(scrollState), horizontalAlignment = Alignment.CenterHorizontally) { Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp)) { /* sections of section 6.1 */ } }`: the scrolling viewport ends above the keyboard, the content is at most 720 dp wide and centered, the system-bar insets already applied by the `Scaffold` are not added twice, and the focused text field brings its caret into view while typing.
+- The body is `BoxWithConstraints(Modifier.fillMaxSize().padding(innerPadding).consumeWindowInsets(innerPadding).imePadding()) { Column(Modifier.fillMaxSize().verticalScroll(scrollState), horizontalAlignment = Alignment.CenterHorizontally) { Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp)) { /* sections of section 6.1; the content field gets heightIn(max = maxHeight) */ } } }`: the scrolling viewport ends above the keyboard, its height bounds the content field (DEC-105) and follows the keyboard in the same frame, the content is at most 720 dp wide and centered, the system-bar insets already applied by the `Scaffold` are not added twice, and the focused text field brings its caret into view while typing.
 - `MainActivity` needs `android:windowSoftInputMode="adjustResize"` so IME insets reach Compose on every API level. The manifest itself is in [security.md § 9.1](security.md#91-manifest).
 - Opening a dialog, sheet or picker from the editor hides the keyboard; returning does not reopen it.
 
@@ -743,8 +744,8 @@ data class LinkChip(val id: Long?, val newKey: String?, val name: String) {   //
 - The content text is not in `EditorUiState`; it lives in the `TextFieldState` (section 6.3).
 - While `loading` is true the body shows nothing for 500 ms and then a centered `CircularProgressIndicator` (`a11y_loading`). The content field, the chips, the date row and the checkbox are not composed, and Save and the overflow menu are disabled, so nothing typed can be overwritten by the loaded content and no action can run on a draft that is not loaded. Back still closes the editor, and nothing is saved because the draft equals its initial value.
 - `EditorDialog` is saved as the String key `editorDialog` (its simple name). A restored `DeleteImpact` keeps only its kind and entity id and re-reads the name and counts with `personDeleteImpact` / `projectDeleteImpact`, so a restored dialog never shows stale counts. The selection inside an open `DatePicker` is UI-local, and the overflow menu is not restored after process death.
-- Saved in the `SavedStateHandle`: the `NoteDraft` fields except `content` ([data-layer.md § Note save](data-layer.md#note-save)) as `draftKey` (section 6.8), `noteId`, `date`, `checked`, `personIds`, `projectIds` (`LongArray`), `newPersonKeys` / `newPersonNames` and `newProjectKeys` / `newProjectNames`; the `epoch` of [architecture.md § Data reset](architecture.md#data-reset); the initial values `initialDate`, `initialChecked`, `initialPersonIds`, `initialProjectIds`; `loaded` (the draft holds the stored note's values, so a restore that died while loading loads again); `discarded` (a deleted or vanished draft is never saved, also after process death); `pickerBasePersonIds` / `pickerBaseProjectIds` (section 6.4); the content (`"content"`, section 6.3), `focusRequested` (section 6.3) and `editorDialog`. The initial content of an existing note is not saved: after process death it is reloaded with `loadNote`, which also tells whether an `ON_STOP` save already stored the draft.
-- Verify at setup: an editor holding 200,000 characters (about 400 KB when parcelled) plus five tabs, each with Select all over the 10,000-note fixture (at most 1,000 saved ids each, section 3.10), must keep the whole saved state below 500 KB and must not raise `TransactionTooLargeException` when the activity saves its state on the test phone, and on API 28 when an optional managed-device or emulator job runs (DEC-15, testing.md I-38). If it does, raise a DEC-37 amendment before changing where the draft is kept. The editor opens only at a tab root outside selection mode, so the test reaches this scenario with four tabs and the editor on All (testing.md I-38).
+- Saved in the `SavedStateHandle`: the `NoteDraft` fields except `content` ([data-layer.md § Note save](data-layer.md#note-save)) as `draftKey` (section 6.8), `noteId`, `date`, `checked`, `personIds`, `projectIds` (`LongArray`), `newPersonKeys` / `newPersonNames` and `newProjectKeys` / `newProjectNames`; the `epoch` of [architecture.md § Data reset](architecture.md#data-reset); the initial values `initialDate`, `initialChecked`, `initialPersonIds`, `initialProjectIds`; `loaded` (the draft holds the stored note's values, so a restore that died while loading loads again); `discarded` (a deleted or vanished draft is never saved, also after process death); `pickerBasePersonIds` / `pickerBaseProjectIds` (section 6.4); the content (`"content"`: text and selection only, section 6.3), `focusRequested` (section 6.3) and `editorDialog`. The initial content of an existing note is not saved: after process death it is reloaded with `loadNote`, which also tells whether an `ON_STOP` save already stored the draft.
+- Verify at setup: an editor holding 200,000 characters (about 400,000 bytes when parcelled: one UTF-16 copy of the text; the undo history is not saved, DEC-37) plus five tabs, each with Select all over the 10,000-note fixture (at most 1,000 saved ids each, section 3.10), must keep the whole saved state below 500 KB and must not raise `TransactionTooLargeException` when the activity saves its state on the test phone, and on API 28 when an optional managed-device or emulator job runs (DEC-15, testing.md I-38). If it does, raise a DEC-37 amendment before changing where the draft is kept. The editor opens only at a tab root outside selection mode, so the test reaches this scenario with four tabs and the editor on All (testing.md I-38). Outcome on the owner's phone (T22, DEC-57): with `TextFieldState.Saver` the activity state was 814,568 bytes (transaction 814,712) and `ON_STOP` crashed with `TransactionTooLargeException`, which raised the DEC-37 amendment; with `ContentStateSaver` it is 414,432 bytes (transaction 414,576, device run B, 2026-11-22).
 
 ## 7. EntityPicker
 
@@ -2131,7 +2132,7 @@ TalkBack visits the row node first and then its checkbox, so the checkbox is alw
 
 Layouts hold at 200 % font scale, including Android 14+ non-linear scaling (DEC-55, testing.md I-35, M-08):
 - Text sizes come from the M3 type scale in `sp`; no code multiplies by `fontScale` or converts text to `px`, so the system's non-linear curve applies.
-- Containers that hold text use minimum heights only (`heightIn(min = …)`), never fixed heights.
+- Containers that hold text use minimum heights only (`heightIn(min = …)`), never fixed heights. The one exception is the editor content field, which is at most the viewport high and scrolls inside itself (section 6.3, DEC-105), so none of its text is ever cut off.
 - One-line elements (titles, navigation labels, chip labels, the contextual title) ellipsize; body texts wrap.
 - Row metadata wraps (`FlowRow`); the chip row scrolls horizontally; dialog bodies and gate screens scroll vertically; the `MonthGrid` header wraps and its cells grow.
 
