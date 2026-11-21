@@ -28,6 +28,7 @@ import com.doro.organizer.model.KeyMode
 import com.doro.organizer.session.GateState
 import com.doro.organizer.testing.GateUi
 import com.doro.organizer.testing.ScriptedGateComposeTest
+import com.doro.organizer.testing.appIntents
 import java.time.Instant
 import java.time.ZoneOffset
 import org.hamcrest.Matchers.allOf
@@ -69,7 +70,7 @@ class BackupUiTest : ScriptedGateComposeTest() {
 
         ui.awaitText(PLAIN_TITLE)
         compose.onNodeWithText(PLAIN_BODY).assertExists()
-        assertEquals("no picker before the warning", 0, Intents.getIntents().size)
+        assertEquals("no picker before the warning", emptyList<Intent>(), appIntents())
         compose.onNodeWithText(BACK_UP_ANYWAY).performClick()
 
         compose.waitUntil(GateUi.TIMEOUT_MS) { scene.maintenance.calls.isNotEmpty() }
@@ -130,7 +131,7 @@ class BackupUiTest : ScriptedGateComposeTest() {
         scene.maintenance.status.value = MaintenanceStatus.Finished(MaintenanceOp.Backup, AppResult.Ok(shared))
 
         compose.waitUntil(GateUi.TIMEOUT_MS) { scene.maintenance.status.value == MaintenanceStatus.Idle }
-        compose.waitUntil(GateUi.TIMEOUT_MS) { Intents.getIntents().isNotEmpty() }
+        compose.waitUntil(GateUi.TIMEOUT_MS) { appIntents().isNotEmpty() }
         intended(
             allOf(
                 hasAction(Intent.ACTION_CHOOSER),
@@ -146,7 +147,7 @@ class BackupUiTest : ScriptedGateComposeTest() {
                 ),
             ),
         )
-        val send = checkNotNull(IntentCompat.getParcelableExtra(Intents.getIntents().single(), Intent.EXTRA_INTENT, Intent::class.java))
+        val send = checkNotNull(IntentCompat.getParcelableExtra(appIntents().single(), Intent.EXTRA_INTENT, Intent::class.java))
         assertEquals("never a write grant", 0, send.flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
     }
 

@@ -9,9 +9,12 @@ import androidx.test.platform.app.InstrumentationRegistry
 /**
  * The Bundle `MainActivity.onSaveInstanceState` filled while [block] ran (testing.md L-03). [addToState] may add
  * entries to it before it leaves the process, so they cross Binder with the activity's own state (testing.md I-38).
+ * [block] may return as soon as the activity reports its stop, as `ActivityScenario.moveToState(CREATED)` does: the
+ * save that follows the stop is waited for here.
  */
 fun captureSavedState(addToState: (Bundle) -> Unit = {}, block: () -> Unit): Bundle {
-    val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
+    val instrumentation = InstrumentationRegistry.getInstrumentation()
+    val app = instrumentation.targetContext.applicationContext as Application
     var saved: Bundle? = null
     val callbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {
@@ -29,6 +32,10 @@ fun captureSavedState(addToState: (Bundle) -> Unit = {}, block: () -> Unit): Bun
     app.registerActivityLifecycleCallbacks(callbacks)
     try {
         block()
+        // From API 28 ActivityThread calls onSaveInstanceState after onStop, in the same main-thread message, while
+        // androidx.test signals STOPPED from inside onStop: a main-thread barrier returns only after that message, so
+        // the save has run (and `saved` is visible to this thread) by then.
+        instrumentation.runOnMainSync {}
     } finally {
         app.unregisterActivityLifecycleCallbacks(callbacks)
     }

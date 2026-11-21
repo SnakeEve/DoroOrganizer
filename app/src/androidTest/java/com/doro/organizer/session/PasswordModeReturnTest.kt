@@ -36,7 +36,7 @@ class PasswordModeReturnTest : GateComposeTest() {
         val open = scene.holderState()
         scene.gateway.succeed()
         scene.backgroundTrip()
-        scene.awaitPrompts(2)
+        awaitPrompts(2)
         scene.awaitGate(GateState.Ready)
         ui.awaitShell()
         assertEquals(FakeBiometricGateway.Prompt("Unlock Doro Organizer", false, "Use password", withCrypto = true), scene.gateway.prompts.last())

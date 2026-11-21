@@ -25,7 +25,7 @@ abstract class GateTest(realProcessLifecycle: Boolean = false, realBiometrics: B
     val app = scene.app
 
     @After
-    fun closeActivity() {
-        scene.finish()
+    fun tearDownActivity() {
+        scene.closeActivity()
     }
 }

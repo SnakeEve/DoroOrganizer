@@ -136,7 +136,9 @@ class InputPolicyTest {
 
         @Test
         fun autofillIsExcluded_onTheActivityWindow_inEveryGateState_withProtectionOffAndOn() {
-            scene.launch(GateState.Starting(authenticated = false))
+            // MainActivity keeps its splash screen while the gate is Starting, so it launches in a later state and
+            // the walk reaches Starting with the activity up.
+            scene.launch(gateStates.first { it !is GateState.Starting })
             for (protection in listOf(false, true)) {
                 runBlocking { scene.settings.setScreenshotProtection(protection) }
                 for (state in gateStates) {

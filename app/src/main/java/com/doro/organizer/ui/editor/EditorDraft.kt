@@ -1,5 +1,9 @@
 package com.doro.organizer.ui.editor
 
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.SaverScope
+import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.SavedStateHandle
 import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.NewEntity
@@ -68,8 +72,7 @@ internal fun savesOnLeave(fields: DraftFields, content: String, baseline: Baseli
  * The editor's keys in its entry's `SavedStateHandle` (ui.md § 6.14): the draft fields and `draftKey`, the initial
  * value of a new note, the `dataEpoch` the draft belongs to (architecture.md § Data reset), `focusRequested`,
  * `editorDialog`, whether the draft was loaded or discarded, and the ids each links picker opened with. The content
- * is saved by the `TextFieldState` saver under [KEY_CONTENT]; the stored state of a saved note is not saved, it is
- * reloaded.
+ * is saved by [ContentStateSaver] under [KEY_CONTENT]; the stored state of a saved note is not saved, it is reloaded.
  */
 internal class EditorSavedState(private val handle: SavedStateHandle) {
     /** The entry existed before: its draft is restored, not created. */
@@ -185,6 +188,26 @@ internal class EditorSavedState(private val handle: SavedStateHandle) {
         const val KEY_DIALOG = "editorDialog"
         const val KEY_PICKER_BASE_PERSON_IDS = "pickerBasePersonIds"
         const val KEY_PICKER_BASE_PROJECT_IDS = "pickerBaseProjectIds"
+    }
+}
+
+/**
+ * The saver of the editor's content (DEC-37, ui.md § 6.3): the text and the selection, never the undo history, which
+ * the ViewModel keeps across a rotation and a process death ends. `TextFieldState.Saver` of foundation 1.12.1 also
+ * saves up to 100 undo steps, each with its whole text before and after, so one paste put the draft into the saved
+ * state twice and a 200,000-unit draft crashed `ON_STOP` with `TransactionTooLargeException` (DEC-57). [restore]
+ * reads only items 0-2, so a state that saver wrote before an update still restores.
+ */
+internal object ContentStateSaver : Saver<TextFieldState, Any> {
+    override fun SaverScope.save(value: TextFieldState): Any =
+        arrayListOf(value.text.toString(), value.selection.start, value.selection.end)
+
+    override fun restore(value: Any): TextFieldState {
+        val saved = value as List<*>
+        val text = saved[0] as String
+        val start = (saved[1] as Int).coerceIn(0, text.length)
+        val end = (saved[2] as Int).coerceIn(0, text.length)
+        return TextFieldState(text, TextRange(start, end))
     }
 }
 

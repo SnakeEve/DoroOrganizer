@@ -228,7 +228,7 @@ class ForgotPasswordUiTest : GateComposeTest() {
         compose.onNodeWithText("I understand this cannot be recovered").performClick()
         compose.onNodeWithText("Set password").performClick() // no outcome scripted: the prompt stays open
 
-        scene.awaitPrompts(2)
+        awaitPrompts(2)
         compose.waitForIdle()
         compose.onNodeWithTag(RESET_WITH_FINGERPRINT).assertIsNotEnabled()
         compose.onNodeWithTag(ERASE_START_OVER).assertIsNotEnabled()

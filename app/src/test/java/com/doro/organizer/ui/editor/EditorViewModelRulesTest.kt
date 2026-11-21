@@ -1,5 +1,6 @@
 package com.doro.organizer.ui.editor
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.lifecycle.SavedStateHandle
 import com.doro.organizer.R
@@ -40,9 +41,9 @@ import org.junit.Test
 /**
  * `EditorViewModel` over in-memory repositories (ui.md § 6.6–§ 6.12; DEC-33, DEC-37): which leaves save, the single
  * insert of a note and of its created entities across saves and across a process death (`draftKey` record), the
- * Save action, the truncation on load with its notice (testing.md I-08, JVM part), a vanished note, an older data
- * epoch, the deletes, the checkbox of a saved note, the chip names and the picker results. The same rules over the
- * real repositories are `EditorViewModelTest` (I-36).
+ * Save action, the truncation on load with its notice (testing.md I-08, JVM part), a load that undo never reverts
+ * (DEC-104), a vanished note, an older data epoch, the deletes, the checkbox of a saved note, the chip names and the
+ * picker results. The same rules over the real repositories are `EditorViewModelTest` (I-36).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class EditorViewModelRulesTest {
@@ -205,6 +206,27 @@ class EditorViewModelRulesTest {
         assertTrue(vm.uiState.value.message?.isError == true)
         vm.saveOnLeave()
         assertEquals(0, notes.saves.size)
+    }
+
+    @OptIn(ExperimentalFoundationApi::class)
+    @Test
+    fun undo_neverRevertsTheLoadOfAStoredNote_onlyTheUsersEdits_andLeavingThenWritesNothing() = runTest(dispatcher) {
+        notes.notes[7] = StoredNote("kept")
+        val vm = editor(EditorKey(7, visit = 1))
+        collect(vm)
+        val undo = vm.content.undoState
+
+        undo.undo() // Ctrl+Z on a hardware keyboard, right after opening
+        assertEquals("kept", vm.content.text.toString())
+        vm.content.edit { append(" more") }
+        undo.undo()
+        undo.undo()
+
+        assertEquals("kept", vm.content.text.toString())
+        assertFalse(undo.canUndo)
+        vm.saveOnLeave()
+        assertEquals(0, notes.saves.size)
+        assertEquals("kept", notes.notes.getValue(7).content)
     }
 
     @Test

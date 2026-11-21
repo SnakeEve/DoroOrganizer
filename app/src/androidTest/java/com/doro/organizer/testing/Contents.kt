@@ -3,7 +3,9 @@ package com.doro.organizer.testing
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.onAllNodesWithTag
 import com.doro.organizer.MainActivity
+import com.doro.organizer.session.GateState
 import com.doro.organizer.ui.theme.DoroTheme
 
 /**
@@ -21,6 +23,19 @@ fun ScriptedGateComposeTest.showDialog(dialog: @Composable () -> Unit) {
     compose.waitUntil(GateUi.TIMEOUT_MS) { compose.onAllNodes(isDialog()).fetchSemanticsNodes().isEmpty() }
     scene.onActivity { it.show(dialog) }
     compose.waitUntil(GateUi.TIMEOUT_MS) { compose.onAllNodes(isDialog()).fetchSemanticsNodes().isNotEmpty() }
+}
+
+/**
+ * Shows [content] alone in `DoroTheme`, for a self-test of a screen helper: the scene is launched on the password
+ * screen, a state with no shell, then its content is replaced and the password screen is gone.
+ */
+fun ScriptedGateComposeTest.showAlone(content: @Composable () -> Unit) {
+    scene.launch(GateState.NeedsPassword(failures = 0, retryAt = 0, couldNotOpen = false))
+    ui.awaitPasswordScreen()
+    scene.onActivity { it.show(content) }
+    compose.waitUntil(GateUi.TIMEOUT_MS) {
+        compose.onAllNodesWithTag(GateUi.PASSWORD_FIELD).fetchSemanticsNodes().isEmpty()
+    }
 }
 
 /** The tab tags (ui.md § 12.8) and their labels (Q10); literals copied from ui.md § 11. */

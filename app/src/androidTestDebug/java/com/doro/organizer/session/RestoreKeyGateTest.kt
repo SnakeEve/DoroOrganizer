@@ -31,7 +31,8 @@ import org.junit.runner.RunWith
  * `DbMaintenance` and the real `AppLockController`, with this test in the role of `MaintenanceStatusHost`, which
  * answers each fingerprint question through `slotPrompt(RestoreKey)` and reports a Keystore-layer failure of the
  * password through `reportPasswordKekFailure()`. The `kekBroken` flag then puts the slot before the due reminder, both
- * for the restore's fallback and for the start after its `Restart`.
+ * for the restore's fallback and for the start after its `Restart`. Since T19 the Corrupt screen composes the real
+ * host, which would ask each question a second time, so `MainActivity` stays closed while the test plays the host.
  */
 @RunWith(AndroidJUnit4::class)
 class RestoreKeyGateTest : GateTest() {
@@ -63,6 +64,7 @@ class RestoreKeyGateTest : GateTest() {
         assertEquals(1, scene.gateway.biometricPromptCount)
         scene.time.advanceBy(Duration.ofDays(15)) // the reminder is due from here on
         vaults.deleteKekAlias()
+        scene.closeActivity() // exactly one status host: this test
 
         val result = app.container.dbMaintenance.restoreAnswering(
             restore.backup.uri,
@@ -76,12 +78,16 @@ class RestoreKeyGateTest : GateTest() {
             },
             confirm {
                 assertEquals("exactly one further prompt (L-51 a)", 2, scene.gateway.biometricPromptCount)
-                scene.gateway.succeed() // for the start after the Restart, which may prompt before restore() returns
+                scene.gateway.succeed() // for the auto-prompt of the start after the Restart
             },
         )
 
         assertTrue("$result", (result as AppResult.Ok).value is MaintenanceResult.Restored)
-        // The Restart (T30) starts over in this process: the slot route despite the due reminder (L-51 b, L-43).
+        // The Restart (T30) starts over in this process: the slot route despite the due reminder (L-51 b, L-43), so
+        // the start ends in Locked (T40), whose auto-prompt the relaunched activity runs. The relaunch waits until the
+        // gate has left Starting, where MainActivity would keep its splash and never resume.
+        scene.awaitGate(GateState.Locked(Resume.Open))
+        scene.launchActivity()
         scene.awaitGate(GateState.Ready)
         assertEquals(3, scene.gateway.biometricPromptCount)
         assertTrue(scene.gateway.prompts.last().withCrypto)

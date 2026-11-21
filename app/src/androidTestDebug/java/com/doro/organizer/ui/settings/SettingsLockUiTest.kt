@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Instrumentation
 import androidx.biometric.BiometricPrompt
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -69,7 +70,7 @@ class SettingsLockUiTest : GateComposeTest() {
     fun passwordMode_turningTheLockOn_asksThePasswordBeforeAnyPrompt_thenArmsTheSlot() = runBlocking<Unit> {
         readyInPasswordMode(lock = false)
         openSettings()
-        compose.onNodeWithTag(BIOMETRIC_ROW).performClick()
+        ui.click(BIOMETRIC_ROW)
 
         ui.awaitTag(LOCK_PASSWORD_DIALOG)
         compose.onNodeWithText(LOCK_ON_TITLE).assertExists()
@@ -77,7 +78,7 @@ class SettingsLockUiTest : GateComposeTest() {
         assertEquals("no prompt before the password (DEC-65)", emptyList<FakeBiometricGateway.Prompt>(), scene.gateway.prompts)
 
         enterAndContinue(PASSWORD)
-        scene.awaitPrompts(1)
+        awaitPrompts(1)
         assertEquals(FakeBiometricGateway.Prompt(ENABLE_TITLE, false, CANCEL, withCrypto = true), scene.gateway.prompts.single())
         GateScene.onMain { scene.gateway.answer(PromptResult.Succeeded(cryptoMatches = true)) }
 
@@ -91,7 +92,7 @@ class SettingsLockUiTest : GateComposeTest() {
     fun aWrongPassword_staysInTheDialog_andCountsTowardTheBackoff() = runBlocking<Unit> {
         readyInPasswordMode(lock = false)
         openSettings()
-        compose.onNodeWithTag(BIOMETRIC_ROW).performClick()
+        ui.click(BIOMETRIC_ROW)
         ui.awaitTag(LOCK_PASSWORD_DIALOG)
         enterAndContinue("not the password")
 
@@ -112,14 +113,14 @@ class SettingsLockUiTest : GateComposeTest() {
 
         openSettings()
         ui.awaitText(SLOT_MISSING)
-        compose.onNodeWithTag(SLOT_SET_UP).assertTouchTarget().performClick()
+        compose.onNodeWithTag(SLOT_SET_UP).performScrollTo().assertIsDisplayed().assertTouchTarget().performClick()
         ui.awaitTag(LOCK_PASSWORD_DIALOG)
         compose.onNodeWithText(SLOT_SETUP_TITLE).assertExists()
         compose.onNodeWithText(SLOT_SETUP_BODY).assertExists()
         assertTrue(scene.gateway.prompts.isEmpty())
 
         enterAndContinue(PASSWORD)
-        scene.awaitPrompts(1)
+        awaitPrompts(1)
         assertEquals(FakeBiometricGateway.Prompt(SLOT_TITLE, false, CANCEL, withCrypto = true), scene.gateway.prompts.single())
         GateScene.onMain { scene.gateway.answer(PromptResult.Succeeded(cryptoMatches = true)) }
 
@@ -136,10 +137,10 @@ class SettingsLockUiTest : GateComposeTest() {
         assertEquals(AppResult.Ok(MaintenanceResult.BackupSaved), maintenance.backupToDocument(backup.uri, BACKUP_PASSWORD.toCharArray()))
         GateScene.onMain { maintenance.acknowledge() }
         openSettings()
-        compose.onNodeWithTag(BIOMETRIC_ROW).performClick()
+        ui.click(BIOMETRIC_ROW)
         ui.awaitTag(LOCK_PASSWORD_DIALOG)
         enterAndContinue(PASSWORD)
-        scene.awaitPrompts(1) // left open: the restore starts while it is shown
+        awaitPrompts(1) // left open: the restore starts while it is shown
 
         val restore = async(start = CoroutineStart.UNDISPATCHED) { maintenance.restore(backup.uri, MaintenanceOrigin.Ready) }
         withTimeout(GateScene.TIMEOUT_MS) { maintenance.status.first { it is MaintenanceStatus.NeedsBackupPassword } }
@@ -173,7 +174,7 @@ class SettingsLockUiTest : GateComposeTest() {
                 .respondWith(Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null))
             openSettings()
             compose.onNodeWithTag(BIOMETRIC_ROW).performScrollTo().assertIsNotEnabled().assert(hasText(NONE_ENROLLED))
-            compose.onNodeWithTag(ENROLL).performScrollTo().assertTouchTarget().performClick()
+            compose.onNodeWithTag(ENROLL).performScrollTo().assertIsDisplayed().assertTouchTarget().performClick()
 
             // DefaultAppLockController.enroll(): the gateway's enrollment intent through ExternalActivities.
             compose.waitUntil(GateUi.TIMEOUT_MS) { Intents.getIntents().isNotEmpty() }
@@ -196,7 +197,7 @@ class SettingsLockUiTest : GateComposeTest() {
         val prompt = async(start = CoroutineStart.UNDISPATCHED) {
             app.container.appLockController.slotPrompt(AuthPurpose.RestoreKey)
         }
-        scene.awaitPrompts(2)
+        awaitPrompts(2)
         assertEquals(FakeBiometricGateway.Prompt(UNLOCK_TITLE, false, USE_PASSWORD, withCrypto = true), scene.gateway.prompts.last())
         GateScene.onMain { scene.gateway.answer(PromptResult.Error(BiometricPrompt.ERROR_NEGATIVE_BUTTON, "")) }
         assertEquals(AppResult.Ok(null), prompt.await())

@@ -2,6 +2,7 @@ package com.doro.organizer.ui.editor
 
 import android.os.Bundle
 import android.os.Parcel
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleRegistry
@@ -27,6 +28,7 @@ import com.doro.organizer.data.DatabaseHolder
 import com.doro.organizer.data.EntityRepository
 import com.doro.organizer.data.NoteRepository
 import com.doro.organizer.model.EntityKind
+import com.doro.organizer.model.MAX_CONTENT_CHARS
 import com.doro.organizer.model.NewEntity
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.FakeAppTime
@@ -35,6 +37,7 @@ import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestRows
 import com.doro.organizer.testing.assertDbInvariants
 import com.doro.organizer.testing.entityRepository
+import com.doro.organizer.testing.marshalled
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.ui.common.PickerResult
@@ -63,10 +66,11 @@ import org.junit.runner.RunWith
  * prefill insert nothing, while Save inserts even a blank draft; ON_STOP then Back yields one row; a recreation from
  * the state captured before an ON_STOP insert finished yields one note and one created entity (`draftKey` record); an
  * entity created in a picker for a note that is then deleted is never inserted; an existing note left unchanged, or
- * changed and reverted, writes nothing; the checkbox of a saved note writes at once. Also I-38, the editor's part: the
- * state its entry saves, the `saveable` content (ui.md § 6.3) and the `editorDialog` key included, survives a `Parcel`
- * round trip and recreates equal state. Each editor lives in an [EntryOwner], whose saved state is captured the way
- * Android captures it.
+ * changed and reverted, writes nothing; the checkbox of a saved note writes at once; undo right after opening a note
+ * keeps its text, so leaving writes nothing (DEC-104). Also I-38, the editor's part: the state its entry saves, the
+ * `saveable` content (ui.md § 6.3) and the `editorDialog` key included, survives a `Parcel` round trip and recreates
+ * equal state, and a 200,000-unit draft is in it once, within the entry's share of the DEC-57 budget. Each editor
+ * lives in an [EntryOwner], whose saved state is captured the way Android captures it.
  */
 @RunWith(AndroidJUnit4::class)
 class EditorViewModelTest {
@@ -217,6 +221,32 @@ class EditorViewModelTest {
         assertEquals(1L, count("SELECT COUNT(*) FROM notes WHERE id = ? AND checked = 1 AND updated_at = ?", id, now - 10))
     }
 
+    @OptIn(ExperimentalFoundationApi::class)
+    @Test
+    fun undoRightAfterOpeningAStoredNote_keepsItsText_andLeavingWritesNothing() = runBlocking<Unit> {
+        val id = rows.note("kept", createdAt = now - 10, updatedAt = now - 10)
+        val vm = loaded(EditorKey(id, visit = 1))
+
+        onMain { vm.content.undoState.undo() } // Ctrl+Z on a hardware keyboard
+        leave(vm)
+
+        assertEquals("kept", onMain { vm.content.text.toString() })
+        assertEquals(1L, count("SELECT COUNT(*) FROM notes WHERE id = ? AND content = 'kept' AND updated_at = ?", id, now - 10))
+    }
+
+    @Test
+    fun aFullDraft_isSavedOnce_belowTheBudget() = runBlocking<Unit> {
+        val entry = newEntry()
+        val vm = loaded(EditorKey(null, visit = 1), entry)
+        // An undo step whose text after is the whole draft, as a paste or the load of a note records one.
+        onMain { vm.content.setTextAndPlaceCursorAtEnd("d".repeat(MAX_CONTENT_CHARS - MARKER.length) + MARKER) }
+
+        val bytes = onMain { entry.saveState() }.marshalled()
+
+        assertEquals("copies of the draft in the saved state", 1, bytes.occurrences(MARKER))
+        assertTrue("saved state of ${bytes.size} bytes", bytes.size < ENTRY_BUDGET_BYTES)
+    }
+
     @Test
     fun savedState_survivesAParcelRoundTrip_andRecreatesEqualState() = runBlocking<Unit> {
         val alice = rows.person("Alice", now)
@@ -297,6 +327,12 @@ class EditorViewModelTest {
         }
     }
 
+    /** How often [text] is in these marshalled bytes, as a Parcel string (UTF-16) or a serialized one (UTF-8). */
+    private fun ByteArray.occurrences(text: String): Int = listOf(Charsets.UTF_16LE, Charsets.UTF_8).sumOf { charset ->
+        val part = text.toByteArray(charset)
+        (0..size - part.size).count { start -> part.indices.all { this[start + it] == part[it] } }
+    }
+
     private suspend fun <T> onMain(block: () -> T): T = withContext(Dispatchers.Main) { block() }
 
     /**
@@ -337,5 +373,14 @@ class EditorViewModelTest {
 
         /** 2026-11-17, the day `FakeAppTime` starts on. */
         const val TODAY = 20_774L
+
+        /** The end of the full draft: in no other saved text, so it counts the draft's copies. */
+        const val MARKER = "~end of the draft~"
+
+        /**
+         * The editor entry's share of the 500,000-byte budget of DEC-57: one copy of a 200,000-unit draft is about
+         * 400,000 bytes as a Parcel string; a second copy, as the undo history held, makes about 800,000.
+         */
+        const val ENTRY_BUDGET_BYTES = 450_000
     }
 }

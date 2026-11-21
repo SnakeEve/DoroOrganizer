@@ -36,6 +36,7 @@ import com.doro.organizer.testing.ListComposeTest
 import com.doro.organizer.testing.MaintenanceSetup
 import com.doro.organizer.testing.ScriptedGateComposeTest
 import com.doro.organizer.testing.TestRows
+import com.doro.organizer.testing.appIntents
 import com.doro.organizer.testing.assertTouchTarget
 import com.doro.organizer.testing.backupTo
 import com.doro.organizer.testing.openDatabase
@@ -118,7 +119,8 @@ class RestoreUiTest {
                 .respondWith(Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null))
             openSettings()
             compose.onNodeWithText(RESTORE_FROM_BACKUP).performClick()
-            compose.waitUntil(GateUi.TIMEOUT_MS) { Intents.getIntents().isNotEmpty() }
+            compose.waitUntil(GateUi.TIMEOUT_MS) { appIntents().isNotEmpty() }
+            intended(hasAction(Intent.ACTION_OPEN_DOCUMENT))
             compose.waitForIdle()
             assertEquals(emptyList<String>(), scene.maintenance.calls)
         }

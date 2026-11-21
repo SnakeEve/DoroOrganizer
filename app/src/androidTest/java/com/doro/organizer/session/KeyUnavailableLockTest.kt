@@ -28,7 +28,7 @@ class KeyUnavailableLockTest : GateComposeTest() {
         scene.plant(KeyMode.PASSWORD, PASSWORD, lock = true, slot = true)
         vaults.stateFile.writeText("{") // unreadable: the mode is unknown, so every mode behaves alike
         scene.coldStart()
-        scene.awaitPrompts(1)
+        awaitPrompts(1)
         // The lock screen without "Use password", once its route is known; neither a password screen nor content.
         ui.awaitLockScreen()
         withTimeout(GateUi.TIMEOUT_MS) { app.container.appLockController.lockRoute.first { it != null } }

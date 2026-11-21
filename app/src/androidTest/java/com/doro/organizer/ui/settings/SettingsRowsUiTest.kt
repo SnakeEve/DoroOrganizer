@@ -7,10 +7,12 @@ import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -24,6 +26,7 @@ import com.doro.organizer.security.SlotState
 import com.doro.organizer.session.GateState
 import com.doro.organizer.testing.GateUi
 import com.doro.organizer.testing.ScriptedGateComposeTest
+import com.doro.organizer.testing.assertNotCutOff
 import com.doro.organizer.testing.assertTouchTarget
 import com.doro.organizer.testing.textLayout
 import com.doro.organizer.ui.DoroRoot
@@ -31,7 +34,6 @@ import com.doro.organizer.ui.LocalUiGraph
 import com.doro.organizer.ui.theme.DoroTheme
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -168,7 +170,9 @@ class SettingsRowsUiTest : ScriptedGateComposeTest() {
     fun withoutAScreenLock_theCardSaysSo_andNothingIsBlocked() = runBlocking<Unit> {
         scene.lock.lockAvailability = available(BiometricAvailability.Success).copy(deviceSecure = false)
         openSettings()
-        compose.onNodeWithTag(NO_SCREEN_LOCK).assert(hasText(NO_SCREEN_LOCK_TEXT))
+        // A non-clickable M3 card does not merge its children (Surface: mergeDescendants = false): its text is a child.
+        compose.onNodeWithTag(NO_SCREEN_LOCK).assert(hasAnyDescendant(hasText(NO_SCREEN_LOCK_TEXT)))
+        compose.onNodeWithTag(NO_SCREEN_LOCK).assertHasNoClickAction()
         row(BIOMETRIC).assertIsEnabled()
         row(ENCRYPTION).assertIsEnabled()
     }
@@ -198,7 +202,7 @@ class SettingsRowsUiTest : ScriptedGateComposeTest() {
         openSettingsFromTheShell()
         val label = compose.onNode(hasText(NONE_ENROLLED), useUnmergedTree = true).performScrollTo().textLayout()
         assertEquals(2f, label.layoutInput.density.fontScale)
-        assertFalse("cut off", label.hasVisualOverflow)
+        label.assertNotCutOff()
         compose.onNodeWithTag(ENROLL).performScrollTo().assertTouchTarget()
     }
 

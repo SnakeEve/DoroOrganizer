@@ -2,7 +2,6 @@ package com.doro.organizer.session
 
 import androidx.biometric.BiometricPrompt
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.PasswordReason
@@ -49,7 +48,7 @@ class KeyStoreRecheckTest : GateComposeTest() {
 
         // T51: Locked(Open), one slot prompt with a CryptoObject, whose success opens the data with the notice.
         scene.gateway.succeed()
-        compose.onNodeWithTag(GateUi.USE_FINGERPRINT).performClick()
+        ui.click(GateUi.USE_FINGERPRINT)
         scene.awaitGate(GateState.Ready)
         ui.awaitShell()
         assertEquals(SLOT_PROMPT, scene.gateway.prompts.last())
@@ -79,7 +78,7 @@ class KeyStoreRecheckTest : GateComposeTest() {
 
         // T52: Locked(Ready) without the entry, one slot prompt, verifyBiometric unlocks the same Room instance.
         scene.gateway.succeed()
-        compose.onNodeWithTag(GateUi.USE_FINGERPRINT).performClick()
+        ui.click(GateUi.USE_FINGERPRINT)
         scene.awaitGate(GateState.Ready)
         ui.awaitShell()
         assertEquals(SLOT_PROMPT, scene.gateway.prompts.last())
@@ -131,8 +130,9 @@ class KeyStoreRecheckTest : GateComposeTest() {
         ui.awaitTag(GateUi.USE_FINGERPRINT)
         assertEquals("one more for the new appearance", 2, scene.announcements.count(FINGERPRINT_AVAILABLE))
 
-        // With the button shown, the Forgot password screen offers the fingerprint reset first.
-        compose.onNodeWithTag(GateUi.FORGOT).performClick()
+        // With the button shown, the Forgot password screen offers the fingerprint reset first. With the keyboard up
+        // and the key-store line shown, "Forgot password?" lies below the visible part of the gate column.
+        ui.click(GateUi.FORGOT)
         ui.awaitTag(GateUi.FORGOT_RESET)
         assertTrue(ui.boundsOf(GateUi.FORGOT_RESET).bottom <= ui.boundsOf(GateUi.FORGOT_ERASE).top)
         ui.pressBack()

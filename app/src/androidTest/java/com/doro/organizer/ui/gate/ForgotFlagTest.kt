@@ -180,8 +180,10 @@ class ForgotFlagTest : ScriptedGateComposeTest() {
         scene.maintenance.status.value = MaintenanceStatus.Finished(MaintenanceOp.Erase, scene.maintenance.eraseResult)
         scene.gate.moveTo(GateState.Starting(authenticated = false))
         compose.waitForIdle()
-        rotate()
         compose.onNodeWithTag(GateUi.MAINTENANCE).assertDoesNotExist()
+        // The recreated activity keeps its splash screen while the gate is Starting, so nothing waits for idle until
+        // the gate has moved on.
+        if (rotateAtEachStep) scene.recreateWhileStarting()
 
         scene.gate.moveTo(needsPassword)
         ui.awaitForgotScreen()

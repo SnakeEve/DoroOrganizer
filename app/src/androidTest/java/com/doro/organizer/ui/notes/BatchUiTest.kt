@@ -21,6 +21,7 @@ import com.doro.organizer.model.Perspective
 import com.doro.organizer.testing.GateUi
 import com.doro.organizer.testing.EditorUi
 import com.doro.organizer.testing.ListComposeTest
+import com.doro.organizer.testing.closeKeyboard
 import com.doro.organizer.testing.pickerRowTag
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -247,9 +248,12 @@ class BatchUiTest : ListComposeTest() {
         compose.onNodeWithTag(EditorUi.PICKER_SEARCH).performTextInput("Zed")
         compose.onNodeWithTag(EditorUi.PICKER_CREATE).performClick()
 
+        // The create tap keeps the focus in the field (ui.md § 7.6), so the keyboard is up and would take the Back.
+        compose.closeKeyboard(compose.onNodeWithTag(EditorUi.PICKER_SEARCH), scene::onActivity)
         ui.pressBack()
 
         ui.awaitText(selectedTitle(1))
+        compose.onNodeWithTag(EditorUi.PICKER_SEARCH).assertDoesNotExist()
         assertEquals(0L, count("SELECT COUNT(*) FROM note_persons"))
         assertEquals(1L, count("SELECT COUNT(*) FROM persons"))
     }

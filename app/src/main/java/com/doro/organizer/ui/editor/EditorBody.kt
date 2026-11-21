@@ -2,6 +2,7 @@ package com.doro.organizer.ui.editor
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -51,6 +52,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.doro.organizer.R
 import com.doro.organizer.model.EntityKind
@@ -62,7 +64,9 @@ import com.doro.organizer.ui.common.rememberDateFormats
 /**
  * The editor's scrolling body (ui.md § 6.1, § 6.13): content, association area, date field and done checkbox, at most
  * 720 dp wide and centered; the viewport ends above the keyboard, and the insets the `Scaffold` applied are not added
- * twice.
+ * twice. The content field grows with its text up to the viewport's height and then scrolls inside itself
+ * ([ContentField]); `BoxWithConstraints` reads the viewport in the measure pass, so the bound follows the keyboard in
+ * the same frame.
  */
 @Composable
 internal fun EditorBody(
@@ -73,26 +77,32 @@ internal fun EditorBody(
     onAddLinks: (EntityKind) -> Unit,
     onOpenDate: () -> Unit,
 ) {
-    Column(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
             .consumeWindowInsets(padding)
-            .imePadding()
-            .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .imePadding(),
     ) {
+        val viewportHeight = maxHeight
         Column(
             modifier = Modifier
-                .widthIn(max = 720.dp)
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            ContentField(vm, contentFocus)
-            AssociationArea(state, onRemove = vm::removeLink, onAdd = onAddLinks)
-            DateField(state, onOpen = onOpenDate, onRemove = { vm.setDate(null) })
-            DoneRow(state.checked, vm)
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 720.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                ContentField(vm, contentFocus, maxHeight = viewportHeight)
+                AssociationArea(state, onRemove = vm::removeLink, onAdd = onAddLinks)
+                DateField(state, onOpen = onOpenDate, onRemove = { vm.setDate(null) })
+                DoneRow(state.checked, vm)
+            }
         }
     }
 }
@@ -100,14 +110,23 @@ internal fun EditorBody(
 /**
  * One multiline field for title and content (ui.md § 6.3, DEC-39): plain text stored as typed, the placeholder
  * "Title / content" while empty, capped by `ContentCap`; the keyboard never learns from it (DEC-71).
+ *
+ * The field is at most [maxHeight] high, the viewport's height (DEC-105): a longer text scrolls inside the field,
+ * which keeps the caret in view, and hands the rest of a drag or fling to the page (nested scrolling). Unbounded, it
+ * would take the height of its whole text, and M3's `TextField` measures its container with a fixed `Constraints` of
+ * that height, which Compose cannot represent from 262,143 px on (ui-unit 1.12.1 `Constraints`; material3 1.4.0
+ * `TextFieldMeasurePolicy`): from about 3,300 lines at 100 % font on a 3.25x screen, opening, typing into or pasting
+ * a long note threw `IllegalArgumentException`. The field still lays out its whole text, so a note above Compose's
+ * 16,777,215 px layout limit (more than about 122,000 line breaks at 200 % font) still crashes it (Q14).
  */
 @Composable
-private fun ContentField(vm: EditorViewModel, focus: FocusRequester) {
+private fun ContentField(vm: EditorViewModel, focus: FocusRequester, maxHeight: Dp) {
     NoPersonalizedLearning {
         TextField(
             state = vm.content,
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = maxHeight)
                 .focusRequester(focus)
                 .testTag("editor_content"),
             inputTransformation = vm.contentCap,

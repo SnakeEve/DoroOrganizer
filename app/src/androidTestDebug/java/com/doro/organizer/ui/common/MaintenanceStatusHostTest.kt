@@ -233,14 +233,14 @@ class MaintenanceStatusHostTest {
             intending(hasAction(Intent.ACTION_OPEN_DOCUMENT))
                 .respondWith(Instrumentation.ActivityResult(Activity.RESULT_OK, Intent().setData(restore.backup.uri)))
 
-            compose.onNodeWithTag(RECOVERY_RESTORE).performClick()
+            ui.click(RECOVERY_RESTORE)
             enterAndContinue(BACKUP_PASSWORD_FIELD, BACKUP_PASSWORD)
-            scene.awaitPrompts(2) // the first fingerprint question, answered with "Use password"
+            awaitPrompts(2) // the host's prompt for the first fingerprint question, answered with "Use password"
             GateScene.onMain { scene.gateway.answer(PromptResult.Error(BiometricPrompt.ERROR_NEGATIVE_BUTTON, USE_PASSWORD)) }
             val beforeKekFailure = scene.gateway.biometricPromptCount
             enterAndContinue(DATABASE_PASSWORD_FIELD, DATABASE_PASSWORD) // passes the GCM tag, but the KEK is gone
 
-            scene.awaitPrompts(beforeKekFailure + 1)
+            awaitPrompts(beforeKekFailure + 1) // the host's fallback prompt
             assertEquals(MaintenanceStatus.NeedsBiometricUnlock(afterKekFailure = true), maintenance.status.value)
             scene.recreateActivity()
             ui.awaitRecoveryScreen(CORRUPT_TITLE)

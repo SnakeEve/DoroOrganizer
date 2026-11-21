@@ -13,21 +13,30 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 
@@ -41,6 +50,17 @@ abstract class GateComposeTest(realProcessLifecycle: Boolean = false, realBiomet
     val compose = createEmptyComposeRule()
 
     val ui by lazy { GateUi(compose) }
+
+    /**
+     * Waits until [count] prompts in all were shown; the only prompt wait of the gate tests. It advances the Compose
+     * clock: under the Compose rule, recomposition and composable effects run only while the test synchronizes, so a
+     * prompt that an effect starts (the maintenance status host's `LaunchedEffect`) never starts during a plain wait on
+     * the gateway's count. It suspends the test's coroutine meanwhile, off its thread: a prompt that the test's own
+     * coroutine starts (`slotPrompt` resumes there after its Keystore step) shows only while that thread is free.
+     */
+    suspend fun awaitPrompts(count: Int) = withContext(Dispatchers.IO) {
+        compose.waitUntil("$count prompts shown", GateScene.TIMEOUT_MS) { scene.gateway.shownCount.value >= count }
+    }
 }
 
 /** What a gate test asserts on the screen; every wait pumps Compose frames until the node is there. */
@@ -99,7 +119,10 @@ class GateUi(private val compose: ComposeTestRule) {
         compose.onNodeWithTag(UNLOCK).performClick()
     }
 
-    /** A Back press as the system delivers it: a key event through the window to the `OnBackPressedDispatcher`. */
+    /**
+     * A Back press as the system delivers it: a key event through the window to the `OnBackPressedDispatcher`. While
+     * the soft keyboard is shown, the first Back only hides it, so a Back meant for the app follows `closeKeyboard`.
+     */
     fun pressBack() {
         InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
         compose.waitForIdle()
@@ -111,21 +134,51 @@ class GateUi(private val compose: ComposeTestRule) {
     fun awaitText(text: String) =
         compose.waitUntil(TIMEOUT_MS) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
 
+    /**
+     * Waits for a node whose content description is exactly [text]. A node under `clearAndSetSemantics` (an editor link
+     * chip, ui.md § 6) keeps no `Text` in the merged tree that [awaitText] searches; its description is its handle.
+     */
+    fun awaitDescription(text: String) = compose.waitUntil(TIMEOUT_MS) {
+        compose.onAllNodesWithContentDescription(text).fetchSemanticsNodes().isNotEmpty()
+    }
+
+    /**
+     * Taps the node tagged [tag] in a scrolling container once it is scrolled into view and displayed. `performClick`
+     * taps the centre of the node's clipped bounds, which are empty for a node wholly outside the visible part of its
+     * container, so an unscrolled tap there is lost without an error. Only for a node with a scrolling ancestor:
+     * `performScrollTo` fails for any other.
+     */
+    fun click(tag: String): SemanticsNodeInteraction = click(compose.onNodeWithTag(tag))
+
+    /** Taps [node] as [click] taps a tagged one: scrolled into view and displayed first. */
+    fun click(node: SemanticsNodeInteraction): SemanticsNodeInteraction =
+        node.performScrollTo().assertIsDisplayed().performClick()
+
     /** How many nodes of the unmerged tree show [text], or contain it with [substring]. */
     fun countText(text: String, substring: Boolean = false): Int =
         compose.onAllNodes(hasText(text, substring = substring), useUnmergedTree = true).fetchSemanticsNodes().size
 
     /**
-     * Every node with a click action, in every window of the screen (dialogs included), has a touch target of at
+     * Every node with a click action, in every window of the screen (dialogs included), has touch bounds of at
      * least 48 × 48 dp (testing.md I-35, ui.md § 12.4: no exception). [where] names the screen in the failure.
+     *
+     * The touch bounds are the area a finger gets: Compose pads every clickable's bounds to its minimum touch target
+     * (48 dp), so a visible clickable smaller than 48 dp passes and only one that a clipping ancestor cuts below 48 dp
+     * fails (Q13; `TouchTargetSweepTest`). Compose reports 0 × 0 for a node wholly outside a clipping ancestor (a
+     * partly hidden one keeps 48 dp), and a lazy list composes its partly visible item whole, such as the next month
+     * of the M3 range picker. So a node that fails inside a scroll container is scrolled into view and measured again;
+     * a node that fails with no scrolling ancestor still fails. That scrolling stays: a tap after the sweep goes
+     * through [click], which scrolls its node back into view.
      */
     fun assertEveryClickableHasATouchTarget(where: String) {
         compose.waitForIdle()
         val nodes = compose.onAllNodes(hasClickAction()).fetchSemanticsNodes()
         assertTrue("$where: no clickable node", nodes.isNotEmpty())
-        val small = nodes.filter { node ->
-            val minimum = with(node.layoutInfo.density) { 48.dp.toPx() }
-            node.touchBoundsInRoot.width < minimum || node.touchBoundsInRoot.height < minimum
+        val small = nodes.filter { it.underTouchTarget() }.mapNotNull { node ->
+            val inScroller =
+                SemanticsMatcher("id ${node.id}") { it.id == node.id } and hasAnyAncestor(hasScrollAction())
+            if (compose.onAllNodes(inScroller).fetchSemanticsNodes().isEmpty()) return@mapNotNull node
+            compose.onNode(inScroller).performScrollTo().fetchSemanticsNode().takeIf { it.underTouchTarget() }
         }
         assertTrue("$where: under 48 dp: ${small.map { it.describe() }}", small.isEmpty())
     }
@@ -175,13 +228,43 @@ fun SemanticsNodeInteraction.textLayout(): TextLayoutResult {
     return results.single()
 }
 
-/** The touch target of a control is at least 48 × 48 dp (testing.md I-35, ui.md § 12.4). */
+/**
+ * The text of this layout is shown whole (testing.md I-35): no line beyond `maxLines` and the height not clipped, no
+ * line ellipsized, and no line wider than the node. The layout is the one the node's `GetTextLayoutResult` gives.
+ * For a plain `Text(String)` it is laid out again at the node's maximum width and paired with its real size
+ * (foundation 1.12.1 `TextStringSimpleNode`): a text that may wrap keeps its real line breaks, but `didOverflowWidth`,
+ * and with it `hasVisualOverflow`, is true for every text narrower than its container, so neither is used; a text that
+ * may not wrap (`softWrap = false`) and is wider than the node is broken again at that width, so it shows as lines
+ * taller than the node (the height check). A `Text(AnnotatedString)` gives its real layout (`TextAnnotatedStringNode`),
+ * where such a text is one line wider than the node (the line-width check).
+ */
+fun TextLayoutResult.assertNotCutOff() {
+    assertFalse("cut off: lines beyond maxLines or the height clipped", didOverflowHeight)
+    for (line in 0 until lineCount) {
+        assertFalse("cut off: line $line ellipsized", isLineEllipsized(line))
+        val width = getLineRight(line) - getLineLeft(line)
+        // 0.5 px: the line width is a float, the node's width whole pixels.
+        assertTrue("cut off: line $line is $width px, the node ${size.width} px", width <= size.width + 0.5f)
+    }
+}
+
+/**
+ * The touch target of a control is at least 48 × 48 dp (testing.md I-35, ui.md § 12.4): its touch bounds, padded by
+ * Compose to 48 dp and cut by any clipping ancestor, as [GateUi.assertEveryClickableHasATouchTarget] measures them
+ * (Q13).
+ */
 fun SemanticsNodeInteraction.assertTouchTarget(): SemanticsNodeInteraction {
     val node = fetchSemanticsNode()
     val minimum = with(node.layoutInfo.density) { 48.dp.toPx() }
     val bounds = node.touchBoundsInRoot
     assertTrue("touch target ${bounds.width} x ${bounds.height} px < 48 dp", bounds.width >= minimum && bounds.height >= minimum)
     return this
+}
+
+/** Whether this node's touch target is under 48 dp in width or height (0 × 0 when wholly clipped). */
+private fun SemanticsNode.underTouchTarget(): Boolean {
+    val minimum = with(layoutInfo.density) { 48.dp.toPx() }
+    return touchBoundsInRoot.width < minimum || touchBoundsInRoot.height < minimum
 }
 
 /** A node as a failure names it: its tag, description or text, and its touch bounds. */

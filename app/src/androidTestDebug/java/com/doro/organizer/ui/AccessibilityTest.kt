@@ -29,6 +29,7 @@ import com.doro.organizer.testing.GateUi
 import com.doro.organizer.testing.ListComposeTest
 import com.doro.organizer.testing.ScriptedGateComposeTest
 import com.doro.organizer.testing.TAB_LABELS
+import com.doro.organizer.testing.assertNotCutOff
 import com.doro.organizer.testing.assertTouchTarget
 import com.doro.organizer.testing.atFontScale
 import com.doro.organizer.testing.dialogCatalog
@@ -38,7 +39,6 @@ import com.doro.organizer.testing.visitListWindows
 import com.doro.organizer.testing.visitShellDialogs
 import com.doro.organizer.ui.settings.KeyFlow
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -71,7 +71,9 @@ class AccessibilityTest {
             val row = compose.onNodeWithTag(rowTag(id)).fetchSemanticsNode()
             val checkbox = compose.onNodeWithTag(checkboxTag(id)).fetchSemanticsNode()
 
-            assertEquals(listOf("Weekly sync, Budget"), row.config.getOrNull(SemanticsProperties.ContentDescription))
+            // The note has no link, so its description ends with "Orphaned" (ui.md § 12.1, § 3.7; DEC-27).
+            val description = row.config.getOrNull(SemanticsProperties.ContentDescription)
+            assertEquals(listOf("Weekly sync, Budget, $ORPHANED"), description)
             assertNull("the row reads its description, not its texts", row.config.getOrNull(SemanticsProperties.Text))
             val rowToggle = row.config.getOrNull(SemanticsProperties.ToggleableState)
             assertNull("the checkbox is not merged into the row", rowToggle)
@@ -155,7 +157,7 @@ class AccessibilityTest {
             ui.awaitPasswordScreen()
             ui.assertEveryClickableHasATouchTarget("password screen")
 
-            compose.onNodeWithTag(GateUi.FORGOT).performClick()
+            ui.click(GateUi.FORGOT) // the sweep may have left the screen scrolled
             ui.awaitForgotScreen()
             ui.assertEveryClickableHasATouchTarget("Forgot password screen")
 
@@ -260,7 +262,7 @@ class AccessibilityTest {
         /** Laid out at twice the font scale and not cut off (ui.md § 12.5). */
         fun assertWhole(layout: TextLayoutResult) {
             assertEquals(2f, layout.layoutInput.density.fontScale)
-            assertFalse("cut off", layout.hasVisualOverflow)
+            layout.assertNotCutOff()
         }
     }
 }

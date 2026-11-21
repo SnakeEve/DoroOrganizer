@@ -25,6 +25,7 @@ import com.doro.organizer.security.SlotOffer
 import com.doro.organizer.session.GateState
 import com.doro.organizer.testing.GateUi
 import com.doro.organizer.testing.ScriptedGateComposeTest
+import com.doro.organizer.testing.appIntents
 import com.doro.organizer.testing.assertTouchTarget
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -70,7 +71,7 @@ class ShellDialogsTest : ScriptedGateComposeTest() {
         compose.onNodeWithText(BACK_UP_NOW).performClick()
 
         ui.awaitTag(SETTINGS_LIST)
-        compose.waitUntil(GateUi.TIMEOUT_MS) { Intents.getIntents().isNotEmpty() }
+        compose.waitUntil(GateUi.TIMEOUT_MS) { appIntents().isNotEmpty() }
         intended(hasAction(Intent.ACTION_CREATE_DOCUMENT))
         assertEquals(listOf("dismissKekNotice"), scene.lock.calls)
         compose.onNodeWithText(KEK_TITLE).assertDoesNotExist()
@@ -87,7 +88,7 @@ class ShellDialogsTest : ScriptedGateComposeTest() {
         compose.onNodeWithText(BACK_UP_NOW).performClick()
 
         ui.awaitText(PLAIN_TITLE)
-        assertEquals("no picker before the warning", 0, Intents.getIntents().size)
+        assertEquals("no picker before the warning", emptyList<Intent>(), appIntents())
         assertEquals(listOf("dismissKekNotice"), scene.lock.calls)
     }
 

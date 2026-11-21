@@ -22,6 +22,7 @@ import com.doro.organizer.model.Perspective
 import com.doro.organizer.session.GateState
 import com.doro.organizer.testing.GateUi
 import com.doro.organizer.testing.ScriptedGateComposeTest
+import com.doro.organizer.testing.closeKeyboard
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertFalse
@@ -31,11 +32,11 @@ import org.junit.runner.RunWith
 
 /**
  * I-38, the shell's and the lists' part (DEC-50, DEC-51, architecture.md § Back behavior): the shell starts on All;
- * every perspective has the Search and the Settings action; each tab keeps its own search; Back closes an open search
- * first, then from the root of another tab returns to All and keeps that tab; Back from Settings returns to the
- * perspective it was opened from; Back at the root of All is left to the system. The saved list state is
- * `NoteListViewModelTest`, the editor's `EditorViewModelTest`, the remembered entity `StaleIdUiTest`, the title and
- * chip pickers `PickerNavigationTest`.
+ * every perspective has the Search and the Settings action; each tab keeps its own search; once the keyboard is hidden
+ * (while it is shown, the first Back only hides it), Back closes an open search first, then from the root of another
+ * tab returns to All and keeps that tab; Back from Settings returns to the perspective it was opened from; Back at the
+ * root of All is left to the system. The saved list state is `NoteListViewModelTest`, the editor's
+ * `EditorViewModelTest`, the remembered entity `StaleIdUiTest`, the title and chip pickers `PickerNavigationTest`.
  */
 @RunWith(AndroidJUnit4::class)
 class NavigationTest : ScriptedGateComposeTest() {
@@ -103,6 +104,9 @@ class NavigationTest : ScriptedGateComposeTest() {
                 compose.onNodeWithTag(PICKER_SEARCH).assertIsFocused()
             } else {
                 compose.onNodeWithTag(SEARCH_FIELD).assertIsFocused()
+                // The first Back would only hide the keyboard the Search action showed (ui.md § 3.3).
+                compose.closeKeyboard(compose.onNodeWithTag(SEARCH_FIELD), scene::onActivity)
+                compose.onNodeWithTag(SEARCH_FIELD).assertExists()
                 ui.pressBack()
                 compose.onNodeWithTag(SEARCH_FIELD).assertDoesNotExist()
                 compose.onNodeWithTag("tab_${p.name}").assertIsSelected()

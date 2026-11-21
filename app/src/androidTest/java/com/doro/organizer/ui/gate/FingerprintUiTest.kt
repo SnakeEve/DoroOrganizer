@@ -56,7 +56,7 @@ class FingerprintUiTest : GateComposeTest() {
     fun theLockScreenOfTheSlotRoute_hasUnlockAndUsePassword_atLeast48dp() = runBlocking<Unit> {
         scene.plant(KeyMode.PASSWORD, PASSWORD, lock = true, slot = true)
         scene.coldStart()
-        scene.awaitPrompts(1)
+        awaitPrompts(1)
         ui.awaitLockScreen()
         withTimeout(GateUi.TIMEOUT_MS) { app.container.appLockController.lockRoute.first { it == UnlockRoute.Slot } }
         ui.awaitTag(GateUi.USE_PASSWORD)
@@ -131,7 +131,7 @@ class FingerprintUiTest : GateComposeTest() {
     fun aRotationDuringACryptoObjectPrompt_showsOnePrompt() = runBlocking<Unit> {
         scene.plant(KeyMode.PASSWORD, PASSWORD, lock = true, slot = true)
         scene.coldStart()
-        scene.awaitPrompts(1) // no outcome scripted: the prompt stays open
+        awaitPrompts(1) // no outcome scripted: the prompt stays open
         ui.awaitLockScreen()
 
         scene.recreateActivity()
@@ -160,7 +160,7 @@ class FingerprintUiTest : GateComposeTest() {
         ui.awaitShell()
         scene.gateway.succeed()
         scene.backgroundTrip()
-        scene.awaitPrompts(2)
+        awaitPrompts(2)
         scene.awaitGate(GateState.Ready)
     }
 

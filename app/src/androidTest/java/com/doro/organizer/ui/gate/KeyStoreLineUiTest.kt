@@ -25,6 +25,7 @@ import com.doro.organizer.testing.GateUi.Companion.FINGERPRINT_AVAILABLE
 import com.doro.organizer.testing.GateUi.Companion.KEK_FAILED_TEXT
 import com.doro.organizer.testing.GateUi.Companion.KEK_LINE
 import com.doro.organizer.testing.ScriptedGateComposeTest
+import com.doro.organizer.testing.assertNotCutOff
 import com.doro.organizer.testing.textLayout
 import com.doro.organizer.testing.themeErrorColor
 import com.doro.organizer.ui.DoroRoot
@@ -148,7 +149,7 @@ class KeyStoreLineUiTest : ScriptedGateComposeTest() {
         val layout = compose.onNodeWithTag(KEK_LINE).assertTextEquals(KEK_FAILED_TEXT).textLayout()
         assertEquals(2f, layout.layoutInput.density.fontScale)
         assertTrue("wraps", layout.lineCount > 1)
-        assertFalse("cut off", layout.hasVisualOverflow)
+        layout.assertNotCutOff()
     }
 
     /** One of the key-store screens of ui.md § 10.2, its rotation, and its single announcement (§ 12.3). */

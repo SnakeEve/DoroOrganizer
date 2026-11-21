@@ -1,5 +1,6 @@
 package com.doro.organizer.ui.editor
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.lifecycle.SavedStateHandle
@@ -72,7 +73,7 @@ class EditorViewModel(
 
     /** The content field's text (ui.md § 6.3); not part of [uiState]. */
     val content: TextFieldState =
-        savedStateHandle.saveable(EditorSavedState.KEY_CONTENT, saver = TextFieldState.Saver) { TextFieldState() }
+        savedStateHandle.saveable(EditorSavedState.KEY_CONTENT, saver = ContentStateSaver) { TextFieldState() }
 
     /** The content field's cap (ui.md § 6.9): each truncating change shows the notice. */
     val contentCap = ContentCap { showMessage(UiText.Res(R.string.content_truncated), isError = true) }
@@ -378,8 +379,11 @@ class EditorViewModel(
     /**
      * The stored note becomes the baseline. A fresh draft takes its values; a restored one keeps the user's edits and
      * only takes `checked`, which the checkbox writes at once. A note above the cap (only a foreign backup holds one)
-     * is cut like typed input, with the notice, and the cut text is the baseline, so leaving writes nothing.
+     * is cut like typed input, with the notice, and the cut text is the baseline, so leaving writes nothing. The
+     * loaded text starts an empty undo history (DEC-104): as an undo step it would let undo (Ctrl+Z) empty the field,
+     * and leaving would then save the empty text over the note.
      */
+    @OptIn(ExperimentalFoundationApi::class) // TextFieldState.undoState, foundation 1.12.1
     private fun applyLoaded(detail: NoteDetail) {
         putNames(EntityKind.Person, detail.persons.associate { it.id to it.name })
         putNames(EntityKind.Project, detail.projects.associate { it.id to it.name })
@@ -404,6 +408,7 @@ class EditorViewModel(
             )
         }
         content.setTextAndPlaceCursorAtEnd(text)
+        content.undoState.clearHistory()
         saved.loaded = true
         if (text.length < detail.content.length) showMessage(UiText.Res(R.string.content_truncated), isError = true)
     }

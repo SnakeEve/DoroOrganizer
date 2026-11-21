@@ -112,10 +112,36 @@ class GateScene(
         setup.holder.close()
     }
 
-    /** The process comes to the foreground, the gate starts and `MainActivity` is launched. */
+    /**
+     * The process comes to the foreground, the gate starts and `MainActivity` is launched while the gate is still
+     * `Starting`. Not guarded by [checkNotStarting]: the real gate leaves `Starting` by itself once startup has run,
+     * and `ActivityScenario` waits until then for the first frame, which the splash screen holds back. A test that
+     * holds startup back (a [faultHook] target on the way to the first state) must not cold-start, or the launch never
+     * returns.
+     */
     fun coldStart() {
         onMain { process.moveTo(Lifecycle.State.RESUMED) }
         app.start()
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+    }
+
+    /**
+     * Closes `MainActivity`, if launched, and forgets it, so [launchActivity] may launch it again; the container, the
+     * gate and its process lifecycle stay. The `@After` of [GateTest] calls it; a test that plays an activity-hosted
+     * part itself (the maintenance status host) calls it too, so that no second host answers.
+     */
+    fun closeActivity() {
+        scenario?.close()
+        scenario = null
+    }
+
+    /**
+     * Launches `MainActivity` again over the running gate, after [closeActivity]; unlike [coldStart] the gate is not
+     * started. Refused while the gate is `Starting` ([checkNotStarting]): await the state it moves on to first.
+     */
+    fun launchActivity() {
+        check(scenario == null) { "MainActivity is already launched" }
+        checkNotStarting(gate.state.value, "launch")
         scenario = ActivityScenario.launch(MainActivity::class.java)
     }
 
@@ -152,9 +178,6 @@ class GateScene(
 
     fun releaseAvailability() = lock.releaseAvailability()
 
-    /** Waits until [count] prompts in all were shown. */
-    suspend fun awaitPrompts(count: Int) = withTimeout(TIMEOUT_MS) { gateway.shownCount.first { it >= count } }
-
     fun dispatch(event: GateEvent) = onMain { gate.dispatch(event) }
 
     fun submit(password: String) = dispatch(GateEvent.PasswordSubmitted(password.toCharArray()))
@@ -162,12 +185,9 @@ class GateScene(
     /** The live Room instance's holder state, compared by identity across a lock (same instance, no reopen). */
     fun holderState(): HolderState = app.container.databaseHolder.state.value
 
-    fun finish() = scenario?.close()
-
     /** A process restart: `MainActivity` closes and a new container takes over the same files; [coldStart] follows. */
     fun restart() {
-        finish()
-        scenario = null
+        closeActivity()
         app.restart()
     }
 
@@ -176,20 +196,29 @@ class GateScene(
         checkNotNull(scenario) { "not started" }.onActivity(block)
     }
 
-    /** Recreates the launched `MainActivity` as a rotation does: its state saved, the ViewModelStore kept. */
+    /**
+     * Recreates the launched `MainActivity` as a rotation does: its state saved, the ViewModelStore kept. Refused while
+     * the gate is `Starting` ([checkNotStarting]): await the state it moves on to first.
+     */
     fun recreateActivity() {
-        checkNotNull(scenario) { "not started" }.recreate()
+        recreatable().recreate()
     }
 
     /**
      * Recreates the launched `MainActivity` as after Android closed the app in the background: its state saved, every
      * ViewModel gone, so each is rebuilt from that state; the container (the gate) stays, as startup would restore it.
+     * Refused while the gate is `Starting` ([checkNotStarting]).
      */
     fun recreateAfterProcessDeath() {
-        checkNotNull(scenario) { "not started" }.recreateAfterProcessDeath()
+        recreatable().recreateAfterProcessDeath()
     }
 
-    /** Moves the launched `MainActivity` to [state] (CREATED: stopped, its state saved). */
+    private fun recreatable(): ActivityScenario<MainActivity> = checkRecreatable(scenario, gate.state.value)
+
+    /**
+     * Moves the launched `MainActivity` to [state]. For CREATED (stopped) `ActivityScenario` returns at `onStop`,
+     * before `onSaveInstanceState` has run, so a test that reads the saved state goes through [captureSavedState].
+     */
     fun moveActivityTo(state: Lifecycle.State) {
         checkNotNull(scenario) { "not started" }.moveToState(state)
     }

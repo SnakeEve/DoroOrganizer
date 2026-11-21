@@ -29,7 +29,7 @@ class FingerprintUnlockTest : GateComposeTest() {
     fun plainMode_oneStrongPrompt_withoutCryptoObject() = runBlocking {
         scene.plant(KeyMode.PLAIN, lock = true)
         scene.coldStart()
-        scene.awaitPrompts(1)
+        awaitPrompts(1)
         ui.awaitLockScreen() // neither the password screen nor NavDisplay before the prompt succeeded
         GateScene.onMain { scene.gateway.answer(PromptResult.Succeeded(cryptoMatches = true)) }
         scene.awaitGate(GateState.Ready)
@@ -41,7 +41,7 @@ class FingerprintUnlockTest : GateComposeTest() {
     fun deviceMode_oneStrongPrompt_withoutCryptoObject() = runBlocking {
         scene.plant(KeyMode.DEVICE, lock = true)
         scene.coldStart()
-        scene.awaitPrompts(1)
+        awaitPrompts(1)
         ui.awaitLockScreen() // neither the password screen nor NavDisplay before the prompt succeeded
         GateScene.onMain { scene.gateway.answer(PromptResult.Succeeded(cryptoMatches = true)) }
         scene.awaitGate(GateState.Ready)
@@ -58,7 +58,7 @@ class FingerprintUnlockTest : GateComposeTest() {
             scene.gate.state.takeWhile { it != GateState.Ready }.toList()
         }
         scene.coldStart()
-        scene.awaitPrompts(1)
+        awaitPrompts(1)
         // L-17: nothing is open before the prompt succeeds.
         assertEquals(HolderState.Closed, scene.holderState())
         assertEquals(0, openDescriptors(scene.liveFile()))

@@ -188,7 +188,7 @@ class GateUiTest {
         fun home_locks_andTheRelaunchedTaskShowsTheLockScreenWithoutNoteText() = runBlocking<Unit> {
             scene.plant(KeyMode.DEVICE, lock = true, sentinel = SENTINEL)
             scene.coldStart()
-            scene.awaitPrompts(1)
+            awaitPrompts(1)
             ui.awaitLockScreen()
             assertEquals(0, ui.countText(SENTINEL, substring = true))
             GateScene.onMain { scene.gateway.answer(PromptResult.Succeeded(cryptoMatches = true)) }
@@ -201,7 +201,7 @@ class GateUiTest {
             val launch = checkNotNull(context.packageManager.getLaunchIntentForPackage(context.packageName))
             context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 
-            scene.awaitPrompts(2)
+            awaitPrompts(2)
             ui.awaitLockScreen()
             assertEquals("note or entity text on the lock screen", 0, ui.countText(SENTINEL, substring = true))
         }
