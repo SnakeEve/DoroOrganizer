@@ -34,6 +34,7 @@ import com.doro.organizer.model.DateFilter
 import com.doro.organizer.model.DeleteImpact
 import com.doro.organizer.model.DraftInsert
 import com.doro.organizer.model.EntityDeleteResult
+import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.EntityOption
 import com.doro.organizer.model.EntityRef
 import com.doro.organizer.model.KeyMode
@@ -57,6 +58,14 @@ import com.doro.organizer.testing.SENTINEL
 import com.doro.organizer.testing.TEST_SLOT_KEY_ALIAS
 import com.doro.organizer.ui.common.EntityPickerUiState
 import com.doro.organizer.ui.common.EntityRowUi
+import com.doro.organizer.ui.common.PickerItem
+import com.doro.organizer.ui.common.PickerResult
+import com.doro.organizer.ui.editor.Baseline
+import com.doro.organizer.ui.editor.DraftFields
+import com.doro.organizer.ui.editor.EditorDialog
+import com.doro.organizer.ui.editor.EditorUiState
+import com.doro.organizer.ui.editor.LinkChip
+import com.doro.organizer.ui.editor.SavedDialog
 import com.doro.organizer.ui.common.NoteRowUi
 import com.doro.organizer.ui.notes.ChipValue
 import com.doro.organizer.ui.notes.FilterChipUi
@@ -437,13 +446,17 @@ class RedactionTest {
             dialog = null,
             message = null,
         )
+        val entityRow = EntityRowUi(4, SENTINEL, 1, LocalDate.of(2026, 11, 17))
         val picker = EntityPickerUiState(
             loading = false,
             anyEntity = true,
-            rows = listOf(EntityRowUi(4, SENTINEL, 1, LocalDate.of(2026, 11, 17))),
+            items = listOf(PickerItem.Entity(entityRow, checked = true)),
+            tab = EntityKind.Person,
+            chosen = mapOf(EntityKind.Person to 1),
+            canConfirm = true,
         )
 
-        val printed = listOf(row, chip, state, state.primary, picker, picker.rows.single()).map { it.toString() }
+        val printed = listOf(row, chip, state, state.primary, picker, entityRow).map { it.toString() }
 
         assertEquals(
             listOf(
@@ -451,10 +464,84 @@ class RedactionTest {
                 "FilterChipUi(Person, Entity(id=3))",
                 "NoteListUiState(Individual, rows=1)",
                 "Entity(id=2)",
-                "EntityPickerUiState(loading=false, rows=1)",
+                "EntityPickerUiState(loading=false, items=1, tab=Person)",
                 "EntityRowUi(id=4)",
             ),
             printed,
+        )
+    }
+
+    @Test
+    fun pickerTypes_printKindsIdsAndCountsOnly() {
+        val created = NewEntity("k1", SENTINEL)
+        val printed = listOf(
+            PickerItem.Create(SENTINEL, another = true),
+            PickerItem.New(created),
+            PickerItem.Entity(EntityRowUi(5, SENTINEL, 0, LocalDate.of(2026, 11, 17)), checked = false),
+            PickerResult.Links(EntityKind.Person, setOf(1, 2), listOf(created)),
+            PickerResult.Associate(setOf(1), emptySet(), listOf(created), listOf(created)),
+            PickerResult.Primary(EntityKind.Project, 3),
+            PickerResult.Filter(EntityKind.Person, null),
+            PickerResult.Delete(EntityKind.Person, 4),
+        ).map { it.toString() }
+
+        assertEquals(
+            listOf(
+                "Create(another=true)",
+                "New(k1)",
+                "Entity(id=5, checked=false)",
+                "Links(Person, ids=2, created=1)",
+                "Associate(personIds=1, projectIds=0, newPersons=1, newProjects=1)",
+                "Primary(Project, id=3)",
+                "Filter(Person, id=null)",
+                "Delete(Person, id=4)",
+            ),
+            printed,
+        )
+    }
+
+    @Test
+    fun editorTypes_printIdsAndCountsOnly() {
+        val chip = LinkChip(id = 7, newKey = null, name = SENTINEL)
+        val impact = EditorDialog.DeleteImpact(EntityKind.Project, 8, SENTINEL, n = 3, m = 1)
+        val state = EditorUiState(
+            loading = false,
+            isNew = false,
+            noteId = 9,
+            date = null,
+            overdue = false,
+            checked = false,
+            people = listOf(chip),
+            projects = listOf(LinkChip(id = null, newKey = "k2", name = SENTINEL)),
+            dialog = impact,
+            message = null,
+            closed = false,
+        )
+
+        assertEquals(
+            listOf("EditorUiState(noteId=9)", "LinkChip(id=7)", "DeleteImpact(Project, id=8, n=3, m=1)"),
+            listOf(state, chip, impact).map { it.toString() },
+        )
+    }
+
+    @Test
+    fun editorDraftTypes_printIdsOnly() {
+        val created = listOf(NewEntity(key = SENTINEL, name = SENTINEL))
+        val fields = DraftFields(
+            noteId = 4,
+            date = 20_774,
+            checked = true,
+            personIds = setOf(1),
+            projectIds = setOf(2),
+            newPersons = created,
+            newProjects = created,
+        )
+        val baseline = Baseline(SENTINEL, date = 20_774, checked = false, personIds = setOf(1), projectIds = emptySet())
+        val dialog = SavedDialog.Plain(EditorDialog.DeleteImpact(EntityKind.Person, 8, SENTINEL, n = 1, m = 0))
+
+        assertEquals(
+            listOf("DraftFields(noteId=4)", "Baseline(date=20774)", "Plain(DeleteImpact(Person, id=8, n=1, m=0))"),
+            listOf(fields, baseline, dialog).map { it.toString() },
         )
     }
 }

@@ -282,8 +282,8 @@ class NoteListViewModel(
     // Secondary filters (ui.md § 3.4, § 3.5).
 
     /**
-     * Sets or, with null, clears the [kind] filter: the result of the chip's picker (`PickerResult.Filter`, SPEC
-     * T18). At most one person and one project (DEC-28).
+     * Sets or, with null, clears the [kind] filter: the result of the chip's picker (`PickerResult.Filter`, ui.md
+     * § 7.7). At most one person and one project (DEC-28).
      */
     fun setEntityFilter(kind: EntityKind, id: Long?) {
         val filter = if (kind == EntityKind.Person) personFilter else projectFilter

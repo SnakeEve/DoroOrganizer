@@ -10,6 +10,11 @@
     <string name="tab_calendar">Calendar</string>
     <string name="tab_orphans">Orphans</string>
     <string name="title_all">All notes</string>
+    <plurals name="tab_with_count">
+        <item quantity="one">%1$s (%2$d)</item>
+        <item quantity="other">%1$s (%2$d)</item>
+    </plurals>
+    <string name="fab_create_note">Create new note</string>
     <string name="action_back">Back</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_ok">OK</string>
@@ -34,6 +39,7 @@
     <string name="state_not_selected">Not selected</string>
     <string name="a11y_select_note">Select note</string>
     <string name="a11y_deselect_note">Deselect note</string>
+    <string name="a11y_open_note">Open note</string>
     <string name="announce_marked_done">Marked as done</string>
     <string name="announce_marked_not_done">Marked as not done</string>
     <string name="a11y_row_people">People: %1$s</string>
@@ -64,6 +70,8 @@
     <string name="action_clear_until">Clear end date</string>
 
     <!-- Perspectives and calendar (ui.md § 11.4). -->
+    <string name="a11y_change_person">Change person</string>
+    <string name="a11y_change_project">Change project</string>
     <string name="action_today">Today</string>
     <string name="label_today">Today</string>
     <string name="a11y_previous_month">Previous month</string>
@@ -84,6 +92,7 @@
     </plurals>
     <string name="action_exit_selection">Exit selection</string>
     <string name="action_select_all">Select all</string>
+    <string name="action_associate">Associate</string>
     <string name="action_set_date">Set date…</string>
     <string name="dialog_set_date_title">Set date</string>
     <string name="action_remove_date">Remove date</string>
@@ -109,15 +118,92 @@
     </plurals>
     <string name="dialog_irreversible">This cannot be undone.</string>
 
-    <!-- EntityPicker (ui.md § 11.7): the embedded body of Individual and Project. -->
+    <!-- Editor (ui.md § 11.6). -->
+    <string name="editor_title_new">New note</string>
+    <string name="editor_title_edit">Edit note</string>
+    <string name="action_save">Save</string>
+    <string name="content_hint">Title / content</string>
+    <string name="a11y_associate">Associate persons and projects</string>
+    <string name="assoc_people">People</string>
+    <string name="assoc_projects">Projects</string>
+    <string name="action_add_person">Add person</string>
+    <string name="action_add_project">Add project</string>
+    <string name="a11y_remove_link">Remove %1$s</string>
+    <string name="a11y_set_date">Set or change date</string>
+    <string name="date_none">No date</string>
+    <string name="editor_done_label">Done</string>
+    <string name="menu_unlink">Unlink person or project…</string>
+    <string name="menu_delete_person">Delete person…</string>
+    <string name="menu_delete_project">Delete project…</string>
+    <string name="menu_delete_note">Delete note</string>
+    <string name="unlink_title">Unlink person or project</string>
+    <string name="action_unlink">Unlink</string>
+    <string name="a11y_unlink_entity">Unlink %1$s</string>
+    <string name="unlink_now_orphan">This note has no person or project left and will move to Orphans.</string>
+    <string name="dialog_delete_note_title">Delete this note?</string>
+    <string name="person_deleted">Person deleted</string>
+    <string name="project_deleted">Project deleted</string>
+    <string name="note_gone">This note no longer exists.</string>
+    <string name="content_truncated">Notes are limited to 200,000 characters. The text was cut at that limit.</string>
+    <string name="editor_save_failed">The note could not be saved. %1$s</string>
+
+    <!-- EntityPicker (ui.md § 11.7). -->
+    <string name="picker_title_add_people">Add people</string>
+    <string name="picker_title_add_projects">Add projects</string>
+    <string name="picker_title_associate">Associate</string>
+    <string name="picker_title_choose_person">Choose a person</string>
+    <string name="picker_title_choose_project">Choose a project</string>
+    <string name="picker_title_filter_person">Filter by person</string>
+    <string name="picker_title_filter_project">Filter by project</string>
+    <string name="picker_title_delete_person">Delete person</string>
+    <string name="picker_title_delete_project">Delete project</string>
     <string name="picker_search_people">Search people</string>
     <string name="picker_search_projects">Search projects</string>
     <plurals name="picker_entity_meta">
         <item quantity="one">%1$d note · added %2$s</item>
         <item quantity="other">%1$d notes · added %2$s</item>
     </plurals>
+    <string name="picker_any_person">Any person</string>
+    <string name="picker_any_project">Any project</string>
+    <string name="picker_create">Create \"%1$s\"</string>
+    <string name="picker_create_another">Create another \"%1$s\"</string>
+    <string name="picker_entity_new">New</string>
+    <string name="picker_section_co_people">People on this project\'s notes</string>
+    <string name="picker_section_co_projects">Projects on this person\'s notes</string>
+    <string name="picker_section_other_people">Other people</string>
+    <string name="picker_section_other_projects">Other projects</string>
+    <string name="picker_section_linked">Linked to this note</string>
+    <string name="picker_create_hint_person">Type a name to create a person.</string>
+    <string name="picker_create_hint_project">Type a name to create a project.</string>
     <string name="picker_empty_people_hint">People are created in a note: tap + and use Add person.</string>
     <string name="picker_empty_projects_hint">Projects are created in a note: tap + and use Add project.</string>
+    <string name="a11y_choose">Choose</string>
+
+    <!-- Delete person or project (ui.md § 11.8). -->
+    <string name="dialog_delete_person_title">Delete person \"%1$s\"?</string>
+    <string name="dialog_delete_project_title">Delete project \"%1$s\"?</string>
+    <string name="impact_person_not_linked">This person is not linked to any note.</string>
+    <string name="impact_project_not_linked">This project is not linked to any note.</string>
+    <plurals name="impact_person_linked">
+        <item quantity="one">This person is linked to %d note.</item>
+        <item quantity="other">This person is linked to %d notes.</item>
+    </plurals>
+    <plurals name="impact_project_linked">
+        <item quantity="one">This project is linked to %d note.</item>
+        <item quantity="other">This project is linked to %d notes.</item>
+    </plurals>
+    <plurals name="impact_none_orphaned">
+        <item quantity="one">That note keeps other links and stays out of Orphans.</item>
+        <item quantity="other">All of them keep other links and stay out of Orphans.</item>
+    </plurals>
+    <plurals name="impact_all_orphaned">
+        <item quantity="one">That note will have no person or project left and will move to Orphans.</item>
+        <item quantity="other">All of them will have no person or project left and will move to Orphans.</item>
+    </plurals>
+    <plurals name="impact_some_orphaned">
+        <item quantity="one">%d of them will have no person or project left and will move to Orphans.</item>
+        <item quantity="other">%d of them will have no person or project left and will move to Orphans.</item>
+    </plurals>
 
     <!-- Restore errors (ui.md § 11.10), the InvalidBackup texts of AppError.messageRes(). -->
     <string name="restore_error_not_backup">This file is not a Doro Organizer backup.</string>

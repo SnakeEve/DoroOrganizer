@@ -13,7 +13,9 @@ import androidx.compose.ui.test.performTouchInput
 import com.doro.organizer.data.HolderState
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.Perspective
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 /**
  * A list test over the real app (ui.md § 3, § 4): plain data planted with [startWith], the gate opened by a cold
@@ -21,6 +23,9 @@ import kotlinx.coroutines.runBlocking
  */
 abstract class ListComposeTest : GateComposeTest() {
     val time get() = scene.time
+
+    /** The editor and the full-screen picker (ui.md § 6, § 7). */
+    val editor by lazy { EditorUi(compose, ui) }
 
     /** Today as an epoch day: 2026-11-17 on [FakeAppTime]'s clock. */
     val today: Long get() = time.today().toEpochDay()
@@ -86,6 +91,19 @@ abstract class ListComposeTest : GateComposeTest() {
             cursor.moveToFirst()
             cursor.getLong(0)
         }
+    }
+
+    /**
+     * Runs [block] and then waits for the work it started in the app's `applicationScope`, such as the editor's save on
+     * leave (architecture.md § Threading), so a count read afterwards also proves that nothing was written. The scope's
+     * long-lived children (shared flows, the clock) were there before and are not waited for.
+     */
+    fun awaitDetachedWork(block: () -> Unit) {
+        val scope = scene.app.container.applicationScope.coroutineContext.job
+        val before = scope.children.toSet()
+        block()
+        compose.waitForIdle()
+        runBlocking { withTimeout(GateUi.TIMEOUT_MS) { (scope.children.toSet() - before).forEach { it.join() } } }
     }
 
     fun descriptionOf(tag: String, unmerged: Boolean = false): String =

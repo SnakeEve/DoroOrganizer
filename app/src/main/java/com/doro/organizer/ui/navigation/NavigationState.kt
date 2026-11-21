@@ -2,9 +2,11 @@ package com.doro.organizer.ui.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -22,9 +24,9 @@ import com.doro.organizer.model.Perspective
 val LocalIsTopEntry = compositionLocalOf { false }
 
 /**
- * One back stack per tab, the current tab and the tab counters (architecture.md § Keys and stacks, ui.md § 2.1). Each
- * counter array is indexed by `Perspective.ordinal` and replaced, never mutated, so that readers recompose. Only
- * [Navigator] writes it.
+ * One back stack per tab, the current tab, the tab counters (architecture.md § Keys and stacks, ui.md § 2.1) and the
+ * last `visit` given to an editor or picker key (DEC-100). Each counter array is indexed by `Perspective.ordinal` and
+ * replaced, never mutated, so that readers recompose. Only [Navigator] writes it.
  */
 @Stable
 class NavigationState(
@@ -32,6 +34,7 @@ class NavigationState(
     internal val currentTab: MutableState<Perspective>,
     internal val leaves: MutableState<IntArray>,
     internal val reselects: MutableState<IntArray>,
+    internal val visits: MutableIntState,
 ) {
     val current: Perspective get() = currentTab.value
 
@@ -88,5 +91,7 @@ fun rememberNavigationState(dataEpoch: Int): NavigationState {
     val current = rememberSaveable { mutableStateOf(Perspective.All) }
     val leaves = rememberSaveable { mutableStateOf(IntArray(Perspective.entries.size)) }
     val reselects = rememberSaveable { mutableStateOf(IntArray(Perspective.entries.size)) }
-    return remember { NavigationState(stacks, current, leaves, reselects) }
+    // Saved with the stacks, so a key restored after process death is never given out again (DEC-100).
+    val visits = rememberSaveable { mutableIntStateOf(0) }
+    return remember { NavigationState(stacks, current, leaves, reselects, visits) }
 }

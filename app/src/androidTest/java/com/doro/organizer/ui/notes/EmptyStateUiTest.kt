@@ -12,9 +12,11 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.Perspective
 import com.doro.organizer.session.GateState
+import com.doro.organizer.testing.EditorUi
 import com.doro.organizer.testing.GateUi
 import com.doro.organizer.testing.ListComposeTest
 import com.doro.organizer.testing.ScriptedGateComposeTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.experimental.runners.Enclosed
@@ -23,7 +25,7 @@ import org.junit.runner.RunWith
 /**
  * testing.md I-33 (DEC-25, Q4; ui.md § 3.6): "(No data)" exactly when the fully filtered query has no rows, never
  * before its first emission, never for a blank note, and never instead of the picker of Individual and Project
- * (DEC-52). The editor's hint for a blank note comes with the editor (SPEC T18).
+ * (DEC-52); the editor of a blank note shows the hint "Title / content" while its field is empty, never "(No data)".
  */
 @RunWith(Enclosed::class)
 class EmptyStateUiTest {
@@ -128,6 +130,20 @@ class EmptyStateUiTest {
             assertTrue(rowDescription(empty).startsWith(NO_DATA))
             assertTrue(rowDescription(whitespace).startsWith(NO_DATA))
             // The placeholder is the rows' title, not the empty state's text.
+            compose.onAllNodesWithText(NO_DATA).assertCountEquals(0)
+        }
+
+        @Test
+        fun theEditorOfABlankNote_showsTheHint_neverNoData() {
+            var blank = 0L
+            startWith { blank = note("", createdAt = now) }
+            awaitRow(blank)
+
+            compose.onNodeWithTag(rowTag(blank)).performClick()
+
+            ui.awaitText(EditorUi.EDIT_NOTE)
+            ui.awaitText(EditorUi.CONTENT_HINT)
+            assertEquals("", editor.contentText())
             compose.onAllNodesWithText(NO_DATA).assertCountEquals(0)
         }
     }

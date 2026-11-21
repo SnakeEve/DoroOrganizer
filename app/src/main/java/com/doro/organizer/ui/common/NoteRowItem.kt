@@ -1,7 +1,6 @@
 package com.doro.organizer.ui.common
 
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,14 +18,8 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.State
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.hapticfeedback.HapticFeedback
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -34,7 +27,6 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.Placeholder
@@ -57,8 +49,8 @@ private const val GROUP_GAP = "gap"
  * toggle writes, and the next emission restyles and moves it (DEC-54, architecture.md § Layering rule 3).
  *
  * [selected] is null outside selection mode; in it, the row shows its selection mark and, when selected, the
- * secondary container (DEC-54). [onClick] is the row tap, null while the row has none: outside selection mode the
- * tap opens the editor, which comes with SPEC T18. [onLongClick] enters selection mode, or in it does what a tap does.
+ * secondary container (DEC-54). [onClick] is the row tap: outside selection mode it opens the editor, in it it toggles
+ * the row's selection. [onLongClick] enters selection mode with its haptic, or in it does what a tap does.
  */
 @Composable
 fun NoteRowItem(
@@ -66,29 +58,24 @@ fun NoteRowItem(
     formats: DateFormats,
     onCheckedChange: (Boolean) -> Unit,
     onLongClick: () -> Unit,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
     selected: Boolean? = null,
-    onClick: (() -> Unit)? = null,
 ) {
     val description = rowDescription(row, formats)
     val state = rowState(row, selected)
     val markLabel = stringResource(if (row.checked) R.string.a11y_mark_not_done else R.string.a11y_mark_done)
     val selectLabel = stringResource(if (selected == true) R.string.a11y_deselect_note else R.string.a11y_select_note)
+    val clickLabel = if (selected == null) stringResource(R.string.a11y_open_note) else selectLabel
     ListItem(
         modifier = modifier
             .testTag("note_row_${row.id}")
             .heightIn(min = 72.dp)
-            .then(
-                if (onClick != null) {
-                    Modifier.combinedClickable(
-                        onClickLabel = selectLabel.takeIf { selected != null },
-                        onLongClickLabel = selectLabel,
-                        onLongClick = onLongClick,
-                        onClick = onClick,
-                    )
-                } else {
-                    Modifier.longPressOnly(selectLabel, LocalHapticFeedback.current, rememberUpdatedState(onLongClick))
-                },
+            .combinedClickable(
+                onClickLabel = clickLabel,
+                onLongClickLabel = selectLabel,
+                onLongClick = onLongClick,
+                onClick = onClick,
             )
             .semantics(mergeDescendants = true) {
                 contentDescription = description
@@ -110,26 +97,6 @@ fun NoteRowItem(
         },
     )
 }
-
-/**
- * A long-press with its haptic and its accessibility action, and no tap: a row outside selection mode before the
- * editor exists, which must not offer a click that does nothing. Temporary: SPEC T18 gives every row its tap, and
- * this branch goes with the null `onClick`.
- */
-private fun Modifier.longPressOnly(label: String, haptics: HapticFeedback, action: State<() -> Unit>): Modifier =
-    pointerInput(haptics) {
-        detectTapGestures(
-            onLongPress = {
-                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                action.value()
-            },
-        )
-    }.semantics {
-        onLongClick(label) {
-            action.value()
-            true
-        }
-    }
 
 /**
  * The row's state description (ui.md § 12.1): "Done" for a checked note; in selection mode "Selected" or "Not

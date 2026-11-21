@@ -3,6 +3,7 @@ package com.doro.organizer.ui.notes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -20,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.doro.organizer.R
 import com.doro.organizer.ui.common.DateFormats
@@ -33,14 +35,19 @@ import com.doro.organizer.ui.common.NoteRowUi
  */
 internal typealias RowToggle = (row: NoteRowUi, checked: Boolean, onDone: (changed: Boolean) -> Unit) -> Unit
 
-/** What a row's long-press and, in selection mode, its tap do (ui.md § 3.8). */
-internal class RowSelection(val enter: (noteId: Long) -> Unit, val toggle: (noteId: Long) -> Unit)
+/** What a row's tap and long-press do (ui.md § 3.8): outside selection mode open the note or enter the mode. */
+internal class RowActions(
+    val open: (noteId: Long) -> Unit,
+    val enter: (noteId: Long) -> Unit,
+    val toggle: (noteId: Long) -> Unit,
+)
 
 /**
  * The list area (ui.md § 3.6): loading, "(No data)" or the rows in the order the query gave them; the UI never sorts,
  * groups or reorders (DEC-23). With [header] (the Date perspective's grid and selection header, or nothing in its
  * end pane) the loading and empty states are list items, top-aligned under it; without, they are centered. In
- * selection mode ([NoteListUiState.selection]) every row shows whether it is selected.
+ * selection mode ([NoteListUiState.selection]) every row shows whether it is selected. [bottomPadding] keeps the last
+ * row clear of the create button (ui.md § 2.3).
  */
 @Composable
 internal fun NoteListBody(
@@ -48,8 +55,9 @@ internal fun NoteListBody(
     listState: LazyListState,
     formats: DateFormats,
     onCheckedChange: RowToggle,
-    rowSelection: RowSelection,
+    rowActions: RowActions,
     onClearFilters: () -> Unit,
+    bottomPadding: Dp,
     modifier: Modifier = Modifier,
     header: (LazyListScope.() -> Unit)? = null,
 ) {
@@ -69,7 +77,11 @@ internal fun NoteListBody(
         header == null && state.rows.isEmpty() -> Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             EmptyState(state.filtersActive, onClearFilters)
         }
-        else -> LazyColumn(modifier.fillMaxSize().testTag("note_list"), state = listState) {
+        else -> LazyColumn(
+            modifier = modifier.fillMaxSize().testTag("note_list"),
+            state = listState,
+            contentPadding = PaddingValues(bottom = bottomPadding),
+        ) {
             header?.invoke(this)
             when {
                 state.loading -> item(key = "loading") { DelayedProgress(Modifier.fillMaxWidth().heightIn(min = 96.dp)) }
@@ -84,10 +96,10 @@ internal fun NoteListBody(
                         row = row,
                         formats = formats,
                         onCheckedChange = { toggle(row, it) },
-                        onLongClick = { if (selected == null) rowSelection.enter(row.id) else rowSelection.toggle(row.id) },
+                        onLongClick = { if (selected == null) rowActions.enter(row.id) else rowActions.toggle(row.id) },
+                        onClick = { if (selected == null) rowActions.open(row.id) else rowActions.toggle(row.id) },
                         modifier = Modifier.animateItem(),
                         selected = selected,
-                        onClick = selected?.let { { rowSelection.toggle(row.id) } },
                     )
                 }
             }

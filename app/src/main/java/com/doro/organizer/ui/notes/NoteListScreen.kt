@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,8 +16,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.runtime.Composable
@@ -31,19 +33,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.navigation3.runtime.result.LocalResultEventBus
+import androidx.navigation3.runtime.result.ResultEffect
 import androidx.window.core.layout.WindowSizeClass
 import com.doro.organizer.R
-import com.doro.organizer.core.messages.UserMessage
 import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.Perspective
 import com.doro.organizer.ui.LocalUiGraph
@@ -53,12 +58,17 @@ import com.doro.organizer.ui.common.DateFormats
 import com.doro.organizer.ui.common.DelayedProgress
 import com.doro.organizer.ui.common.EntityPicker
 import com.doro.organizer.ui.common.EntityPickerViewModel
-import com.doro.organizer.ui.common.LocalAppSnackbar
+import com.doro.organizer.ui.common.MessageEffect
 import com.doro.organizer.ui.common.MonthGrid
+import com.doro.organizer.ui.common.PICKER_RESULT
+import com.doro.organizer.ui.common.PickerActions
+import com.doro.organizer.ui.common.PickerResult
 import com.doro.organizer.ui.common.rememberAnnouncer
 import com.doro.organizer.ui.common.rememberDateFormats
-import com.doro.organizer.ui.common.resolve
-import com.doro.organizer.ui.navigation.LocalIsTopEntry
+import com.doro.organizer.ui.navigation.EditorKey
+import com.doro.organizer.ui.navigation.Navigator
+import com.doro.organizer.ui.navigation.PickerKey
+import com.doro.organizer.ui.navigation.PickerPurpose
 
 /** Builds the list's ViewModel in the tab root's entry (architecture.md § Lifetimes). */
 fun noteListFactory(graph: UiGraph, spec: PerspectiveSpec) = viewModelFactory {
@@ -82,13 +92,15 @@ private fun entityPickerFactory(graph: UiGraph, kind: EntityKind) = viewModelFac
 
 /**
  * One perspective (ui.md § 3, § 4): the app bar, the search bar or the contextual bar of selection mode (§ 5), the
- * filter chips, and the list, the Calendar's grid, or the embedded entity picker. [leaveCount] grows when the user
- * leaves this tab, which ends selection mode; [reselectCount] grows when the user taps this tab while it is current,
- * which scrolls the list to the top (ui.md § 2.1).
+ * filter chips, and the list, the Calendar's grid, or the embedded entity picker, with the create button outside
+ * selection mode. [leaveCount] grows when the user leaves this tab, which ends selection mode; [reselectCount] grows
+ * when the user taps this tab while it is current, which scrolls the list to the top (ui.md § 2.1). Rows, the create
+ * button, the entity chips, the title button and "Associate" open their destinations through [navigator]; the
+ * pickers' results come back through the result bus (ui.md § 7.7).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int) {
+fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int, navigator: Navigator) {
     val graph = LocalUiGraph.current
     val spec = remember(perspective) { PerspectiveSpec.of(perspective) }
     val vm: NoteListViewModel = viewModel(factory = noteListFactory(graph, spec))
@@ -114,6 +126,18 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
     BackHandler(enabled = state.selecting, onBack = vm::exitSelection)
     ReselectEffect(reselectCount, if (pickerShown) pickerListState else listState)
     MessageEffect(state.message, graph, vm::onMessageShown)
+    ResultEffect<PickerResult>(PICKER_RESULT, LocalResultEventBus.current) { result ->
+        when (result) {
+            is PickerResult.Filter -> vm.setEntityFilter(result.kind, result.id)
+            is PickerResult.Primary -> vm.choosePrimary(result.id)
+            is PickerResult.Associate ->
+                vm.associate(result.personIds, result.projectIds, result.newPersons, result.newProjects)
+            is PickerResult.Links, is PickerResult.Delete -> Unit
+        }
+    }
+    // Hidden in selection mode (DEC-36) and until Individual or Project has decided between picker and list.
+    val fabShown = !state.selecting && state.primary != Primary.Loading
+    val bottomPadding = if (fabShown) FAB_CLEARANCE else 0.dp
 
     Scaffold(
         modifier = Modifier
@@ -127,6 +151,9 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
                     enabled = !state.batchRunning,
                     onExit = vm::exitSelection,
                     onSelectAll = vm::selectAll,
+                    onAssociate = {
+                        navigator.open(PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate, navigator.nextVisit()))
+                    },
                     onSetDate = vm::openSetDate,
                     onDelete = vm::openBatchDelete,
                 )
@@ -142,8 +169,13 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
                     onClose = vm::closeSearch,
                 )
             } else {
+                val chosen = state.primary as? Primary.Entity
                 PerspectiveTopBar(
                     title = title,
+                    onTitleClick = chosen?.let { { navigator.open(primaryPickerKey(spec, it, navigator.nextVisit())) } },
+                    titleClickLabel = spec.primaryKind?.let {
+                        stringResource(if (it == EntityKind.Person) R.string.a11y_change_person else R.string.a11y_change_project)
+                    },
                     onSearch = {
                         // With the picker body, Search goes to the picker's own name field (ui.md § 2.2, § 4.2);
                         // while Individual or Project has not yet decided between picker and list, it does nothing.
@@ -161,6 +193,16 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
             }
         },
         snackbarHost = { AppSnackbarHost() },
+        floatingActionButton = {
+            if (fabShown) {
+                FloatingActionButton(
+                    onClick = { navigator.open(createNoteKey(spec, state.primary, navigator.nextVisit())) },
+                    modifier = Modifier.testTag("fab_create"),
+                ) {
+                    Icon(painterResource(R.drawable.ic_add), stringResource(R.string.fab_create_note))
+                }
+            }
+        },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             when {
@@ -172,15 +214,19 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
                     val pickerState by picker.uiState.collectAsStateWithLifecycle()
                     EntityPicker(
                         kind = kind,
+                        purpose = null,
                         search = picker.search,
                         state = pickerState,
-                        onSearchChange = picker::onSearchChange,
-                        onPick = vm::choosePrimary,
+                        actions = PickerActions(
+                            onSearchChange = picker::onSearchChange,
+                            onPick = { id -> id?.let(vm::choosePrimary) },
+                        ),
                         searchFocus = pickerFocus,
                         listState = pickerListState,
+                        contentPadding = PaddingValues(bottom = bottomPadding),
                     )
                 }
-                else -> ListContent(state, vm, graph, formats, listState)
+                else -> ListContent(state, vm, graph, formats, listState, navigator, bottomPadding)
             }
         }
     }
@@ -194,11 +240,21 @@ private fun ListContent(
     graph: UiGraph,
     formats: DateFormats,
     listState: LazyListState,
+    navigator: Navigator,
+    bottomPadding: Dp,
 ) {
-    // The Person and Project chips open the EntityPicker destination (PickerKey, SPEC T18); until it exists only the
-    // Date chip is offered. Selection mode disables the chips, so no filter change drops the selection (ui.md § 5.1).
-    val chips = state.chips.filter { it.dimension == FilterDimension.Date }
-    if (chips.isNotEmpty()) FilterChipRow(chips, formats, enabled = !state.selecting) { vm.openDateFilter() }
+    // Selection mode disables the chips, so no filter change drops the selection (ui.md § 5.1).
+    if (state.chips.isNotEmpty()) {
+        FilterChipRow(state.chips, formats, enabled = !state.selecting) { dimension ->
+            when (dimension) {
+                FilterDimension.Date -> vm.openDateFilter()
+                FilterDimension.Person, FilterDimension.Project -> {
+                    val chip = state.chips.first { it.dimension == dimension }
+                    navigator.open(filterPickerKey(state.spec, state.primary, chip, navigator.nextVisit()))
+                }
+            }
+        }
+    }
     val announcer = rememberAnnouncer(graph)
     val markedDone = stringResource(R.string.announce_marked_done)
     val markedNotDone = stringResource(R.string.announce_marked_not_done)
@@ -208,12 +264,18 @@ private fun ListContent(
             onDone(changed)
         }
     }
-    val rowSelection = remember(vm) { RowSelection(enter = vm::enterSelection, toggle = vm::toggleSelection) }
+    val rowActions = remember(vm, navigator) {
+        RowActions(
+            open = { navigator.open(EditorKey(noteId = it, visit = navigator.nextVisit())) },
+            enter = vm::enterSelection,
+            toggle = vm::toggleSelection,
+        )
+    }
     val calendar = state.calendar
     if (calendar == null) {
-        NoteListBody(state, listState, formats, onCheckedChange, rowSelection, vm::clearFilters)
+        NoteListBody(state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding)
     } else {
-        CalendarContent(state, calendar, vm, formats, listState, onCheckedChange, rowSelection)
+        CalendarContent(state, calendar, vm, formats, listState, onCheckedChange, rowActions, bottomPadding)
     }
 }
 
@@ -231,7 +293,8 @@ private fun CalendarContent(
     formats: DateFormats,
     listState: LazyListState,
     onCheckedChange: RowToggle,
-    rowSelection: RowSelection,
+    rowActions: RowActions,
+    bottomPadding: Dp,
 ) {
     val daysEnabled = !state.selecting
     val grid = @Composable { modifier: Modifier ->
@@ -269,12 +332,12 @@ private fun CalendarContent(
                 header()
             }
             NoteListBody(
-                state, listState, formats, onCheckedChange, rowSelection, vm::clearFilters, Modifier.weight(1f),
-                header = {},
+                state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding,
+                Modifier.weight(1f), header = {},
             )
         }
     } else {
-        NoteListBody(state, listState, formats, onCheckedChange, rowSelection, vm::clearFilters, header = {
+        NoteListBody(state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding, header = {
             item(key = "month_grid") {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                     grid(Modifier.widthIn(max = 480.dp))
@@ -348,21 +411,5 @@ private fun ReselectEffect(reselectCount: Int, target: LazyListState) {
     }
 }
 
-/**
- * Shows the screen's message in the shell's snackbar while this entry is on top, then clears it; a message whose
- * screen left first shows when it returns (ui.md § 2.4).
- */
-@Composable
-private fun MessageEffect(message: UserMessage?, graph: UiGraph, onShown: (Long) -> Unit) {
-    val snackbar = LocalAppSnackbar.current
-    val isTop = LocalIsTopEntry.current
-    val resources = LocalResources.current
-    LaunchedEffect(message?.id, isTop) {
-        if (message == null || !isTop) return@LaunchedEffect
-        snackbar.showSnackbar(
-            message = resources.resolve(message.text, graph.appTime),
-            duration = if (message.isError) SnackbarDuration.Long else SnackbarDuration.Short,
-        )
-        onShown(message.id)
-    }
-}
+/** 56 dp button + 16 dp margin + 16 dp gap: the last row scrolls clear of the create button (ui.md § 2.3). */
+private val FAB_CLEARANCE = 88.dp

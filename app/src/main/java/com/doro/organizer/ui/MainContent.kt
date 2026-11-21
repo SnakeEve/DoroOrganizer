@@ -21,14 +21,21 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.result.LocalResultEventBus
+import androidx.navigation3.runtime.result.ResultEventBus
 import androidx.navigation3.ui.NavDisplay
 import androidx.window.core.layout.WindowSizeClass
 import com.doro.organizer.model.Perspective
+import com.doro.organizer.ui.common.EntityPickerScreen
 import com.doro.organizer.ui.common.LocalAppSnackbar
+import com.doro.organizer.ui.common.PICKER_RESULT
+import com.doro.organizer.ui.editor.EditorScreen
 import com.doro.organizer.ui.common.resolve
 import com.doro.organizer.ui.notes.NoteListScreen
+import com.doro.organizer.ui.navigation.EditorKey
 import com.doro.organizer.ui.navigation.NavigationState
 import com.doro.organizer.ui.navigation.Navigator
+import com.doro.organizer.ui.navigation.PickerKey
 import com.doro.organizer.ui.navigation.TabKey
 import com.doro.organizer.ui.navigation.navigationSuiteTypeOf
 import com.doro.organizer.ui.navigation.rememberNavigationState
@@ -36,13 +43,16 @@ import com.doro.organizer.ui.navigation.tabItem
 
 /**
  * The app shell (ui.md § 2): the navigation suite around `NavDisplay`, composed only while the gate shows the content
- * (architecture.md § Rendering, invariant 2), inside the `DataEpochScope` of [dataEpoch].
+ * (architecture.md § Rendering, invariant 2), inside the `DataEpochScope` of [dataEpoch]. The tab roots, the editor
+ * and the full-screen pickers are its entries; pickers answer through the Navigation 3 result bus provided above
+ * `NavDisplay` (architecture.md § Keys and stacks), which lives in memory only.
  */
 @Composable
 fun MainContent(graph: UiGraph, dataEpoch: Int) {
     val navigation = rememberNavigationState(dataEpoch)
     val navigator = remember(navigation) { Navigator(navigation) }
     val appSnackbar = remember { SnackbarHostState() }
+    val results = remember { ResultEventBus() }
     AppMessagesEffect(graph, appSnackbar)
     val entries = navigation.rememberDisplayedEntries(
         entryProvider<NavKey> {
@@ -51,6 +61,19 @@ fun MainContent(graph: UiGraph, dataEpoch: Int) {
                     perspective = key.perspective,
                     leaveCount = navigation.leaveCount(key.perspective),
                     reselectCount = navigation.reselectCount(key.perspective),
+                    navigator = navigator,
+                )
+            }
+            entry<EditorKey> { key -> EditorScreen(key, navigator) }
+            entry<PickerKey> { key ->
+                EntityPickerScreen(
+                    key = key,
+                    // The picker pops right after sending, so only the entry that opened it receives (ui.md § 7.7).
+                    onResult = { result ->
+                        results.sendResult(PICKER_RESULT, result)
+                        navigator.back()
+                    },
+                    onBack = navigator::back,
                 )
             }
         },
@@ -61,7 +84,7 @@ fun MainContent(graph: UiGraph, dataEpoch: Int) {
         navigationSuiteItems = { Perspective.entries.forEach { tab(it, navigation, navigator) } },
         layoutType = navigationSuiteTypeOf(topIsTabRoot = navigation.topKey is TabKey, compactWidth = compactWidth),
     ) {
-        CompositionLocalProvider(LocalAppSnackbar provides appSnackbar) {
+        CompositionLocalProvider(LocalAppSnackbar provides appSnackbar, LocalResultEventBus provides results) {
             NavDisplay(entries = entries, onBack = navigator::back)
         }
     }

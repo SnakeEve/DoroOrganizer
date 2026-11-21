@@ -33,8 +33,8 @@ import org.junit.runner.RunWith
  * I-38, the shell's and the lists' part (DEC-50, DEC-51, architecture.md § Back behavior): the shell starts on All;
  * every perspective has the Search action; each tab keeps its own search; Back closes an open search first, then from
  * the root of another tab returns to All and keeps that tab; Back at the root of All is left to the system. The saved
- * list state is `NoteListViewModelTest`, the remembered entity `StaleIdUiTest`; the Settings action, the editor and
- * the pickers come with SPEC T18 and T19.
+ * list state is `NoteListViewModelTest`, the editor's `EditorViewModelTest`, the remembered entity `StaleIdUiTest`,
+ * the title and chip pickers `PickerNavigationTest`; the Settings action comes with SPEC T19.
  */
 @RunWith(AndroidJUnit4::class)
 class NavigationTest : ScriptedGateComposeTest() {

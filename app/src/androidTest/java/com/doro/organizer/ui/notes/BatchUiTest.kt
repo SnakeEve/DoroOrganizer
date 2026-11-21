@@ -19,7 +19,9 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.model.Perspective
 import com.doro.organizer.testing.GateUi
+import com.doro.organizer.testing.EditorUi
 import com.doro.organizer.testing.ListComposeTest
+import com.doro.organizer.testing.pickerRowTag
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -31,7 +33,8 @@ import org.junit.runner.RunWith
  * the selection and the done checkbox never does; Select all takes the full current query; the snackbar counts the
  * selected notes in plural form; the selection ends after an action, on Back (before the search, which returns without
  * focus) and on a tab change, whose returning tab never shows it; selection mode locks
- * the filters and offers no batch check.
+ * the filters and offers no batch check; Associate links the selection to the entities picked and created on both
+ * tabs of its picker in one call, and Back from that picker keeps the selection and writes nothing.
  */
 @RunWith(AndroidJUnit4::class)
 class BatchUiTest : ListComposeTest() {
@@ -185,7 +188,8 @@ class BatchUiTest : ListComposeTest() {
         ui.awaitText(selectedTitle(1))
 
         compose.onNodeWithTag(dayTag(today + 1)).assertIsNotEnabled()
-        compose.onNodeWithTag("chip_Date").assertIsNotEnabled()
+        compose.onNodeWithTag("chip_Person").assertIsNotEnabled()
+        compose.onNodeWithTag("chip_Project").assertIsNotEnabled()
         compose.onNodeWithText("Select range").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Next month").assertIsEnabled()
 
@@ -194,6 +198,59 @@ class BatchUiTest : ListComposeTest() {
         assertEquals(2, items.size)
         assertTrue(compose.onAllNodesWithText(SET_DATE).fetchSemanticsNodes().isNotEmpty())
         assertTrue(compose.onAllNodesWithText(DELETE).fetchSemanticsNodes().isNotEmpty())
+    }
+
+    @Test
+    fun associate_linksTheSelection_toPickedAndCreatedEntities_inOneCall() {
+        var a = 0L
+        var b = 0L
+        var c = 0L
+        var alice = 0L
+        startWith {
+            a = note("a", createdAt = now - 1)
+            b = note("b", createdAt = now - 2)
+            c = note("c", createdAt = now - 3)
+            alice = person("Alice", createdAt = now)
+        }
+        awaitRow(a)
+        longPress(a)
+        compose.onNodeWithTag(rowTag(b)).performClick()
+        ui.awaitText(selectedTitle(2))
+
+        tapAction(EditorUi.ASSOCIATE)
+        editor.button(EditorUi.ASSOCIATE).assertIsNotEnabled()
+        compose.onNodeWithTag(pickerRowTag(alice)).performClick()
+        editor.pickerTab(EditorUi.PROJECTS).performClick()
+        compose.onNodeWithTag(EditorUi.PICKER_SEARCH).performTextInput("Alpha")
+        compose.onNodeWithTag(EditorUi.PICKER_CREATE).performClick()
+        editor.pickerTab("People (1)").assertExists()
+        editor.button(EditorUi.ASSOCIATE).performClick()
+
+        ui.awaitText("2 notes associated")
+        awaitNoSelection()
+        assertEquals(2L, count("SELECT COUNT(*) FROM note_persons WHERE person_id = ?", alice))
+        assertEquals(2L, count("SELECT COUNT(*) FROM note_projects y JOIN projects j ON j.id = y.project_id WHERE j.name = 'Alpha'"))
+        assertEquals(0L, count("SELECT COUNT(*) FROM note_persons WHERE note_id = ?", c))
+    }
+
+    @Test
+    fun backInTheAssociatePicker_returnsNothing_andKeepsTheSelection() {
+        var a = 0L
+        startWith {
+            a = note("a", createdAt = now)
+            person("Alice", createdAt = now)
+        }
+        awaitRow(a)
+        longPress(a)
+        tapAction(EditorUi.ASSOCIATE)
+        compose.onNodeWithTag(EditorUi.PICKER_SEARCH).performTextInput("Zed")
+        compose.onNodeWithTag(EditorUi.PICKER_CREATE).performClick()
+
+        ui.pressBack()
+
+        ui.awaitText(selectedTitle(1))
+        assertEquals(0L, count("SELECT COUNT(*) FROM note_persons"))
+        assertEquals(1L, count("SELECT COUNT(*) FROM persons"))
     }
 
     private companion object {

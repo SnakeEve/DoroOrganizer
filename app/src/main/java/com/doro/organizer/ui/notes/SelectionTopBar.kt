@@ -27,9 +27,8 @@ import com.doro.organizer.R
 
 /**
  * The contextual bar of selection mode (ui.md § 5.2), which replaces the app bar or the search bar: "Exit selection",
- * the count as a polite live region, "Select all" and the menu with "Set date…" and "Delete". Its actions are
- * disabled while [enabled] is false, when a batch action runs (§ 5.3); the exit stays available. "Associate" needs
- * the batch associate picker (`PickerKey`, SPEC T18), which brings its button to `NoteListViewModel.associate`.
+ * the count as a polite live region, "Select all", "Associate" and the menu with "Set date…" and "Delete". Its
+ * actions are disabled while [enabled] is false, when a batch action runs (§ 5.3); the exit stays available.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +37,7 @@ internal fun SelectionTopBar(
     enabled: Boolean,
     onExit: () -> Unit,
     onSelectAll: () -> Unit,
+    onAssociate: () -> Unit,
     onSetDate: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -61,6 +61,9 @@ internal fun SelectionTopBar(
         actions = {
             IconButton(onClick = onSelectAll, enabled = enabled) {
                 Icon(painterResource(R.drawable.ic_select_all), stringResource(R.string.action_select_all))
+            }
+            IconButton(onClick = onAssociate, enabled = enabled) {
+                Icon(painterResource(R.drawable.ic_add_link), stringResource(R.string.action_associate))
             }
             Box {
                 IconButton(onClick = { menuOpen = true }, enabled = enabled) {

@@ -1,5 +1,6 @@
 package com.doro.organizer.ui.notes
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -28,6 +29,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -38,14 +40,35 @@ import com.doro.organizer.ui.common.NoPersonalizedLearning
 
 /**
  * The top app bar of a perspective (ui.md § 2.2, DEC-51): the title and the Search action. Pinned: the container
- * tints while the list is scrolled. The title button of Individual and Project, which opens `PickerKey`, and the
- * Settings action come with their destinations (SPEC T18, T19).
+ * tints while the list is scrolled. With [onTitleClick] (Individual and Project with an entity chosen, ui.md § 4.2)
+ * the title is one button with a dropdown arrow, named by [titleClickLabel]. The Settings action comes with its
+ * destination (SPEC T19).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun PerspectiveTopBar(title: String, onSearch: () -> Unit, scrollBehavior: TopAppBarScrollBehavior) {
+internal fun PerspectiveTopBar(
+    title: String,
+    onSearch: () -> Unit,
+    scrollBehavior: TopAppBarScrollBehavior,
+    onTitleClick: (() -> Unit)? = null,
+    titleClickLabel: String? = null,
+) {
     TopAppBar(
-        title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        title = {
+            if (onTitleClick == null) {
+                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            } else {
+                Row(
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .clickable(onClickLabel = titleClickLabel, role = Role.Button, onClick = onTitleClick),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(title, Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Icon(painterResource(R.drawable.ic_arrow_drop_down), contentDescription = null)
+                }
+            }
+        },
         actions = {
             IconButton(onClick = onSearch) {
                 Icon(painterResource(R.drawable.ic_search), stringResource(R.string.action_search))

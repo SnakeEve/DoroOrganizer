@@ -17,9 +17,16 @@ class Navigator(private val state: NavigationState) {
         }
     }
 
-    /** Pushes [key] onto the current tab's stack. */
+    /** The `visit` of the next [EditorKey] or [PickerKey] that an opener builds (DEC-100). */
+    fun nextVisit(): Int = ++state.visits.intValue
+
+    /**
+     * Pushes [key] onto the current tab's stack. A key that equals the top entry apart from its `visit` is not
+     * pushed: a double tap opens one screen (DEC-100).
+     */
     fun open(key: NavKey) {
-        state.stacks.getValue(state.current).add(key)
+        val stack = state.stacks.getValue(state.current)
+        if (stack.last().withoutVisit() != key.withoutVisit()) stack.add(key)
     }
 
     /**
@@ -35,6 +42,12 @@ class Navigator(private val state: NavigationState) {
                 state.currentTab.value = Perspective.All
             }
         }
+    }
+
+    private fun NavKey.withoutVisit(): NavKey = when (this) {
+        is EditorKey -> copy(visit = 0)
+        is PickerKey -> copy(visit = 0)
+        else -> this
     }
 
     private fun MutableState<IntArray>.increment(p: Perspective) {
