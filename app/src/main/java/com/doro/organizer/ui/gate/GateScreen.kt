@@ -12,13 +12,15 @@ import com.doro.organizer.session.GateEvent
 import com.doro.organizer.session.GateState
 import com.doro.organizer.session.Resume
 import com.doro.organizer.ui.GateGraph
+import com.doro.organizer.ui.common.MaintenanceStatusHost
 import com.doro.organizer.ui.common.rememberAnnouncer
 
 /**
  * Every gate state except the content (architecture.md § Rendering, ui.md § 10), from the gate state and the
  * [GateGraph] only: no note-derived data (DEC-66). Which password screen shows the Forgot password screen is the one
  * piece of local state; it is saveable and outside the per-state branches, so a failed erase returns to it (ui.md
- * § 10.3).
+ * § 10.3). The password and Forgot password screens compose the maintenance status host, which runs in lock mode over
+ * a `Locked` gate (ui.md § 8.12); the recovery screens compose their own.
  */
 @Composable
 fun GateScreen(gate: GateState, graph: GateGraph) {
@@ -45,6 +47,8 @@ fun GateScreen(gate: GateState, graph: GateGraph) {
         )
         else -> OtherGateScreen(gate, graph)
     }
+    // One call site for both screens, so switching between them keeps the host's state.
+    if ((forgotOpen && eraseOrigin != null) || password != null) MaintenanceStatusHost(graph)
 }
 
 @Composable

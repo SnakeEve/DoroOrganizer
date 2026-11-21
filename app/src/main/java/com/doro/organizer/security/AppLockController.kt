@@ -41,6 +41,12 @@ interface AppLockController : ExternalCallbacks {
     /** `PASSWORD` mode: `EnableLock`, `DisableLock`, `SetUpSlot`. Owns and zeroes [password]. */
     suspend fun confirmWithPassword(purpose: AuthPurpose, password: CharArray): AppResult<ToggleOutcome>
 
+    /**
+     * The Settings row's "Set up" while no biometric is enrolled (security.md § 7.1): the enrollment intent of this API
+     * level, with `ACTION_SECURITY_SETTINGS` as its fallback, through `ExternalActivities` under the re-lock exemption.
+     */
+    fun enroll()
+
     /** `PASSWORD` mode, lock on, usable strong biometric, slot `Live`; the reminder does not affect it. */
     suspend fun fingerprintUnlockAvailable(): Boolean
 

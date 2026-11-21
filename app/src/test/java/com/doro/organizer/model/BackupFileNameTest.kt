@@ -1,4 +1,4 @@
-package com.doro.organizer.data.maintenance
+package com.doro.organizer.model
 
 import com.doro.organizer.testing.FakeAppTime
 import java.time.Instant

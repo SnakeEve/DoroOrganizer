@@ -26,7 +26,8 @@ import org.junit.runner.RunWith
  * I-50, the gate screens' part (DEC-63, DEC-65, DEC-74; ui.md § 10.2–10.4), on the real gate and controller with
  * `FakeBiometricGateway`: the unlock prompts of each mode, the Forgot password screen's offer, the reason line, one
  * prompt across a rotation, Back from the Forgot password screen, and the 48 dp targets of the gate buttons (I-35).
- * The set-up offer (ui.md § 8.13) and the password-first dialog (§ 8.16) are Settings and shell cases (SPEC T19).
+ * The set-up offer (ui.md § 8.13) is `ShellDialogsTest` and `SettingsLockUiTest`, the password-first dialog (§ 8.16)
+ * `SettingsLockUiTest`.
  */
 @RunWith(AndroidJUnit4::class)
 class FingerprintUiTest : GateComposeTest() {

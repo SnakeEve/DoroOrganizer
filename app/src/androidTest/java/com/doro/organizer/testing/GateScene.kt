@@ -8,7 +8,9 @@ import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.data.HolderState
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.security.AppLockController
+import com.doro.organizer.security.AuthPurpose
 import com.doro.organizer.security.KeyVault
+import com.doro.organizer.security.ToggleOutcome
 import com.doro.organizer.session.GateEvent
 import com.doro.organizer.session.GateState
 import java.io.File
@@ -139,6 +141,10 @@ class GateScene(
     /** Makes `fingerprintUnlockAvailable()` wait until [releaseAvailability], so a test sees the screen before it. */
     fun holdAvailability() = lock.holdAvailability()
 
+    /** Waits until [count] `confirmWithPassword` calls have returned; their results in order. */
+    suspend fun awaitPasswordConfirmations(count: Int): List<AppResult<ToggleOutcome>> =
+        withTimeout(TIMEOUT_MS) { lock.passwordResults.first { it.size >= count } }
+
     fun releaseAvailability() = lock.releaseAvailability()
 
     /** Waits until [count] prompts in all were shown. */
@@ -191,7 +197,8 @@ class GateScene(
 
 /**
  * The real controller, counting each finished E5 (`offerSlotSetup`), which reports through no flow, and each
- * availability question, whose answer it can hold back.
+ * availability question, whose answer it can hold back, and recording each result of `confirmWithPassword`, which
+ * returns only after the controller has written everything it writes.
  */
 private class CountingLockController(private val inner: AppLockController) : AppLockController by inner {
     private val finished = MutableStateFlow(0)
@@ -212,6 +219,12 @@ private class CountingLockController(private val inner: AppLockController) : App
         held.first { !it }
         return inner.fingerprintUnlockAvailable()
     }
+
+    private val passwordAnswers = MutableStateFlow<List<AppResult<ToggleOutcome>>>(emptyList())
+    val passwordResults: StateFlow<List<AppResult<ToggleOutcome>>> = passwordAnswers.asStateFlow()
+
+    override suspend fun confirmWithPassword(purpose: AuthPurpose, password: CharArray): AppResult<ToggleOutcome> =
+        inner.confirmWithPassword(purpose, password).also { result -> passwordAnswers.update { it + result } }
 
     override suspend fun offerSlotSetup() {
         try {

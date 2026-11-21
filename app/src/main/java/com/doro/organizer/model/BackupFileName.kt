@@ -1,4 +1,4 @@
-package com.doro.organizer.data.maintenance
+package com.doro.organizer.model
 
 import java.time.LocalDate
 

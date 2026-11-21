@@ -95,8 +95,11 @@ class DefaultDbMaintenance(
     override fun backupRequiresPassword(): Boolean =
         deps.keyMode.value != KeyMode.PLAIN || settingsStore.settings.value?.encryptBackups != false
 
-    override suspend fun discardDocument(target: Uri) = withContext(dispatchers.io) {
-        if (documents.size(target) == 0L) documents.delete(target)
+    // Detached like every user operation: leaving Settings right after "Cancel" must not leave the empty document.
+    override suspend fun discardDocument(target: Uri) = applicationScope.runDetached {
+        withContext(dispatchers.io) {
+            if (documents.size(target) == 0L) documents.delete(target)
+        }
     }
 
     override suspend fun backupToDocument(target: Uri, backupPassword: CharArray?): AppResult<MaintenanceResult> =

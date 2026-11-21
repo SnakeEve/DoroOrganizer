@@ -69,6 +69,7 @@ import com.doro.organizer.ui.navigation.EditorKey
 import com.doro.organizer.ui.navigation.Navigator
 import com.doro.organizer.ui.navigation.PickerKey
 import com.doro.organizer.ui.navigation.PickerPurpose
+import com.doro.organizer.ui.navigation.SettingsKey
 
 /** Builds the list's ViewModel in the tab root's entry (architecture.md § Lifetimes). */
 fun noteListFactory(graph: UiGraph, spec: PerspectiveSpec) = viewModelFactory {
@@ -188,6 +189,7 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
                             }
                         }
                     },
+                    onSettings = { navigator.open(SettingsKey()) },
                     scrollBehavior = scrollBehavior,
                 )
             }

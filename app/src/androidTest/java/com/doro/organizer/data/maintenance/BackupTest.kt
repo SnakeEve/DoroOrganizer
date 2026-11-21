@@ -13,6 +13,7 @@ import com.doro.organizer.data.RawConnections
 import com.doro.organizer.data.db.AppDatabase
 import com.doro.organizer.debug.RecordingDocumentsProvider
 import com.doro.organizer.model.KeyMode
+import com.doro.organizer.model.backupFileName
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.MaintenanceSetup
@@ -29,6 +30,9 @@ import java.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -228,6 +232,24 @@ class BackupTest {
         advanceTimeBy(1.minutes + 1.seconds)
         runCurrent()
         assertFalse(shared.exists())
+    }
+
+    @Test
+    fun discardingADocument_outlivesItsCancelledCaller() = runMaintenanceTest {
+        // ui.md § 8.6: "Cancel" of the backup password, then Back, clears the Settings ViewModel at once.
+        val maintenance = setup.maintenance
+        val document = emptyDocument("discarded.db")
+        val before = scope.scope.coroutineContext.job.children.toSet()
+
+        coroutineScope {
+            launch {
+                coroutineContext.job.cancel()
+                maintenance.discardDocument(document.uri)
+            }
+        }
+        (scope.scope.coroutineContext.job.children.toSet() - before).forEach { it.join() }
+
+        assertFalse("the empty document the picker created is gone", document.file.exists())
     }
 
     private suspend fun assertEncryptedBackup(name: String) {

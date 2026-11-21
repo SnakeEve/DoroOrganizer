@@ -28,14 +28,17 @@ import androidx.window.core.layout.WindowSizeClass
 import com.doro.organizer.model.Perspective
 import com.doro.organizer.ui.common.EntityPickerScreen
 import com.doro.organizer.ui.common.LocalAppSnackbar
+import com.doro.organizer.ui.common.MaintenanceStatusHost
 import com.doro.organizer.ui.common.PICKER_RESULT
 import com.doro.organizer.ui.editor.EditorScreen
 import com.doro.organizer.ui.common.resolve
 import com.doro.organizer.ui.notes.NoteListScreen
+import com.doro.organizer.ui.settings.SettingsScreen
 import com.doro.organizer.ui.navigation.EditorKey
 import com.doro.organizer.ui.navigation.NavigationState
 import com.doro.organizer.ui.navigation.Navigator
 import com.doro.organizer.ui.navigation.PickerKey
+import com.doro.organizer.ui.navigation.SettingsKey
 import com.doro.organizer.ui.navigation.TabKey
 import com.doro.organizer.ui.navigation.navigationSuiteTypeOf
 import com.doro.organizer.ui.navigation.rememberNavigationState
@@ -43,9 +46,10 @@ import com.doro.organizer.ui.navigation.tabItem
 
 /**
  * The app shell (ui.md § 2): the navigation suite around `NavDisplay`, composed only while the gate shows the content
- * (architecture.md § Rendering, invariant 2), inside the `DataEpochScope` of [dataEpoch]. The tab roots, the editor
- * and the full-screen pickers are its entries; pickers answer through the Navigation 3 result bus provided above
- * `NavDisplay` (architecture.md § Keys and stacks), which lives in memory only.
+ * (architecture.md § Rendering, invariant 2), inside the `DataEpochScope` of [dataEpoch]. The tab roots, the editor,
+ * the full-screen pickers and Settings are its entries; pickers answer through the Navigation 3 result bus provided
+ * above `NavDisplay` (architecture.md § Keys and stacks), which lives in memory only. The shell also hosts the
+ * maintenance status host with the shell's snackbar and the shell dialogs of ui.md § 2.4.
  */
 @Composable
 fun MainContent(graph: UiGraph, dataEpoch: Int) {
@@ -76,6 +80,7 @@ fun MainContent(graph: UiGraph, dataEpoch: Int) {
                     onBack = navigator::back,
                 )
             }
+            entry<SettingsKey> { key -> SettingsScreen(navigator, key.startBackup) }
         },
     )
     val compactWidth = !currentWindowAdaptiveInfoV2().windowSizeClass
@@ -88,6 +93,8 @@ fun MainContent(graph: UiGraph, dataEpoch: Int) {
             NavDisplay(entries = entries, onBack = navigator::back)
         }
     }
+    MaintenanceStatusHost(graph, appSnackbar)
+    ShellDialogs(graph, navigator)
 }
 
 private fun NavigationSuiteScope.tab(

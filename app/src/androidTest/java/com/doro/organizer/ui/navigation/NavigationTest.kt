@@ -31,10 +31,11 @@ import org.junit.runner.RunWith
 
 /**
  * I-38, the shell's and the lists' part (DEC-50, DEC-51, architecture.md § Back behavior): the shell starts on All;
- * every perspective has the Search action; each tab keeps its own search; Back closes an open search first, then from
- * the root of another tab returns to All and keeps that tab; Back at the root of All is left to the system. The saved
- * list state is `NoteListViewModelTest`, the editor's `EditorViewModelTest`, the remembered entity `StaleIdUiTest`,
- * the title and chip pickers `PickerNavigationTest`; the Settings action comes with SPEC T19.
+ * every perspective has the Search and the Settings action; each tab keeps its own search; Back closes an open search
+ * first, then from the root of another tab returns to All and keeps that tab; Back from Settings returns to the
+ * perspective it was opened from; Back at the root of All is left to the system. The saved list state is
+ * `NoteListViewModelTest`, the editor's `EditorViewModelTest`, the remembered entity `StaleIdUiTest`, the title and
+ * chip pickers `PickerNavigationTest`.
  */
 @RunWith(AndroidJUnit4::class)
 class NavigationTest : ScriptedGateComposeTest() {
@@ -110,6 +111,21 @@ class NavigationTest : ScriptedGateComposeTest() {
     }
 
     @Test
+    fun theSettingsAction_isOnEveryPerspective_andBackReturnsToIt() {
+        scene.launch(GateState.Ready)
+        ui.awaitShell()
+
+        for (p in Perspective.entries) {
+            compose.onNodeWithTag("tab_${p.name}").performClick()
+            compose.onNodeWithContentDescription(SETTINGS).performClick()
+            compose.onNode(hasPaneTitle(SETTINGS)).assertExists()
+            ui.pressBack()
+            compose.onNode(hasPaneTitle(SETTINGS)).assertDoesNotExist()
+            compose.onNodeWithTag("tab_${p.name}").assertIsSelected()
+        }
+    }
+
+    @Test
     fun eachTab_keepsItsOwnSearch() {
         scene.launch(GateState.Ready)
         ui.awaitShell()
@@ -149,5 +165,6 @@ class NavigationTest : ScriptedGateComposeTest() {
         const val ALL_NOTES = "All notes"
         const val PROJECTS = "Projects"
         const val SEARCH = "Search"
+        const val SETTINGS = "Settings"
     }
 }

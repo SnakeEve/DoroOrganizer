@@ -26,8 +26,8 @@ import org.junit.runner.RunWith
 
 /**
  * I-52 (DEC-59, DEC-63, ui.md § 10.3): the flag that selects the Forgot password screen, driven by a scripted gate state
- * and a scripted `DbMaintenance.status`. The failure dialogs of a failed Erase and of a failed fingerprint reset come
- * with the maintenance status host (SPEC T19); these cases assert which screen shows.
+ * and a scripted `DbMaintenance.status`, with the failure dialogs of a failed Erase and of a failed fingerprint reset
+ * that the maintenance status host shows there (ui.md § 8.12).
  */
 @RunWith(AndroidJUnit4::class)
 class ForgotFlagTest : ScriptedGateComposeTest() {
@@ -98,6 +98,10 @@ class ForgotFlagTest : ScriptedGateComposeTest() {
         compose.waitUntil(GateUi.TIMEOUT_MS) { scene.lock.availabilityCalls.get() == 2 }
         scene.gate.moveTo(needsPassword)
         ui.awaitPasswordScreen()
+        ui.awaitText(KEY_CHANGE_FAILED)
+        compose.onNodeWithText(KEY_UNAVAILABLE_TEXT).assertExists()
+        compose.onNodeWithText(OK).performClick()
+        compose.waitUntil(GateUi.TIMEOUT_MS) { scene.maintenance.status.value == MaintenanceStatus.Idle }
 
         openTheForgotScreen()
         compose.onNodeWithTag(GateUi.FORGOT_RESET).assertDoesNotExist()
@@ -152,7 +156,13 @@ class ForgotFlagTest : ScriptedGateComposeTest() {
 
         scene.gate.moveTo(needsPassword)
         ui.awaitForgotScreen()
+        ui.awaitText(ERASE_FAILED)
         rotate()
+        ui.awaitForgotScreen()
+        ui.awaitText(ERASE_FAILED)
+        compose.onNodeWithText(UNAVAILABLE).assertExists()
+        compose.onNodeWithText(OK).performClick()
+        compose.waitUntil(GateUi.TIMEOUT_MS) { scene.maintenance.status.value == MaintenanceStatus.Idle }
         ui.awaitForgotScreen()
     }
 
@@ -219,6 +229,11 @@ class ForgotFlagTest : ScriptedGateComposeTest() {
         const val RESET_DIALOG_TITLE = "Set a new password"
         const val ACKNOWLEDGE = "I understand this cannot be recovered"
         const val SET_PASSWORD = "Set password"
+        const val ERASE_FAILED = "Erase failed"
+        const val UNAVAILABLE = "The operation could not run right now. Nothing was changed. Try again."
+        const val KEY_CHANGE_FAILED = "Encryption was not changed"
+        const val KEY_UNAVAILABLE_TEXT = "The encryption key could not be accessed, so nothing was changed. Try again later."
+        const val OK = "OK"
         const val NOT_AVAILABLE_BODY = "The password cannot be recovered or reset, and without it the data in this " +
             "app cannot be opened.\n\nYou can erase all data and start over. Afterwards you can restore a backup " +
             "from Settings; an encrypted backup needs the password it was made with."

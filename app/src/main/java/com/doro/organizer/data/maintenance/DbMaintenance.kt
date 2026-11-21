@@ -37,7 +37,10 @@ interface DbMaintenance : BiometricSlotWriter {
     /** `keyMode != PLAIN || encryptBackups` (DEC-83); true while either is still unknown (the safe side). */
     fun backupRequiresPassword(): Boolean
 
-    /** Deletes the SAF document the picker created, only when it is known to be empty; failures are ignored. */
+    /**
+     * Deletes the SAF document the picker created, only when it is known to be empty; failures are ignored. Detached:
+     * a cancelled caller stops waiting, not the deletion.
+     */
     suspend fun discardDocument(target: Uri)
 
     suspend fun backupToDocument(target: Uri, backupPassword: CharArray?): AppResult<MaintenanceResult>

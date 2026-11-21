@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols "fingerprint" (Outlined, weight 400, grade 0, optical size 24; Apache License 2.0), ui.md § 13.5. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M480-840q-150 0-255 105T120-480h80q0-117 81.5-198.5T480-760q117 0 198.5 81.5T760-480h80q0-150-105-255T480-840Zm0 160q-83 0-141.5 58.5T280-480v120h80v-120q0-50 35-85t85-35q50 0 85 35t35 85v200h80v-200q0-83-58.5-141.5T480-680Zm-40 200v320h80v-320h-80Z" />
+    </group>
+</vector>

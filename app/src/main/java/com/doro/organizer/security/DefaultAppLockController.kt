@@ -481,6 +481,11 @@ class DefaultAppLockController(
         AppError.StorageFull
     }
 
+    override fun enroll() {
+        val (intent, fallback) = biometric.enrollIntents()
+        externalActivities.request(ExternalRequest(ExternalKind.Enroll, intent, fallbackIntent = fallback))
+    }
+
     override suspend fun fingerprintUnlockAvailable(): Boolean = inputs().liveFingerprint
 
     override suspend fun slotPrompt(purpose: AuthPurpose): AppResult<SlotCipher?> {

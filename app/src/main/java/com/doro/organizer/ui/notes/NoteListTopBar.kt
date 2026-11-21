@@ -39,16 +39,16 @@ import com.doro.organizer.R
 import com.doro.organizer.ui.common.NoPersonalizedLearning
 
 /**
- * The top app bar of a perspective (ui.md § 2.2, DEC-51): the title and the Search action. Pinned: the container
- * tints while the list is scrolled. With [onTitleClick] (Individual and Project with an entity chosen, ui.md § 4.2)
- * the title is one button with a dropdown arrow, named by [titleClickLabel]. The Settings action comes with its
- * destination (SPEC T19).
+ * The top app bar of a perspective (ui.md § 2.2, DEC-51): the title, the Search action and the Settings action.
+ * Pinned: the container tints while the list is scrolled. With [onTitleClick] (Individual and Project with an entity
+ * chosen, ui.md § 4.2) the title is one button with a dropdown arrow, named by [titleClickLabel].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PerspectiveTopBar(
     title: String,
     onSearch: () -> Unit,
+    onSettings: () -> Unit,
     scrollBehavior: TopAppBarScrollBehavior,
     onTitleClick: (() -> Unit)? = null,
     titleClickLabel: String? = null,
@@ -72,6 +72,9 @@ internal fun PerspectiveTopBar(
         actions = {
             IconButton(onClick = onSearch) {
                 Icon(painterResource(R.drawable.ic_search), stringResource(R.string.action_search))
+            }
+            IconButton(onClick = onSettings, modifier = Modifier.testTag("action_settings")) {
+                Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.action_settings))
             }
         },
         scrollBehavior = scrollBehavior,

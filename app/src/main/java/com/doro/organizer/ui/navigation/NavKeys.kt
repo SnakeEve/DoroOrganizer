@@ -31,3 +31,10 @@ data class NotePrefill(val personId: Long? = null, val projectId: Long? = null, 
  */
 @Serializable
 data class PickerKey(val kind: EntityKind, val purpose: PickerPurpose, val visit: Int) : NavKey
+
+/**
+ * The Settings screen (ui.md § 9), opened from the gear action of any perspective (DEC-51). [startBackup]: opened by
+ * "Back up now" of the kekBroken notice, which runs "Backup all data" there (ui.md § 2.4).
+ */
+@Serializable
+data class SettingsKey(val startBackup: Boolean = false) : NavKey

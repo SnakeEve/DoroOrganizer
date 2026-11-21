@@ -28,7 +28,8 @@ import org.junit.runner.RunWith
 /**
  * I-51, the gate screens' part (DEC-63, DEC-65, DEC-86; literals copied from ui.md § 11), from a scripted gate state:
  * the slot failure of the lock screen (T44), the check failure of the password screen (T50) and the password screen
- * over a running operation. The § 8.16 dialog, the kekBroken notice and the `RestoreKey` prompt are SPEC T19 cases.
+ * over a running operation. The § 8.16 dialog and the `RestoreKey` prompt are `SettingsLockUiTest`, the kekBroken
+ * notice `ShellDialogsTest`.
  */
 @RunWith(AndroidJUnit4::class)
 class FingerprintStringsTest : ScriptedGateComposeTest() {

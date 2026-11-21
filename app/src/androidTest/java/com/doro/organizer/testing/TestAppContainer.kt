@@ -5,8 +5,10 @@ import android.view.View
 import androidx.lifecycle.LifecycleOwner
 import com.doro.organizer.AppContainer
 import com.doro.organizer.core.coroutines.AppDispatchers
+import com.doro.organizer.core.external.ExternalActivities
 import com.doro.organizer.core.time.AppTime
 import com.doro.organizer.data.DbFiles
+import com.doro.organizer.data.NoteRepository
 import com.doro.organizer.data.maintenance.DbMaintenance
 import com.doro.organizer.data.maintenance.MaintenanceFaultHook
 import com.doro.organizer.security.AppLockController
@@ -48,6 +50,12 @@ class TestOverrides {
     var appLockController: AppLockController? = null
     var dbMaintenance: DbMaintenance? = null
 
+    /** Wraps the production repository: over a scripted gate no database opens, so a test answers what it needs. */
+    var wrapNoteRepository: ((NoteRepository) -> NoteRepository)? = null
+
+    /** Wraps the production launchers, to report a launch that could not open (Espresso-Intents only answers). */
+    var wrapExternalActivities: ((ExternalActivities) -> ExternalActivities)? = null
+
     /** Wraps every view's [Announcer], to record the announcements (testing.md I-54, L-53). */
     var wrapAnnouncer: ((Announcer) -> Announcer)? = null
 }
@@ -67,6 +75,12 @@ class TestAppContainer(app: Application, private val overrides: TestOverrides) :
     override val faultHook: MaintenanceFaultHook by lazy { overrides.faultHook ?: super.faultHook }
     override val sessionGate: SessionGate by lazy { overrides.sessionGate ?: super.sessionGate }
     override val dbMaintenance: DbMaintenance by lazy { overrides.dbMaintenance ?: super.dbMaintenance }
+    override val noteRepository: NoteRepository by lazy {
+        super.noteRepository.let { overrides.wrapNoteRepository?.invoke(it) ?: it }
+    }
+    override val externalActivities: ExternalActivities by lazy {
+        super.externalActivities.let { overrides.wrapExternalActivities?.invoke(it) ?: it }
+    }
     override val appLockController: AppLockController by lazy {
         overrides.appLockController?.let { return@lazy it }
         val real = overrides.lockSdkInt()?.let { sdkInt ->
