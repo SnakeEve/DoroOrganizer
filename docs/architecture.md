@@ -126,7 +126,7 @@ com.doro.organizer
 │                     Perspective, EntityKind, DateFilter, NoteFilter, NoteQuery, toQuery(), SearchText,
 │                     NoteRow, EntityRef, EntityOption, NoteDetail, NoteDraft, NewEntity, SaveResult, BatchResult,
 │                     DeleteImpact, EntityDeleteResult, DraftInsert, KeyMode, WindowPolicy, UnlockBackoff, PasswordReminder,
-│                     PasswordReason, UnlockRoute
+│                     PasswordReason, UnlockRoute, capChars (TextLimits)
 ├── settings/         SettingsStore, DefaultSettingsStore, Settings (Preferences DataStore), DraftInserts (nav.draft_inserts codec)
 ├── security/         KeyVault and its key-state types (security.md § 3.6), AppLockController, BiometricGateway,
 │                     LockListener, LockError, LockAvailability, SlotState, BiometricAvailability, AuthPurpose,
@@ -140,9 +140,11 @@ com.doro.organizer
     ├── UiGraph, GateGraph, DoroRoot   what the UI may reach; gate switch
     ├── navigation/   keys, PickerPurpose, NavigationState, Navigator, ResultEventBus, entry provider
     ├── theme/        Material 3 theme (DEC-56)
-    ├── common/       NoteRowItem, EntityPicker, MonthGrid, AppError to string
+    ├── common/       NoteRowItem (NoteRowUi, toRowUi), EntityPicker (EntityPickerViewModel), MonthGrid (DaySelection, MonthPages),
+    │                 DateFormats (ui.md § 11.14), DelayedProgress, SecureDialogWindow, NoPersonalizedLearning (security.md § 11),
+    │                 Announcer, AppError to string
     ├── gate/         gate screens (ui.md § 10), ForgotPasswordViewModel (the one gate ViewModel, § SessionGate invariant 2)
-    ├── notes/        NoteListScreen, NoteListViewModel, PerspectiveSpec, batch mode
+    ├── notes/        NoteListScreen, NoteListViewModel, NoteListUiState, PerspectiveSpec, ToggleAnchor, date filter sheet, batch mode
     ├── editor/       EditorScreen, EditorViewModel
     └── settings/     SettingsScreen, SettingsViewModel
 ```
@@ -387,12 +389,13 @@ interface GateGraph {                    // all that ui.gate may use
 interface UiGraph : GateGraph {
     val noteRepository: NoteRepository; val entityRepository: EntityRepository
     val settingsStore: SettingsStore; val applicationScope: CoroutineScope   // applicationScope: the editor's save-on-leave
+    val dispatchers: AppDispatchers                                          // the list's row mapping on default (DEC-99)
 }
 ```
 
 ### SettingsStore
 
-`SettingsStore` is the only DataStore user. It exposes `settings: StateFlow<Settings?>` (null until the first read), `suspend fun snapshot(): Settings` (reads DataStore directly, so it is current right after an edit), one setter per toggle (`setScreenshotProtection`, `setBiometricLock`, `setEncryptBackups`), `setLockAutoOff()` (one edit: `security.app_lock = false` and `security.lock_auto_off_notice = true`, the auto-off of [security.md § 7.6](security.md#76-device-credential-fallback-q7)), `clearLockAutoOffNotice()` (sets `security.lock_auto_off_notice = false` once the shell has shown the notice; the owner table of security.md § 2 names "the shell notice (clear)" as the writer of this key, and no toggle setter covers it), `setBackoff(failures, retryAtElapsedMs)`, `recordPasswordVerified(epochMillis)` (one edit: `security.unlock_failures = 0`, `security.unlock_retry_at = 0` and `security.password_verified_at = epochMillis`, the success-path write of [security.md § 3.6](security.md#36-keyvault-surface); called only by `KeyVault`, DEC-74, DEC-75; there is no setter for the timestamp alone), `setRemembered(personId, projectId)`, the draft-insert record below, `resetSecurity()` and `onDataReplaced()`. Values are never user text, secrets or URIs.
+`SettingsStore` is the only DataStore user. It exposes `settings: StateFlow<Settings?>` (null until the first read), `suspend fun snapshot(): Settings` (reads DataStore directly, so it is current right after an edit), one setter per toggle (`setScreenshotProtection`, `setBiometricLock`, `setEncryptBackups`), `setLockAutoOff()` (one edit: `security.app_lock = false` and `security.lock_auto_off_notice = true`, the auto-off of [security.md § 7.6](security.md#76-device-credential-fallback-q7)), `clearLockAutoOffNotice()` (sets `security.lock_auto_off_notice = false` once the shell has shown the notice; the owner table of security.md § 2 names "the shell notice (clear)" as the writer of this key, and no toggle setter covers it), `setBackoff(failures, retryAtElapsedMs)`, `recordPasswordVerified(epochMillis)` (one edit: `security.unlock_failures = 0`, `security.unlock_retry_at = 0` and `security.password_verified_at = epochMillis`, the success-path write of [security.md § 3.6](security.md#36-keyvault-surface); called only by `KeyVault`, DEC-74, DEC-75; there is no setter for the timestamp alone), `setRemembered(kind: EntityKind, id: Long)` (writes that kind's key only) and `forgetRemembered(kind, id)` (removes it only while it still holds `id`, compared inside the edit), so the Individual and Project perspectives and the existence probe never overwrite each other's choice (DEC-28, DEC-99), the draft-insert record below, `resetSecurity()` and `onDataReplaced()`. Values are never user text, secrets or URIs.
 
 | Property | DataStore key | Type | Default | Owner of the semantics |
 |---|---|---|---|---|
@@ -431,7 +434,7 @@ ViewModels are built with `viewModelFactory { initializer { } }` from `UiGraph`:
 fun noteListFactory(graph: UiGraph, spec: PerspectiveSpec) = viewModelFactory {
     initializer {
         NoteListViewModel(spec, createSavedStateHandle(), graph.noteRepository,
-            graph.entityRepository, graph.settingsStore, graph.appTime)
+            graph.entityRepository, graph.settingsStore, graph.appTime, graph.dispatchers)   // DEC-99
     }
 }
 // in the TabKey entry: val vm: NoteListViewModel = viewModel(factory = noteListFactory(LocalUiGraph.current, spec))
@@ -914,7 +917,7 @@ Dialogs of a restore that has not been confirmed yet (checking, passwords, the f
 | Composition, `SessionGate.dispatch`, window flags, launcher calls | main (`Dispatchers.Main.immediate`) |
 | Room DAO suspend functions and Flows | Room's own executors; never wrapped in `withContext`, never `allowMainThreadQueries` |
 | E1, E2, E3, E4, DatabaseHolder open and close, DbMaintenance SQLCipher connection, file copies, SAF and FileProvider streams, Keystore calls | `dispatchers.io` |
-| PBKDF2 derivation and calibration (DEC-60), heavy list mapping | `dispatchers.default` |
+| PBKDF2 derivation and calibration (DEC-60), heavy list mapping (`NoteListViewModel` maps its rows in `flowOn(dispatchers.default)`, DEC-99) | `dispatchers.default` |
 | BiometricPrompt callbacks, `AppLockController` decisions and listener calls, E5 | main; the KeyVault calls they need (`biometricSlotStatus` and `isPasswordReminderDue` for `unlockRoute`, slot cipher preparation, the `doFinal` of `verifyBiometric`, `verifyPassword` in `confirmWithPassword` with PBKDF2 on `dispatchers.default`) run off main and return to main before an event is raised or a result is returned |
 | DataStore | its own scope, `applicationScope + dispatchers.io` |
 | Backup, restore, key change, Start fresh, Erase, every repository write, the editor's save-on-leave | `applicationScope`: survives rotation and leaving the screen |

@@ -201,11 +201,11 @@ data class PerspectiveSpec(
 ### 3.3 Search bar
 
 - The Search action (section 2.2) replaces the top app bar with a search bar. It is its own composable, not the title slot of a `TopAppBar`, whose fixed 64 dp content height would clip the field at 200 % font: `Surface(color = <top app bar container color>) { Row(Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets).heightIn(min = 64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) { <close button>; TextField(Modifier.weight(1f), <transparent container, no indicator>); <clear button> } }`. It is 64 dp high at 100 % font and grows with the font size. Content: navigation icon `ic_arrow_back` ("Close search", `action_close_search`), a single-line `TextField` with placeholder "Search notes" (`search_hint`), and a trailing `ic_close` icon button ("Clear search text", `action_clear_search`) while the text is not empty. The filter chips stay visible below.
-- Opening the bar focuses the field and shows the keyboard. Keyboard options: `KeyboardType.Text`, `ImeAction.Search`, `autoCorrectEnabled = false`, `KeyboardCapitalization.None`. The field is always wrapped in `NoPersonalizedLearning` ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)), which sets `EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING` on every input session of the field (DEC-71, Q11: the keyboard must never learn). The flag is unconditional: it depends on no setting, not on screenshot protection and not on the window policy, so there is no `CompositionLocal` for it and nothing reads `SettingsStore` for it. The wrapper is always present and never changes, so the field never moves in the composition and keeps its focus and state.
-- The field shows what was typed, capped at `SearchText.MAX_TERM_CHARS` (1,000) characters, surrogate pairs kept whole and without a message ([data-layer.md § Search](data-layer.md#search); the cap keeps the saved state small, section 3.10). `NoteListViewModel` stores the raw text at once (`searchText`) and copies it into `NoteFilter.search` after 300 ms without further input (debounce). Trimming, case folding and wildcard escaping happen in `SearchText.toLikeTerm` ([data-layer.md § Search](data-layer.md#search)); input that is blank after trimming means no search filter (DEC-29). The ImeAction, the clear button and closing the bar apply at once, without the debounce.
+- Opening the bar with the Search action focuses the field and shows the keyboard; the focus request is UI-local and not saved, so a bar that reappears after a rotation or a process death has neither focus nor keyboard. Keyboard options: `KeyboardType.Text`, `ImeAction.Search`, `autoCorrectEnabled = false`, `KeyboardCapitalization.None`. The field is always wrapped in `NoPersonalizedLearning` ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)), which sets `EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING` on every input session of the field (DEC-71, Q11: the keyboard must never learn). The flag is unconditional: it depends on no setting, not on screenshot protection and not on the window policy, so there is no `CompositionLocal` for it and nothing reads `SettingsStore` for it. The wrapper is always present and never changes, so the field never moves in the composition and keeps its focus and state.
+- The field shows what was typed, capped at `SearchText.MAX_TERM_CHARS` (1,000) characters, surrogate pairs kept whole and without a message (`model.capChars`; [data-layer.md § Search](data-layer.md#search); the cap keeps the saved state small, section 3.10). `NoteListViewModel` stores the raw text at once (`searchText`, Compose snapshot state written inside the field's `onValueChange` and mirrored to the `SavedStateHandle`, so the field never waits for a flow round trip, DEC-99) and copies it into `NoteFilter.search` after 300 ms without further input (debounce). Trimming, case folding and wildcard escaping happen in `SearchText.toLikeTerm` ([data-layer.md § Search](data-layer.md#search)); input that is blank after trimming means no search filter (DEC-29). The ImeAction, the clear button and closing the bar apply at once, without the debounce.
 - The ImeAction hides the keyboard and keeps the bar open. The clear button empties the field and keeps focus.
 - Closing the bar (navigation icon or Back, section 2.5) clears the text and the search filter. A search filter applies only while the bar is open, or while selection mode has temporarily replaced an open bar (section 5.1), so the user always sees or returns to the active query.
-- Search text and the open state are saved per perspective (section 3.10). After process death the bar reopens with its text, without focus or keyboard.
+- Search text and the open state are saved per perspective (section 3.10). After a rotation or a process death the bar reopens with its text, without focus or keyboard.
 - Matching covers note content only, never person or project names, and checked notes stay in the results in canonical order (§8, DEC-29).
 
 ### 3.4 Filter chip row
@@ -218,6 +218,7 @@ data class PerspectiveSpec(
 | Not set | "Person" / "Project" / "Date" (`filter_person`, `filter_project`, `filter_date`) | none | `ic_arrow_drop_down` |
 | Set | The person or project name; or the date text: "Undated" (`filter_date_undated`), "17 Nov 2026 – 23 Nov 2026" (`date_range_both`), "From 17 Nov 2026" (`date_range_from`), "Until 23 Nov 2026" (`date_range_until`) | `ic_person` / `ic_folder` / `ic_event` | `ic_arrow_drop_down` |
 
+- The ViewModel gives each chip as `FilterChipUi(dimension: FilterDimension, value: ChipValue)`, where `ChipValue` is `NotSet`, `Entity(id, name)` or `Date(filter: DateFilter)` (`Undated` or a `Range` with at least one end). A person or project chip stays `NotSet` until the existence probe has named its entity, so it never shows a stale or empty name.
 - `selected = <set>`, so a set chip uses the selected chip colors (container plus leading icon, not color alone). Labels are one line with ellipsis.
 - Semantics: the chip replaces its default checkbox semantics with `Modifier.clearAndSetSemantics { role = Role.DropdownList; contentDescription = …; onClick(label = …) { … } }`. The content description is "Person filter: %1$s" (`a11y_filter_person`; `a11y_filter_project` and `a11y_filter_date` for the other chips) with the displayed value, or with "Any" (`filter_any`) when not set. The click label is "Change filter" (`a11y_change_filter`).
 - Tap: Person and Project open the single-select `EntityPicker` (`PickerKey(kind, PickerPurpose.SecondaryFilter(...))`, section 7). Its first row, "Any person" / "Any project", clears the dimension. Date opens the date filter sheet (section 3.5).
@@ -244,7 +245,7 @@ Layout and semantics:
 Rules:
 1. Every change applies at once; the list behind the sheet updates. "Done", a swipe down, a scrim tap or Back closes the sheet.
 2. Selecting "Any date" or "Undated" clears both range ends.
-3. Tapping "From" or "Until" opens a `DatePickerDialog` with a `DatePicker` (`showModeToggle = true`), initially showing that end's date, else today. Buttons: "Cancel" (`action_cancel`) and "OK" (`action_ok`, enabled only while a day is selected). OK sets that end and selects "Date range".
+3. Tapping "From" or "Until" opens a `DatePickerDialog` with a `DatePicker` (`showModeToggle = true`), initially showing that end's date, else today. Buttons: "Cancel" (`action_cancel`) and "OK" (`action_ok`, enabled only while a day is selected). OK sets that end and selects "Date range". The sheet stays composed under the picker (`ListDialog.DateEndPicker` implies the sheet), and OK, Cancel and Back return to it.
 4. Tapping the "Date range" radio while both ends are empty opens the "From" picker. If it is cancelled, the previous choice stays selected.
 5. Clearing one end keeps an open-ended range (DEC-28). Clearing the last remaining end returns to "Any date".
 6. The "From" picker disables days after the current "Until", and the "Until" picker disables days before the current "From" (`SelectableDates`), so a reversed range cannot be entered.
@@ -255,7 +256,7 @@ Rules:
 
 | State | Condition | List area shows |
 |---|---|---|
-| Loading | No emission yet for the first `NoteQuery` of this entry (`loading = true`) | Nothing for 500 ms, then a centered indeterminate `CircularProgressIndicator` with content description "Loading" (`a11y_loading`). Never "(No data)" (architecture.md § Layering, rule 2) |
+| Loading | No emission yet for the first `NoteQuery` of this entry (`loading = true`) | Nothing for 500 ms, then a centered indeterminate `CircularProgressIndicator` with content description "Loading" (`a11y_loading`) (`DelayedProgress`, `ui/common`). Never "(No data)" (architecture.md § Layering, rule 2) |
 | Rows | The latest emission has ≥ 1 row | The rows (section 3.7) |
 | Empty | The latest emission has 0 rows | "(No data)" (`no_data`, verbatim §5) in `bodyLarge`, `onSurfaceVariant`, centered in the list area. Below it, only while `filtersActive`, a `TextButton` "Clear filters" (`action_clear_filters`) |
 
@@ -300,7 +301,7 @@ data class NoteRowUi(
 | Body (supporting) | The non-blank lines after the title line, each trimmed, joined with `\n`; omitted when there are none. Markdown is shown as typed (DEC-39) | `bodyMedium`, `onSurfaceVariant`, at most 2 lines, ellipsis |
 | Date | `date` formatted with `DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)` for the current configuration locale (DEC-26); omitted when undated | `labelLarge`, `onSurfaceVariant`; `error` color when overdue |
 | Overdue | The text "Overdue" (`label_overdue`, verbatim §4) right after the date when `overdue`; never on checked or undated notes (DEC-26, Q5) | `labelLarge`, `error` color, preceded by `ic_error` (16 dp, decorative): text plus icon plus color, never color alone |
-| Association summary | `people` joined with ", " (`names_separator`), then `projects` joined the same way. Each group is preceded by an inline 16 dp icon (`ic_person`, `ic_folder`; decorative). Omitted when both lists are empty | `labelLarge`, `onSurfaceVariant`, 1 line, ellipsis. Built as one `AnnotatedString` with inline icons so it ellipsizes as one text |
+| Association summary | `people` joined with ", " (`names_separator`), then `projects` joined the same way, the two groups kept apart by a 0.75 em inline placeholder (layout, not text: no hard-coded separator between user data, section 11). Each group is preceded by an inline 16 dp icon (`ic_person`, `ic_folder`; decorative). Omitted when both lists are empty | `labelLarge`, `onSurfaceVariant`, 1 line, ellipsis. Built as one `AnnotatedString` with inline icons so it ellipsizes as one text |
 | Orphaned | Replaces the summary when `orphan` (DEC-27): `ic_link_off` (16 dp, decorative) plus "Orphaned" (`label_orphaned`, verbatim §6). Shown in every perspective where an unlinked row can appear (All, Date, Orphan) | `labelLarge`, `onSurfaceVariant` |
 | Selection mark (trailing) | Selection mode only: `ic_check_circle_filled` in `primary` when selected, `ic_radio_button_unchecked` in `outline` when not (decorative) | 24 dp |
 
@@ -329,8 +330,8 @@ The row container uses `Modifier.combinedClickable` (it merges the row's text in
 1. The checkbox calls `NoteListViewModel.setChecked(row.id, checked = !row.checked)`, which calls `NoteRepository.setChecked(noteId, checked)` with the target state, never "toggle" (DEC-22, [data-layer.md § Check and uncheck](data-layer.md#check-and-uncheck-dec-22)). A double tap therefore sends the same target twice and changes the note once.
 2. The UI does not change the row itself. Room re-emits the list and the checkbox, the styling and the position change from the new emission (architecture.md § Layering, rule 3).
 3. Rows animate to their new place with `Modifier.animateItem()` (DEC-54): checking moves the note to the very bottom of the list (the last position of the checked group), unchecking moves it to the top of the list (§4, DEC-23).
-4. Scroll anchoring: `LazyColumn` normally follows its first visible item by key, so toggling that item would scroll the viewport with it. When the toggled row is the first visible item, the screen records `firstVisibleItemIndex` and `firstVisibleItemScrollOffset` before the write. When the next `rows` value arrives it calls `listState.requestScrollToItem(index, offset)` in the same composition that hands the new rows to the `LazyColumn`: the call is non-suspending and overrides key anchoring for that one remeasure, so the data change and the restored position land in the same frame, with no jump. The viewport stays put and the row animates away. Verify at setup: `LazyListState.requestScrollToItem` in the pinned foundation, and that `animateItem()` still animates the moved row.
-5. When `setChecked` returns true, the screen announces "Marked as done" or "Marked as not done" (`announce_marked_done`, `announce_marked_not_done`) through the `Announcer` helper in `ui/common`, which wraps `View.announceForAccessibility`; a screen gets the current view's announcer with `rememberAnnouncer(graph)`, which asks `GateGraph.announcer(view)` ([architecture.md § Dependency injection](architecture.md#dependency-injection)), so the instrumented tests record every call. Verify at setup: `announceForAccessibility` is deprecated from API 36; on a targetSdk 36 build, switch the helper to a polite live region and keep the call sites unchanged (DEC-01).
+4. Scroll anchoring: `LazyColumn` normally follows its first visible item by key, so toggling that item would scroll the viewport with it. When the toggled row is the first visible item, the screen records `firstVisibleItemIndex` and `firstVisibleItemScrollOffset` before the write (`ToggleAnchor`, `ui/notes`). When the first `rows` value that holds the toggled row in its new state arrives, it calls `listState.requestScrollToItem(index, offset)` in the same composition that hands the new rows to the `LazyColumn`: the call is non-suspending and overrides key anchoring for that one remeasure, so the data change and the restored position land in the same frame, with no jump. The viewport stays put and the row animates away. A `rows` value without the toggled row ends the anchor, and a write that changed nothing (it failed, or the row already had that state, so no emission follows; item 5) drops it, so a later, unrelated rows change never jumps the list. Verify at setup: `LazyListState.requestScrollToItem` and `Modifier.animateItem` exist in the pinned foundation (settled from the library classes, T16); that `animateItem()` still animates the moved row and that the restored position does not jump are device checks (SPEC T22).
+5. `setChecked(noteId, checked, onDone)` runs in `viewModelScope` and reports through `onDone(changed)` whether the row changed (DEC-99). When `changed` is true, the screen announces "Marked as done" or "Marked as not done" (`announce_marked_done`, `announce_marked_not_done`) through the `Announcer` helper in `ui/common`, which wraps `View.announceForAccessibility`; a screen gets the current view's announcer with `rememberAnnouncer(graph)`, which asks `GateGraph.announcer(view)` ([architecture.md § Dependency injection](architecture.md#dependency-injection)), so the instrumented tests record every call. Verify at setup: `announceForAccessibility` is deprecated from API 36; on a targetSdk 36 build, switch the helper to a polite live region and keep the call sites unchanged (DEC-01).
 6. There is no undo (§7, DEC-36). Unchecking always sets a fresh `updated_at` (DEC-21), so an undo could not restore the previous position.
 
 ### 3.10 List state and saved state
@@ -343,10 +344,11 @@ data class NoteListUiState(
     val loading: Boolean,
     val primary: Primary,                // Loading | None | Entity(id, name) | Day(epochDay) | Range(fromDay, toDay)
     val rows: List<NoteRowUi>,
+    val today: LocalDate,                // AppTime.todayFlow: the date pickers' initial month
     val chips: List<FilterChipUi>,       // one per spec.filters entry, with its display value
     val filtersActive: Boolean,
     val searchOpen: Boolean,
-    val searchText: String,
+    val dateFilter: DateFilter,          // the date chip's value, shown by the date filter sheet
     val selection: Set<Long>?,           // null = not in selection mode
     val calendar: CalendarUi?,           // Date only: displayed month, marked days, today, selection
     val dialog: ListDialog?,             // the open sheet or dialog of this screen
@@ -363,7 +365,9 @@ sealed interface ListDialog {            // saved as the String key listDialog, 
 }
 ```
 
-Saved per perspective in the entry's `SavedStateHandle` (DEC-28): it survives rotation and process death and starts empty on a cold start.
+The search text is not a UiState field: the search field reads `NoteListViewModel.searchText`, snapshot state that changes in the frame of each edit (section 3.3, DEC-99).
+
+Saved per perspective in the entry's `SavedStateHandle` (DEC-28): it survives rotation and process death and starts empty on a cold start. Each value is held in a `MutableStateFlow` written together with its keys, so a change of several keys (date kind and ends, day and range) applies as one; an unknown `listDialog` value restores as no dialog (DEC-99).
 
 | Key | Type | Content |
 |---|---|---|
@@ -391,14 +395,15 @@ Saved per perspective in the entry's `SavedStateHandle` (DEC-28): it survives ro
 
 The primary entity is `SettingsStore.rememberedPersonId` (Individual) or `rememberedProjectId` (Project), so it survives a cold start (DEC-28).
 
-Before anything can be decided the primary is `Primary.Loading`. It holds until `SettingsStore.settings` has emitted (it is null until the first read) and, when an id is remembered, until the existence probe's first emission. While `Loading` the title is the tab title without a dropdown, the chips are hidden, and the body shows nothing for 500 ms and then the centered progress indicator (`a11y_loading`). The picker body below appears only when no id is remembered or the probe emitted null, so it never flashes before a remembered entity is known.
+Before anything can be decided the primary is `Primary.Loading`. It holds until `SettingsStore.settings` has emitted (it is null until the first read) and, when an id is remembered, until the existence probe's first emission. While `Loading` the title is the tab title without a dropdown, the chips are hidden, the Search action does nothing, and the body shows nothing for 500 ms and then the centered progress indicator (`a11y_loading`). The picker body below appears only when no id is remembered or the probe emitted null, so it never flashes before a remembered entity is known. `Loading` happens only before this first decision: afterwards a new choice, or a collection restarted after the tab was left, keeps the shown primary (the picker body or the old entity) until the probe answers, and then only the rows clear and load under the new title (section 3.6, DEC-99).
 
 Nothing chosen (no remembered id, or the existence probe found the entity gone, [data-layer.md § Reactivity](data-layer.md#reactivity)):
 - The title is "People" or "Projects", with no dropdown.
 - The body below the app bar is the `EntityPicker` in its embedded single-select form (DEC-52, section 7): name search field, every entity including those with zero notes (DEC-33), each with "N notes · added <date>", sorted by `Collator`, then id (DEC-32). No "Any" row and no create row: persons and projects are created only from a note (§3).
 - No entities at all: "(No data)" (`no_data`) and below it the hint "People are created in a note: tap + and use Add person." (`picker_empty_people_hint`) or "Projects are created in a note: tap + and use Add project." (`picker_empty_projects_hint`). A name search that matches nothing shows "(No data)" alone.
 - The Search action focuses the picker's name search field (section 2.2). The filter chips are hidden. The create button is shown and creates a note without prefill.
-- Tapping an entity stores its id in `SettingsStore` and shows its notes.
+- Tapping an entity stores its id in `SettingsStore` and shows its notes. If that write fails (a DataStore `IOException`, a full disk), the snackbar shows the `StorageFull` text, nothing is remembered and the picker stays (DEC-99).
+- When the picker body returns (the entity is gone or nothing is remembered), an open list search bar is closed and its text dropped, because the Search action now belongs to the picker's field.
 
 An entity chosen:
 - The title is the entity name followed by `ic_arrow_drop_down`. The whole title is one button (`Modifier.clickable(role = Role.Button, onClickLabel = "Change person" / "Change project")`, keys `a11y_change_person`, `a11y_change_project`; at least 48 dp high) that opens `PickerKey(kind, PickerPurpose.PerspectivePrimary(selectedId))` (section 7). Picking another entity replaces the remembered id; Back keeps the current one (DEC-52).
@@ -422,7 +427,7 @@ Title "Calendar" (`tab_calendar`). The primary filter is one day (day mode) or o
 Layout:
 - Single column (the default): one `LazyColumn` whose first item is the `MonthGrid` (centered, at most 480 dp wide), second item the selection header, then the rows or the empty state. The grid scrolls away with the list.
 - Two panes below the chip row when the window width is at least the expanded breakpoint (840 dp), or at least 600 dp while the window height is below 480 dp. The second case is a phone in landscape (DEC-01 forbids an orientation lock): there a single column puts the grid above the fold and the day list entirely below it, so every day tap would need a scroll (§2 Date UX 3). The start pane is 360 dp wide and holds the `MonthGrid` and the selection header in a vertically scrollable column; the end pane holds the list.
-- Breakpoints come from `currentWindowAdaptiveInfoV2().windowSizeClass` (section 2.1; `currentWindowAdaptiveInfo()` is deprecated in adaptive 1.3.0), never from `Configuration` ([architecture.md](architecture.md)). Verify at setup: the breakpoint API of the pinned material3-adaptive (`isWidthAtLeastBreakpoint(WIDTH_DP_EXPANDED_LOWER_BOUND)`, `isWidthAtLeastBreakpoint(WIDTH_DP_MEDIUM_LOWER_BOUND)` and `!isHeightAtLeastBreakpoint(HEIGHT_DP_MEDIUM_LOWER_BOUND)`, or the `windowWidthSizeClass` and `windowHeightSizeClass` equivalents).
+- Breakpoints come from `currentWindowAdaptiveInfoV2().windowSizeClass` (section 2.1; `currentWindowAdaptiveInfo()` is deprecated in adaptive 1.3.0), never from `Configuration` ([architecture.md](architecture.md)). Verify at setup: the breakpoint API of the pinned material3-adaptive (`isWidthAtLeastBreakpoint(WIDTH_DP_EXPANDED_LOWER_BOUND)`, `isWidthAtLeastBreakpoint(WIDTH_DP_MEDIUM_LOWER_BOUND)` and `!isHeightAtLeastBreakpoint(HEIGHT_DP_MEDIUM_LOWER_BOUND)`, or the `windowWidthSizeClass` and `windowHeightSizeClass` equivalents). Settled from the library classes (T16): the three `WindowSizeClass` calls exist in the pinned versions and are used.
 
 Initial and saved state:
 - A fresh entry (cold start, DEC-28) opens on the current month in day mode with today selected (DEC-53); that list may be "(No data)".
@@ -451,7 +456,7 @@ fun MonthGrid(
 |---|---|
 | Header | Month title from `DateFormat.getBestDateTimePattern(locale, "MMMMy")` (for example "November 2026"), `titleMedium`, a heading with `liveRegion = Polite` so a month change is announced. Then a "Today" `TextButton` (`action_today`), shown when the displayed month is not the current month or day mode does not have today selected. Then `IconButton`s `ic_chevron_left` "Previous month" and `ic_chevron_right` "Next month" (`a11y_previous_month`, `a11y_next_month`; auto-mirrored in RTL). The header is a `FlowRow`, so at large font sizes the buttons wrap below the title |
 | Weekday row | Seven `DayOfWeek.getDisplayName(TextStyle.NARROW, locale)` labels starting at `firstDayOfWeek`, `labelMedium`, `onSurfaceVariant`. Hidden from accessibility (`clearAndSetSemantics {}`) because every day cell announces its weekday |
-| First day of week | `androidx.core.text.util.LocalePreferences.getFirstDayOfWeek(locale, /* resolved = */ false)` with `locale = LocalConfiguration.current.locales[0]` (the locale every other formatter uses, section 11.14; it honors the Android 14 regional preference). It returns a String: `"sun"` → `SUNDAY`, `"mon"` → `MONDAY`, `"tue"`, `"wed"`, `"thu"`, `"fri"`, `"sat"`; an empty result (no preference) falls back to `WeekFields.of(locale).firstDayOfWeek`. Computed in `remember(locale)`, so it is re-read when the configuration changes. Verify at setup: the return values in the pinned androidx.core, and that the regional preference appears as the `fw` extension of the configuration locale |
+| First day of week | `androidx.core.text.util.LocalePreferences.getFirstDayOfWeek(locale, /* resolved = */ false)` with `locale = LocalConfiguration.current.locales[0]` (the locale every other formatter uses, section 11.14; it honors the Android 14 regional preference). It returns a String: `"sun"` → `SUNDAY`, `"mon"` → `MONDAY`, `"tue"`, `"wed"`, `"thu"`, `"fri"`, `"sat"`; an empty result (no preference) falls back to `WeekFields.of(locale).firstDayOfWeek`. Computed in `remember(locale)`, so it is re-read when the configuration changes. Computed by `DateFormats.firstDayOfWeek` (`rememberDateFormats()`, section 11.14). Settled from the androidx.core 1.19.1 classes (T16): the values are `"sun"` … `"sat"` and `""` (`DEFAULT`). Verify at setup on the device: the regional preference appears as the `fw` extension of the configuration locale |
 | Grid | Always 6 rows × 7 columns, so the height does not jump between months. Only the displayed month's days have cells; the other positions are empty and not focusable. Column width = max(48 dp, available width / 7); 8 dp padding on each side while the available width is at least 352 dp, none below. Row height = max(48 dp, the day text height + 16 dp, min(column width, 56 dp)), so at 100 % font the grid is at most 6 × 56 dp tall. When the available width is below 336 dp (seven 48 dp columns) the grid scrolls horizontally inside its container instead of shrinking its cells below 48 dp (DEC-55) |
 | Day cell | Day number (`DateTimeFormatter.ofPattern("d", locale)`), `bodyLarge`, centered in a 40 dp circle area. A 6 dp dot below the number when the day is in `markedDays` |
 | Today | 1 dp `primary` ring around the 40 dp circle; number bold in `primary` |
@@ -467,7 +472,7 @@ Behavior:
 - 200 % font: cells grow taller to fit the number; the grid never truncates its numbers. It scrolls horizontally only below 336 dp of available width (see Grid), the one place in the app where it does.
 
 Accessibility of a day cell:
-- `Modifier.selectable(selected = <selected day, or range start or end>, role = Role.Button, onClick = …)` with `onClickLabel` "Show notes for this day" (`a11y_day_click`).
+- `Modifier.clickable(onClickLabel = "Show notes for this day" (`a11y_day_click`), role = Role.Button, onClick = …)` plus `Modifier.semantics { selected = <selected day, or range start or end> }`. `Modifier.selectable` has no click-label parameter; the two modifiers give the same role, label and selected state.
 - `contentDescription` = the date in `FormatStyle.FULL` (for example "Tuesday, 17 November 2026"), followed by the applicable parts in this order, each joined with ", " (`names_separator`): "today" (`a11y_day_today`), "has notes" (`a11y_day_has_notes`), "start of range" (`a11y_day_range_start`), "end of range" (`a11y_day_range_end`), "in range" (`a11y_day_in_range`). TalkBack adds "Selected" from the `selected` property.
 - Grid semantics: `collectionInfo = CollectionInfo(rowCount = 6, columnCount = 7)` on the grid and `collectionItemInfo = CollectionItemInfo(rowIndex, 1, columnIndex, 1)` on each day cell.
 
@@ -481,7 +486,7 @@ The row below the grid labels the list (a heading):
 | Range | "17 Nov 2026 – 23 Nov 2026" (`date_range_both`, MEDIUM dates) | "Select range" (reopens the picker with the current range) and an `IconButton` `ic_close` "Clear range" (`action_clear_range`) |
 
 - "Select range" opens a `DatePickerDialog` that hosts a `DateRangePicker` (DEC-11, DEC-53) initialised with the current day as start and no end (day mode) or with the current range. Buttons "Cancel" and "OK"; OK is enabled only when both a start and an end are selected. Conversion follows section 3.5 rule 8. Verify at setup: `DateRangePicker` inside `DatePickerDialog` lays out at 200 % font on a compact phone.
-- OK with start = end gives day mode on that day. Otherwise range mode; the displayed month becomes the month of the range start.
+- OK with start = end gives day mode on that day, otherwise range mode. Either way the displayed month becomes the month of the start, so the selection is never off screen (as "Today" does).
 - "Clear range" returns to day mode with the range's first day selected; the displayed month stays.
 - The list shows every note dated inside the range, inclusive, in canonical order, never grouped by day (DEC-23, DEC-53); each row shows its date.
 - New notes are prefilled with the selected day in day mode and with nothing in range mode (DEC-38).
@@ -828,6 +833,7 @@ sealed interface PickerResult {
 - The editor applies `Links` by replacing its ids of that kind with `ids` and appending `created` to its created entities. The list screen applies `Associate` (section 5.3), `Primary` (section 4.2) and `Filter` (section 3.4). Results only ever reach the entry that opened the picker.
 - Checked ids that no longer exist when the result is built are dropped; the repositories drop vanished ids again inside their transactions (data-layer.md § Note save, § Batch operations).
 - `EntityPickerViewModel` saves in its `SavedStateHandle`: the search text per kind, the checked ids per kind (`LongArray`), the created entities per kind (keys and names) and the current tab. Initial values from the purpose (`selectedIds`) are applied only when the entry is first created, so rotation and process death keep the user's changes.
+- The embedded body of Individual and Project (built ahead of the destination, SPEC T16) uses `EntityPickerViewModel(kind, savedStateHandle, entityRepository, appTime)`, whose only saved key is `search`. Its `uiState` is `EntityPickerUiState(loading, anyEntity, rows: List<EntityRowUi>)`, and the search text is the snapshot state `EntityPickerViewModel.search`, written inside the field's `onValueChange` (DEC-99).
 
 ### 7.8 Empty states
 
@@ -837,6 +843,7 @@ sealed interface PickerResult {
 | No entity exists, `PerspectivePrimary`, `SecondaryFilter` or the embedded body (no create row; reached from a list screen that has the + button) | "(No data)" and "People are created in a note: tap + and use Add person." / "Projects are created in a note: tap + and use Add project." (`picker_empty_people_hint`, `picker_empty_projects_hint`). `SecondaryFilter` still shows its "Any …" row above |
 | No entity exists, `DeleteEntity` (opened from the editor, which has no + button and where Add person is right behind the picker) | "(No data)" alone; the user can only go Back |
 | Entities exist but the name search matches none | "(No data)"; the create row stays above it where offered |
+| Options not loaded yet (no first emission) | Nothing for 500 ms, then the centered progress indicator (`DelayedProgress`, section 3.6) |
 
 ## 8. Dialogs
 
@@ -2006,7 +2013,7 @@ In `picker_entity_meta` the separator " · " is part of the resource; `%2$s` is 
 | Backoff countdown | `m:ss` (minutes without padding, seconds two digits) | 4:05 |
 | Counts | `%d` through plurals | 12 notes |
 
-Formatters are created per locale and cached keyed on `LocalConfiguration.current.locales[0]`; they carry no zone (architecture.md § Cross-cutting conventions).
+Formatters are created per locale and cached keyed on `LocalConfiguration.current.locales[0]` (`DateFormats`, built by `rememberDateFormats()` in `ui/common`, which also gives `MonthGrid` its first day of week); they carry no zone (architecture.md § Cross-cutting conventions).
 
 ## 12. Accessibility
 

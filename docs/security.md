@@ -1283,7 +1283,7 @@ fun NoPersonalizedLearning(content: @Composable () -> Unit) {
     InterceptPlatformTextInput(interceptor, content)
 }
 ```
-  Verify at setup: whether `InterceptPlatformTextInput` and `PlatformTextInputInterceptor` still need `@OptIn(ExperimentalComposeUiApi::class)`, and the members of `PlatformTextInputMethodRequest`, in the pinned Compose BOM.
+  Verify at setup: whether `InterceptPlatformTextInput` and `PlatformTextInputInterceptor` still need `@OptIn(ExperimentalComposeUiApi::class)`, and the members of `PlatformTextInputMethodRequest`, in the pinned Compose BOM. Settled from the library classes (T16): both are still `@ExperimentalComposeUiApi`, and the sketch above compiles as written.
 - There is no `LocalKeyboardPrivacy`: `MainActivity` provides no keyboard-related `CompositionLocal` ([architecture.md](architecture.md#mainactivity-startup-order)). The input-privacy test of [testing.md](testing.md) asserts `IME_FLAG_NO_PERSONALIZED_LEARNING` on each covered field with screenshot protection both off and on.
 - The flag is a request that keyboards may ignore; it does not limit what a malicious keyboard sees (section 1.3).
 
