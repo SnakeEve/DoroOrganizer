@@ -202,7 +202,7 @@ DoroOrganizer/
 | `DebugTools.kt` | `install(app)` installs StrictMode ([Threading](#threading)); `configure(activity)`, called from `MainActivity.attachBaseContext`, applies the font scale an instrumented test set in `DebugTools.fontScale` through `applyOverrideConfiguration`, so dialog and sheet windows inherit it (testing.md I-35); `fontScale` null keeps the phone's | both no-op |
 | `debug/CrashTestService.kt` | the `:crashtest` service of [testing.md § 5](testing.md#5-security-and-lifecycle-tests); declared only in the debug manifest | absent |
 
-Each pair is two files with the same fully qualified class name in `src/debug/java` and `src/release/java`. `src/main` never contains `Log` calls.
+Each pair is two files with the same fully qualified class name in `src/debug/java` and `src/release/java`. `src/main` never contains `Log` calls. Instrumented-test sources follow the same split: tests and fixtures that reach the `debug` package or `DebugTools.fontScale` live in `src/androidTestDebug/java`, and their counterparts for the `qa` and `benchmark` test APKs in `src/androidTestRelease/java` (DEC-103, [testing.md § 1](testing.md#1-test-layers)).
 
 ### Import rules
 
