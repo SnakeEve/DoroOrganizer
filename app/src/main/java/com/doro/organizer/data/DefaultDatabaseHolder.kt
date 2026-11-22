@@ -71,7 +71,10 @@ class DefaultDatabaseHolder(
         openLocked(generation, rawKey)
     }
 
-    /** db-lifecycle.md § Close: waits for the calls in flight only; collected flows are not waited for. */
+    /**
+     * db-lifecycle.md § Close (DEC-81): the same drain as exclusive mode (the calls in flight, then the collected flows
+     * for at most the drain timeout), then Room is closed and the key is zeroed.
+     */
     override suspend fun close() = transition.withLock {
         when (val current = mutableState.value) {
             HolderState.Closed -> Unit
@@ -79,6 +82,7 @@ class DefaultDatabaseHolder(
                 // Even when Room's close fails, the holder leaves Draining and the key is zeroed.
                 try {
                     drainCalls()
+                    drainFlows(current)
                     closeRoom(current)
                 } finally {
                     stayClosed()
@@ -96,7 +100,7 @@ class DefaultDatabaseHolder(
         } else {
             query(s.db)
                 .onStart { s.activeFlows.incrementAndGet() }
-                .onCompletion { s.activeFlows.decrementAndGet() } // also on cancellation: exclusive mode waits for it
+                .onCompletion { s.activeFlows.decrementAndGet() } // also on cancellation: the drain waits for it
                 .retryWhen { e, attempt ->
                     e.isEnvironmental() && attempt < FLOW_RETRIES && state.value === s &&
                         run {
@@ -224,7 +228,12 @@ class DefaultDatabaseHolder(
         inFlight.first { it == 0 }
     }
 
-    /** Exclusive mode step 4: waits at most [FLOW_DRAIN_TIMEOUT_MS] for the cancelled flows of [open] to end. */
+    /**
+     * Exclusive mode step 4 and close step 3 (db-lifecycle.md): waits at most [FLOW_DRAIN_TIMEOUT_MS] for the cancelled
+     * flows of [open] to end; a Room flow ends only after its running statement has returned (DEC-107). `exclusive` and
+     * `close` call it after [drainCalls], holding [transition], in [NonCancellable]. On timeout it logs one constant
+     * line, the same for both callers.
+     */
     private suspend fun drainFlows(open: HolderState.Open) {
         val drained = withTimeoutOrNull(FLOW_DRAIN_TIMEOUT_MS) {
             while (open.activeFlows.get() > 0) delay(FLOW_DRAIN_POLL_MS)
