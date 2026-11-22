@@ -46,6 +46,22 @@ android {
         if (testType == "benchmark") testInstrumentationRunnerArguments["useTestStorageService"] = "true"
     }
 
+    signingConfigs {
+        // DEC-109: the release key lives outside the repository. The owner's ~/.gradle/gradle.properties names it
+        // (DORO_RELEASE_STORE_FILE, DORO_RELEASE_STORE_PASSWORD, DORO_RELEASE_KEY_ALIAS, DORO_RELEASE_KEY_PASSWORD); the
+        // values are never printed. Without them the release build stays unsigned, as on any other machine.
+        val releaseStoreFile = providers.gradleProperty("DORO_RELEASE_STORE_FILE").orNull
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = file(releaseStoreFile)
+                storePassword = providers.gradleProperty("DORO_RELEASE_STORE_PASSWORD").get()
+                keyAlias = providers.gradleProperty("DORO_RELEASE_KEY_ALIAS").get()
+                keyPassword = providers.gradleProperty("DORO_RELEASE_KEY_PASSWORD").get()
+                storeType = "pkcs12"
+            }
+        }
+    }
+
     buildTypes {
         // DEC-15: every build type that runs instrumented tests has its own id, so tests that clear app data and
         // Keystore entries never touch the owner's release app (com.doro.organizer).
@@ -55,6 +71,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfigs.findByName("release")?.let { signingConfig = it } // DEC-109; qa and benchmark keep debug
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") // DEC-13
         }
         // qa and benchmark also get the generated rules of doro.test-apk-keep-rules when they host androidTest (DEC-103 (5)).
