@@ -257,8 +257,9 @@ internal class KeyChangePipeline(
     }
 
     /**
-     * Steps 12–14 after `Committed`: they never undo the commit and their failures are left to startup. The biometric
-     * key unwraps only the old DEK, and earlier share copies were made under the replaced key.
+     * Steps 12–14 after `Committed`: they never undo the commit and their failures are left to startup, except a KEK
+     * that a failed `DELETE_KEK` left, which startup keeps for the next encryption to reuse or replace (CS-13). The
+     * biometric key unwraps only the old DEK, and earlier share copies were made under the replaced key.
      */
     private suspend fun afterCommit(run: OperationRun, target: KeyMode, reopened: Boolean, deleteOld: Set<Long>) {
         if (reopened) {
