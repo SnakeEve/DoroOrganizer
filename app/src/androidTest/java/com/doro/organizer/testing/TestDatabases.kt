@@ -133,18 +133,23 @@ class TestDatabases(private val keyBytes: (TestKey) -> ByteArray = TestKey::byte
      * § Open sequence, `RawConnections.open`): never creating the file, never writing `android_metadata`, never
      * deleting on corruption. For pragmas, header reads and mutations; the rule closes it after the test.
      */
-    fun raw(file: File, key: TestKey): SQLiteDatabase = open(file, key, create = false)
+    fun raw(file: File, key: TestKey): SQLiteDatabase = open(file, key, SQLiteDatabase.OPEN_READWRITE)
 
     /** As [raw], but creates [file], which must not exist yet: for building fixtures. */
     fun createRaw(file: File, key: TestKey): SQLiteDatabase {
         check(!file.exists()) { "createRaw builds a new file; use raw for an existing one" }
-        return open(file, key, create = true)
+        return open(file, key, SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY)
     }
 
-    private fun open(file: File, key: TestKey, create: Boolean): SQLiteDatabase {
+    /**
+     * As [raw], but read-only: sqlcipher-android neither switches the journal mode nor writes `android_metadata` on
+     * a read-only connection, so a check through it leaves [file] as it found it. The rule closes it after the test.
+     */
+    fun readOnly(file: File, key: TestKey): SQLiteDatabase = open(file, key, SQLiteDatabase.OPEN_READONLY)
+
+    private fun open(file: File, key: TestKey, mode: Int): SQLiteDatabase {
         val bytes = keyBytes(key)
-        val flags = SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS or
-            (if (create) SQLiteDatabase.CREATE_IF_NECESSARY else 0)
+        val flags = mode or SQLiteDatabase.NO_LOCALIZED_COLLATORS
         val hook = if (bytes.isEmpty()) null else CipherCompatibilityHook
         return runCatching { SQLiteDatabase.openDatabase(file.path, bytes, null, flags, NoDeleteErrorHandler, hook) }
             .onFailure { bytes.fill(0) }
