@@ -24,41 +24,37 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeFalse
-import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Setup probe for db-lifecycle.md § Exclusive mode, step 4 ("Verify at setup: whether Room 2.8.5's `close()` waits for
- * a running query (a cancelled flow query) to finish"; the wait is what makes "no `-wal` after close" deterministic,
- * L-17). `DefaultDatabaseHolder` closes Room after the flow drain, which gives up after 2 s, so a flow whose statement
- * is still inside SQLite can meet `close()`.
+ * Setup probe for db-lifecycle.md § Exclusive mode step 4: what Room 2.8.5's `close()` does while the statement of a
+ * cancelled flow query is still running in SQLite. `DefaultDatabaseHolder` does not depend on the answer: its flow
+ * drain waits for such a flow, because a cancelled Room flow ends only after its statement returns
+ * (`DatabaseHolderTest`'s running-statement tests, DEC-107), so only a statement that outlives the drain's 2 s meets
+ * `close()`.
  *
  * The scene: the live instance from the production `buildRoom` runs [LongQuery] (about [QUERY_MS]) through Room's
  * reader connection on `Dispatchers.IO`, as a DAO flow query does; [RUNNING_MS] into the statement its coroutine is
- * cancelled, as `flatMapLatest` cancels a flow, and `close()` is called on another thread. The expectation pinned here
- * is the wait: `close()` returns only once the running statement has ended, and no `-wal` is left when `close()`
- * returns. The docs item rests on those two tests. The third, that the statement completes with its full result,
- * pins a separate property the docs do not ask about (`close()` does not abort a running statement): it passes whether
- * `close()` waits or returns at once, because a pool closes a connection that is in use only when it is released.
- * Every failure message carries the observed timeline (milliseconds from the statement's start, the statement's
- * outcome as a class name, the `-wal` presence); no user data exists in this scene (DEC-70).
+ * cancelled, as `flatMapLatest` cancels a flow, and `close()` is called on another thread. The tests pin what the
+ * Poco F7 showed in T22 (DEC-107 (1)): `close()` does not wait for the running statement but returns at once; the
+ * statement is not aborted and completes with its full result, because a pool closes a connection that is in use
+ * only when it is released; and the `-wal` is left until that statement has ended. No correctness property depends
+ * on this (db-lifecycle.md § Exclusive mode step 4). Should a Room update make `close()` wait, the first two tests
+ * fail, and DEC-107 and that step are revisited. Every failure message carries the observed timeline (milliseconds
+ * from the statement's start, the statement's outcome as a class name, the `-wal` presence); no user data exists in
+ * this scene (DEC-70).
  */
 @RunWith(AndroidJUnit4::class)
 class RoomCloseDuringQueryTest {
     @get:Rule
     val databases = TestDatabases()
 
-    @Ignore(
-        "Contradicted on the Poco F7 (T22): close() returned 2 to 5 ms after it began while the cancelled statement " +
-            "ran on for 2.1 to 2.4 s and then returned its full count; decision pending",
-    )
     @Test
-    fun close_whileACancelledQueryRunsInSqlite_returnsOnlyAfterTheStatementEnded() {
+    fun close_whileACancelledQueryRunsInSqlite_returnsBeforeTheStatementEnds() {
         val seen = closeDuringRunningQuery()
 
         assertTrue("close() did not return within $CLOSE_LIMIT_MS ms; $seen", seen.closeEnd != null)
@@ -68,7 +64,11 @@ class RoomCloseDuringQueryTest {
             "precondition: the statement ended less than $MIN_OVERLAP_MS ms after close() began; $seen",
             seen.statementEnd!! - seen.closeStart >= MIN_OVERLAP_MS,
         )
-        assertTrue("close() returned before the running statement ended; $seen", seen.closeEnd!! >= seen.statementEnd - TOLERANCE_MS)
+        assertTrue(
+            "close() returned less than $TOLERANCE_MS ms before the running statement ended: Room's close() now waits " +
+                "for it, so DEC-107 and db-lifecycle.md § Exclusive mode step 4 must be revisited; $seen",
+            seen.statementEnd - seen.closeEnd!! > TOLERANCE_MS,
+        )
     }
 
     @Test
@@ -78,12 +78,8 @@ class RoomCloseDuringQueryTest {
         assertEquals("the running statement did not complete with its full count; $seen", FULL_COUNT, seen.statementOutcome)
     }
 
-    @Ignore(
-        "Contradicted on the Poco F7 (T22): a -wal was present when close() returned, 2 to 3 ms after it began, " +
-            "while the cancelled statement still ran; decision pending",
-    )
     @Test
-    fun close_whileACancelledQueryRunsInSqlite_leavesNoWal() {
+    fun close_whileACancelledQueryRunsInSqlite_keepsTheWalUntilTheStatementEnds() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         // Room's AUTOMATIC mode falls back to a rollback journal on low-RAM devices (DEC-89): no -wal to watch there.
         assumeFalse(checkNotNull(context.getSystemService<ActivityManager>()).isLowRamDevice)
@@ -93,7 +89,17 @@ class RoomCloseDuringQueryTest {
         assertEquals("precondition: the live instance's journal mode; $seen", "wal", seen.journalMode)
         assertTrue("precondition: no -wal existed before close(); $seen", seen.walBeforeClose)
         assertTrue("close() did not return within $CLOSE_LIMIT_MS ms; $seen", seen.closeEnd != null)
-        assertFalse("a -wal was present when close() returned; $seen", seen.walWhenCloseReturned)
+        assertTrue(
+            "no -wal was present when close() returned: Room's close() now waits for the running statement, so " +
+                "DEC-107 and db-lifecycle.md § Exclusive mode step 4 must be revisited; $seen",
+            seen.walWhenCloseReturned,
+        )
+        assertTrue("precondition: the cancelled query's coroutine did not complete; $seen", seen.queryCompleted)
+        assertTrue(
+            "the -wal was still present $WAL_GONE_LIMIT_MS ms after the cancelled query completed, so it is not left " +
+                "only while the abandoned statement runs; $seen",
+            seen.walGoneAt != null,
+        )
     }
 
     /** What the scene showed; [toString] is the observed timeline every failure message carries. */
@@ -107,12 +113,15 @@ class RoomCloseDuringQueryTest {
         val walWhenCloseReturned: Boolean,
         val statementEnd: Long?,
         val statementOutcome: String?,
+        val queryCompleted: Boolean,
+        val walGoneAt: Long?,
     ) {
         override fun toString() = "observed: journal_mode=$journalMode, -wal before close=$walBeforeClose, " +
             "statement running when close() began=$runningAtClose, close() began at +$closeStart ms and returned at " +
             "${closeEnd?.let { "+$it ms" } ?: "never"} (error: ${closeError ?: "none"}), -wal when close() returned=" +
             "$walWhenCloseReturned, statement ended at ${statementEnd?.let { "+$it ms" } ?: "never"} " +
-            "(${statementOutcome ?: "no outcome"})"
+            "(${statementOutcome ?: "no outcome"}), query coroutine completed=$queryCompleted, -wal seen gone at " +
+            (walGoneAt?.let { "+$it ms" } ?: "never")
     }
 
     private fun closeDuringRunningQuery(): Observed {
@@ -163,6 +172,10 @@ class RoomCloseDuringQueryTest {
             }
             closer.join(CLOSE_LIMIT_MS)
             runBlocking { withTimeoutOrNull(CLOSE_LIMIT_MS) { runCatching { query.await() } } }
+            val queryCompleted = query.isCompleted
+            // Once the abandoned statement has handed its connection back, the closed pool closes that last connection,
+            // and SQLite checkpoints and removes the -wal.
+            val walGoneAt = if (queryCompleted) walGoneWithin(wal, WAL_GONE_LIMIT_MS, ::now) else null
 
             val seen = Observed(
                 journalMode = journalMode,
@@ -174,6 +187,8 @@ class RoomCloseDuringQueryTest {
                 walWhenCloseReturned = walWhenCloseReturned.get(),
                 statementEnd = statementEnd.get().takeIf { it >= 0 },
                 statementOutcome = statementOutcome.get(),
+                queryCompleted = queryCompleted,
+                walGoneAt = walGoneAt,
             )
             // Without an overlap the probe would show nothing about a running statement.
             assertTrue("precondition: the statement ended before close() began; $seen", seen.runningAtClose)
@@ -182,6 +197,16 @@ class RoomCloseDuringQueryTest {
         } finally {
             scope.cancel()
         }
+    }
+
+    /** Polls for [wal] to be gone, at most [limitMs]; returns the [now] at which it was first seen gone, or null. */
+    private fun walGoneWithin(wal: File, limitMs: Long, now: () -> Long): Long? {
+        val deadline = now() + limitMs
+        while (wal.exists()) {
+            if (now() >= deadline) return null
+            Thread.sleep(POLL_MS)
+        }
+        return now()
     }
 
     /** Runs [LongQuery] with [bound] on Room's reader connection, the path of a DAO query. */
@@ -205,7 +230,14 @@ class RoomCloseDuringQueryTest {
         const val START_LIMIT_MS = 10_000L
         const val CLOSE_LIMIT_MS = 20_000L
 
-        /** The statement's end is stamped after SQLite hands its connection back, so a waiting close may return first. */
+        /** How long the `-wal` may outlive the completed query: the last connection's close removes it at once. */
+        const val WAL_GONE_LIMIT_MS = 2_000L
+        const val POLL_MS = 10L
+
+        /**
+         * The statement's end is stamped after SQLite hands its connection back, so a `close()` that waited for the
+         * statement may still return up to this long before the stamp; only a larger gap shows that it did not wait.
+         */
         const val TOLERANCE_MS = 200L
 
         /**
