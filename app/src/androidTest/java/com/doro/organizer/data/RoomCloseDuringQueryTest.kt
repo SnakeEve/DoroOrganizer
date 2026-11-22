@@ -40,10 +40,12 @@ import org.junit.runner.RunWith
  * The scene: the live instance from the production `buildRoom` runs [LongQuery] (about [QUERY_MS]) through Room's
  * reader connection on `Dispatchers.IO`, as a DAO flow query does; [RUNNING_MS] into the statement its coroutine is
  * cancelled, as `flatMapLatest` cancels a flow, and `close()` is called on another thread. The expectation pinned here
- * is the wait: `close()` returns only once the running statement has ended, the statement itself completes with its
- * full result, and no `-wal` is left when `close()` returns. Every failure message carries the observed timeline
- * (milliseconds from the statement's start, the statement's outcome as a class name, the `-wal` presence); no user
- * data exists in this scene (DEC-70).
+ * is the wait: `close()` returns only once the running statement has ended, and no `-wal` is left when `close()`
+ * returns. The docs item rests on those two tests. The third, that the statement completes with its full result,
+ * pins a separate property the docs do not ask about (`close()` does not abort a running statement): it passes whether
+ * `close()` waits or returns at once, because a pool closes a connection that is in use only when it is released.
+ * Every failure message carries the observed timeline (milliseconds from the statement's start, the statement's
+ * outcome as a class name, the `-wal` presence); no user data exists in this scene (DEC-70).
  */
 @RunWith(AndroidJUnit4::class)
 class RoomCloseDuringQueryTest {
@@ -56,7 +58,12 @@ class RoomCloseDuringQueryTest {
 
         assertTrue("close() did not return within $CLOSE_LIMIT_MS ms; $seen", seen.closeEnd != null)
         assertEquals("close() threw; $seen", null, seen.closeError)
-        assertTrue("close() returned before the running statement ended; $seen", seen.closeEnd!! >= seen.statementEnd!! - TOLERANCE_MS)
+        // A statement that ends within the tolerance after close() began could not tell a wait from none.
+        assertTrue(
+            "precondition: the statement ended less than $MIN_OVERLAP_MS ms after close() began; $seen",
+            seen.statementEnd!! - seen.closeStart >= MIN_OVERLAP_MS,
+        )
+        assertTrue("close() returned before the running statement ended; $seen", seen.closeEnd!! >= seen.statementEnd - TOLERANCE_MS)
     }
 
     @Test
@@ -191,5 +198,12 @@ class RoomCloseDuringQueryTest {
 
         /** The statement's end is stamped after SQLite hands its connection back, so a waiting close may return first. */
         const val TOLERANCE_MS = 200L
+
+        /**
+         * How long the statement must still run after `close()` began, far above [TOLERANCE_MS], so a `close()` that
+         * does not wait shows a gap far larger than the tolerance. The calibrated statement leaves about
+         * [QUERY_MS] - [RUNNING_MS].
+         */
+        const val MIN_OVERLAP_MS = 1_000L
     }
 }

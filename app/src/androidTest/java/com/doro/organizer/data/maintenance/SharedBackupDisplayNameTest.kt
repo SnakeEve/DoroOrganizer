@@ -14,8 +14,6 @@ import com.doro.organizer.testing.maintenanceFiles
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.test.runTest
 import org.junit.After
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -83,13 +81,19 @@ class SharedBackupDisplayNameTest {
         val result = setup.maintenance.backupForShare(null)
         assertTrue("backupForShare did not succeed: ${result.javaClass.simpleName}", result is AppResult.Ok)
         val shared = (result as AppResult.Ok).value as MaintenanceResult.BackupShared
-        assertEquals(backupFileName(setup.time.today()), shared.displayName)
+        // Booleans with constant messages: an equality assertion would print the backup names (DEC-70).
+        assertTrue("displayName is not the dated backup name", shared.displayName == backupFileName(setup.time.today()))
         // Without this the test could not tell the four-argument getUriForFile from the three-argument one.
-        assertNotEquals(onDiskName(), shared.displayName)
+        assertTrue("displayName equals the random on-disk name", onDiskName() != shared.displayName)
         return shared
     }
 
-    private fun onDiskName(): String = files.shareDir.listFiles()!!.single().name
+    /** The name of the single file in the share directory; a failure states the file count, never a name. */
+    private fun onDiskName(): String {
+        val names = files.shareDir.listFiles()?.map { it.name }
+        assertTrue("share directory unreadable or not one file; count=${names?.size}", names?.size == 1)
+        return names!!.single()
+    }
 
     /** The single row's DISPLAY_NAME, or an [Observed] that says why there is none. */
     private fun readDisplayName(cursor: Cursor?): Observed {

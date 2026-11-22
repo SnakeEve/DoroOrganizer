@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.data.db.AppDatabase
 import com.doro.organizer.testing.SENTINEL
+import com.doro.organizer.testing.SetupProbeRecord
 import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestKey
 import com.doro.organizer.testing.TestRows
@@ -14,6 +15,7 @@ import com.doro.organizer.testing.readOnThreads
 import com.doro.organizer.testing.stringsOf
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeFalse
 import org.junit.Assume.assumeTrue
@@ -24,14 +26,13 @@ import org.junit.runner.RunWith
 /**
  * Setup probes (SPEC T22) for db-lifecycle.md § Room builder, "Verify at setup": "`JournalMode.TRUNCATE` makes
  * sqlcipher-android open a single non-WAL connection" and "which `PRAGMA journal_mode` a temporary instance reports,
- * and which sidecar files exist after `close()`". The instance is production's `buildRoom(…, temporary = true)`.
+ * and which sidecar files exist after `close()` (a zero-length `-journal` is expected and tolerated; a non-empty one or
+ * a `-wal` would be a defect)". The instance is production's `buildRoom(…, temporary = true)`.
  *
- * The exact mode pinned is `delete`: in open-helper-factory mode Room 2.8.5 only calls
- * `setWriteAheadLoggingEnabled(false)` for `TRUNCATE` (its `PRAGMA journal_mode = TRUNCATE` belongs to the driver
- * path), and sqlcipher-android then applies its default journal mode DELETE, as on a raw connection; DELETE removes
- * the `-journal` after every transaction, so no sidecar is left after `close()`. If the phone reports `truncate`, a
- * zero-length `-journal` stays, which the design tolerates (db-lifecycle.md § Target verification): the failure then
- * changes what the docs record, not the design. A failure states the observed mode, sidecars or count and is reported.
+ * The docs leave the exact mode open, so the tests assert what they require (the mode is not `wal`, no `-wal`, any
+ * `-journal` has length 0) and write the observed mode and sidecars through [SetupProbeRecord], whatever they are: a
+ * `truncate` with a zero-length `-journal` and a `delete` with none both pass and are both recorded. A failure states
+ * the observed mode, sidecars or count and is reported.
  */
 @RunWith(AndroidJUnit4::class)
 class TemporaryInstanceJournalTest {
@@ -42,14 +43,14 @@ class TemporaryInstanceJournalTest {
     private val deviceKey = TestKey.Raw(ByteArray(32) { (it * 11 + 2).toByte() })
 
     @Test
-    fun temporary_onNewFile_reportsDelete_andLeavesNoSidecar() {
+    fun temporary_onNewFile_reportsANonWalMode_andLeavesNoWalAndNoNonEmptyJournal() {
         val file = databases.file("staged.db")
 
-        assertDeleteModeAndNoSidecar(file, TestKey.Plain)
+        assertNonWalModeAndTolerableSidecars(file, TestKey.Plain, "temporary instance on a new file")
     }
 
     @Test
-    fun temporary_onFileTheLiveInstanceLeftInWal_reportsDelete_andLeavesNoSidecar() {
+    fun temporary_onFileTheLiveInstanceLeftInWal_reportsANonWalMode_andLeavesNoWalAndNoNonEmptyJournal() {
         val file = databases.file("staged.db")
         databases.room(file, deviceKey).run {
             val mode = openHelper.writableDatabase.stringsOf("PRAGMA journal_mode")
@@ -57,7 +58,7 @@ class TemporaryInstanceJournalTest {
             assumeTrue("the live instance uses WAL on this device (DEC-89)", mode == listOf("wal"))
         }
 
-        assertDeleteModeAndNoSidecar(file, deviceKey)
+        assertNonWalModeAndTolerableSidecars(file, deviceKey, "temporary instance on a file the live instance left in WAL")
     }
 
     @Test
@@ -75,20 +76,21 @@ class TemporaryInstanceJournalTest {
         assertEquals("connections of the temporary instance after concurrent reads", 1, staged)
     }
 
-    private fun assertDeleteModeAndNoSidecar(file: File, key: TestKey) {
+    private fun assertNonWalModeAndTolerableSidecars(file: File, key: TestKey, probe: String) {
         val staged = databases.room(file, key, temporary = true)
         val sql = staged.openHelper.writableDatabase
         val mode = sql.stringsOf("PRAGMA journal_mode")
         TestRows(sql).person(SENTINEL, 1)
         staged.close()
-
-        assertEquals("journal_mode of the temporary instance", listOf("delete"), mode)
         val sidecars = listOf("-journal", "-wal", "-shm").map { File(file.path + it) }.filter(File::exists)
-        assertEquals(
-            "sidecars after the temporary instance closed",
-            emptyList<String>(),
-            sidecars.map { "${it.name.removePrefix(file.name)} (${it.length()} bytes)" },
-        )
+        val observed = "journal_mode=$mode, sidecars after close()=" +
+            sidecars.map { "${it.name.removePrefix(file.name)} (${it.length()} bytes)" }
+        SetupProbeRecord.record(probe, observed)
+
+        assertTrue("journal_mode of the temporary instance is not one non-wal mode; $observed", mode.size == 1 && mode.single() != "wal")
+        assertFalse("a -wal exists after the temporary instance closed; $observed", File(file.path + "-wal").exists())
+        val journal = File(file.path + "-journal")
+        assertTrue("a non-empty -journal exists after the temporary instance closed; $observed", !journal.exists() || journal.length() == 0L)
     }
 
     /** Opens [room], writes one row, reads on several threads, and counts the connections open on [file]. */

@@ -11,6 +11,7 @@ import com.doro.organizer.data.SqlcipherEngine
 import com.doro.organizer.data.buildRoom
 import com.doro.organizer.data.db.AppDatabase
 import java.io.File
+import java.io.RandomAccessFile
 import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SQLiteDatabase
@@ -143,9 +144,18 @@ class TestDatabases(private val keyBytes: (TestKey) -> ByteArray = TestKey::byte
 
     /**
      * As [raw], but read-only: sqlcipher-android neither switches the journal mode nor writes `android_metadata` on
-     * a read-only connection, so a check through it leaves [file] as it found it. The rule closes it after the test.
+     * a read-only connection. Only for a file in rollback-journal mode: on a file whose header says WAL, SQLite creates
+     * a `-wal` and a `-shm` even read-only and cannot remove them, so a later "no `-wal`" check would see sidecars this
+     * connection made. A plaintext file in WAL mode (header bytes 18-19 = 2) fails here; an encrypted header cannot be
+     * read, so the caller keeps to the rule. The rule closes it after the test.
      */
-    fun readOnly(file: File, key: TestKey): SQLiteDatabase = open(file, key, SQLiteDatabase.OPEN_READONLY)
+    fun readOnly(file: File, key: TestKey): SQLiteDatabase {
+        if (key == TestKey.Plain && file.length() >= 20) {
+            val versions = RandomAccessFile(file, "r").use { f -> f.seek(18); listOf(f.read(), f.read()) }
+            check(2 !in versions) { "readOnly is for rollback-journal files; header bytes 18-19 are $versions (2 = WAL)" }
+        }
+        return open(file, key, SQLiteDatabase.OPEN_READONLY)
+    }
 
     private fun open(file: File, key: TestKey, mode: Int): SQLiteDatabase {
         val bytes = keyBytes(key)
