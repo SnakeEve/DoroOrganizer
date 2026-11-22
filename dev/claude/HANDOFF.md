@@ -19,7 +19,7 @@ For Claude Code on any machine that continues this build, and for the owner. Rea
 
 ## 1. Where things stand
 
-- **Done:** T1–T22, T24, T25 and T26, built and committed locally; nothing is pushed yet. T27 waits for the owner's key.
+- **Done:** T1–T22, T24, T25 and T26, built and committed; `main` is pushed to github.com/SnakeEve/DoroOrganizer (private) as of 2026-11-22, at the owner's request. T27 waits for the owner's key.
   - T1–T14: the whole non-UI core: data layer, KeyVault, fingerprint slot, DbMaintenance (backup, key changes, restore), the crash matrix and SessionGate.
   - T15–T21: the UI shell and gate screens, the note list with its five perspectives, selection mode, the editor and picker, Settings, keyboard privacy with `SecureDialogWindow` on every dialog, and release hardening.
   - T24: the CS-29 fix (DEC-98).
