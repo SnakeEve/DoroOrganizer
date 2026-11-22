@@ -2,6 +2,7 @@ package com.doro.organizer.data.maintenance
 
 import android.database.sqlite.SQLiteFullException
 import android.net.Uri
+import android.system.OsConstants
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.core.result.AppError
@@ -24,6 +25,7 @@ import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.maintenanceFiles
 import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.testing.seed
+import com.doro.organizer.testing.syncFailure
 import java.io.File
 import java.io.IOException
 import java.security.KeyStore
@@ -185,6 +187,38 @@ class MaintenanceFailureTest {
             setup.hook.clear()
             setup.restart() // the next startup finishes what the failed step left; a KEK left by DELETE_KEK stays (CS-13)
             assertEquals("$step", setOf(before.generation + 1), files.generationsOnDisk().keys)
+        }
+    }
+
+    /**
+     * Q16 (db-lifecycle.md § Generation commit): a key change whose sync of the new key-state fails is `NotCommitted`
+     * and classified by that failure like the hook's at `COMMIT` (§ Failure classification: `Unexpected`, and
+     * `StorageFull` for `ENOSPC`). The key-state is byte-identical with no `db-state.json.new` left, the new generation
+     * is deleted, the previous one is live again and opens after a restart, and the content is unchanged.
+     */
+    @Test
+    fun aKeyChangeWhoseKeyStateSyncFails_isNotCommitted_andThePreviousGenerationStaysLive() = runFailureTest {
+        seeded()
+        val failures = listOf(OsConstants.EIO to AppError.Unexpected, OsConstants.ENOSPC to AppError.StorageFull)
+        for ((errno, expected) in failures) {
+            val case = "errno $errno"
+            val unchanged = snapshot()
+            val previous = setup.state().generation
+            val syncs = vaults.stateSync.calls()
+            vaults.stateSync.failNext(syncFailure(errno))
+
+            val result = setup.maintenance.changeKey(KeyMode.DEVICE, null, null)
+
+            assertEquals(case, AppResult.Err(expected), result)
+            assertEquals("$case: the commit did not run the armed sync", 0, vaults.stateSync.pending())
+            assertEquals("$case: a sync other than the commit's ran", syncs + 1, vaults.stateSync.calls())
+            assertFalse("$case: db-state.json.new was left behind", File(vaults.stateFile.path + ".new").exists())
+            assertEquals(case, setOf(previous), files.generationsOnDisk().keys)
+            assertEquals(case, previous, (setup.holder.state.value as HolderState.Open).generation)
+            assertPreviousStateInForce(case, unchanged, startedAt = true)
+            setup.restart() // a cold start opens the previous generation with the previous key
+            assertEquals(case, previous, setup.state().generation)
+            assertEquals(case, unchanged.content, setup.dump())
         }
     }
 
