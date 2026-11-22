@@ -199,7 +199,9 @@ class DefaultDatabaseHolder(
         Reopen.Same -> openLocked(generation, key)
         is Reopen.Generation -> {
             val next = directive.newKey?.also {
-                key.fill(0) // the old instance and every maintenance connection are closed
+                // The old instance and every maintenance connection are closed; only a statement that outlived the flow
+                // drain may still hold a connection keyed from it, which needs the array no more (DEC-107 (1)).
+                key.fill(0)
                 liveKey = it
             } ?: key
             if (directive.newData) dataset += 1

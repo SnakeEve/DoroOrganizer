@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.data.db.AppDatabase
 import com.doro.organizer.testing.LongQuery
+import com.doro.organizer.testing.SetupProbeRecord
 import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.stringsOf
 import java.io.File
@@ -39,14 +40,16 @@ import org.junit.runner.RunWith
  *
  * The scene: the live instance from the production `buildRoom` runs [LongQuery] (about [QUERY_MS]) through Room's
  * reader connection on `Dispatchers.IO`, as a DAO flow query does; [RUNNING_MS] into the statement its coroutine is
- * cancelled, as `flatMapLatest` cancels a flow, and `close()` is called on another thread. The tests pin what the
- * Poco F7 showed in T22 (DEC-107 (1)): `close()` does not wait for the running statement but returns at once; the
- * statement is not aborted and completes with its full result, because a pool closes a connection that is in use
- * only when it is released; and the `-wal` is left until that statement has ended. No correctness property depends
- * on this (db-lifecycle.md § Exclusive mode step 4). Should a Room update make `close()` wait, the first two tests
- * fail, and DEC-107 and that step are revisited. Every failure message carries the observed timeline (milliseconds
- * from the statement's start, the statement's outcome as a class name, the `-wal` presence); no user data exists in
- * this scene (DEC-70).
+ * cancelled, as `flatMapLatest` cancels a flow, and `close()` is called on another thread. The tests pin DEC-107 (1):
+ * `close()` does not wait for the running statement but returns at once; the statement is not aborted and completes
+ * with its full result, because a pool closes a connection that is in use only when it is released; and the `-wal`
+ * is still present when `close()` returns and goes once the abandoned statement's query has completed, because the
+ * closed pool closes that last connection when it is released (`releaseConnection` of sqlcipher-android 4.20.0's
+ * `SQLiteConnectionPool`). No correctness property depends on this (db-lifecycle.md § Exclusive mode step 4). Should
+ * a Room update make `close()` wait, the first and the third test fail, and DEC-107 and that step are revisited; the
+ * second test passes either way. Every failure message carries the observed timeline (milliseconds from the
+ * statement's start, the statement's outcome as a class name, the `-wal` presence), and every run records it through
+ * [SetupProbeRecord]; no user data exists in this scene (DEC-70).
  */
 @RunWith(AndroidJUnit4::class)
 class RoomCloseDuringQueryTest {
@@ -55,7 +58,7 @@ class RoomCloseDuringQueryTest {
 
     @Test
     fun close_whileACancelledQueryRunsInSqlite_returnsBeforeTheStatementEnds() {
-        val seen = closeDuringRunningQuery()
+        val seen = closeDuringRunningQuery("returnsBeforeTheStatementEnds")
 
         assertTrue("close() did not return within $CLOSE_LIMIT_MS ms; $seen", seen.closeEnd != null)
         assertEquals("close() threw; $seen", null, seen.closeError)
@@ -73,7 +76,7 @@ class RoomCloseDuringQueryTest {
 
     @Test
     fun close_whileACancelledQueryRunsInSqlite_letsTheStatementCompleteWithItsResult() {
-        val seen = closeDuringRunningQuery()
+        val seen = closeDuringRunningQuery("letsTheStatementCompleteWithItsResult")
 
         assertEquals("the running statement did not complete with its full count; $seen", FULL_COUNT, seen.statementOutcome)
     }
@@ -84,11 +87,17 @@ class RoomCloseDuringQueryTest {
         // Room's AUTOMATIC mode falls back to a rollback journal on low-RAM devices (DEC-89): no -wal to watch there.
         assumeFalse(checkNotNull(context.getSystemService<ActivityManager>()).isLowRamDevice)
 
-        val seen = closeDuringRunningQuery()
+        val seen = closeDuringRunningQuery("keepsTheWalUntilTheStatementEnds")
 
         assertEquals("precondition: the live instance's journal mode; $seen", "wal", seen.journalMode)
         assertTrue("precondition: no -wal existed before close(); $seen", seen.walBeforeClose)
         assertTrue("close() did not return within $CLOSE_LIMIT_MS ms; $seen", seen.closeEnd != null)
+        // A statement that ends while close() runs gives its connection back in time for the -wal to go with close():
+        // that would read as a close() that waited.
+        assertTrue(
+            "precondition: the statement ended less than $MIN_OVERLAP_MS ms after close() began; $seen",
+            seen.statementEnd!! - seen.closeStart >= MIN_OVERLAP_MS,
+        )
         assertTrue(
             "no -wal was present when close() returned: Room's close() now waits for the running statement, so " +
                 "DEC-107 and db-lifecycle.md § Exclusive mode step 4 must be revisited; $seen",
@@ -124,7 +133,8 @@ class RoomCloseDuringQueryTest {
             (walGoneAt?.let { "+$it ms" } ?: "never")
     }
 
-    private fun closeDuringRunningQuery(): Observed {
+    /** Plays the scene and records what it showed under `RoomCloseDuringQueryTest#`[probe] before any precondition. */
+    private fun closeDuringRunningQuery(probe: String): Observed {
         val db = databases.create()
         val support = db.openHelper.writableDatabase
         val journalMode = support.stringsOf("PRAGMA journal_mode").singleOrNull()
@@ -190,6 +200,7 @@ class RoomCloseDuringQueryTest {
                 queryCompleted = queryCompleted,
                 walGoneAt = walGoneAt,
             )
+            SetupProbeRecord.record("RoomCloseDuringQueryTest#$probe", "$seen")
             // Without an overlap the probe would show nothing about a running statement.
             assertTrue("precondition: the statement ended before close() began; $seen", seen.runningAtClose)
             assertTrue("precondition: the statement did not end within ${2 * CLOSE_LIMIT_MS} ms; $seen", seen.statementEnd != null)

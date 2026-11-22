@@ -43,6 +43,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -286,12 +287,14 @@ class DatabaseHolderTest {
 
     /**
      * The timeout path through `close()` (L-17, db-lifecycle.md § Close step 3): a collection that ignores its
-     * cancellation is abandoned after the drain timeout, and `close()` still closes Room and zeroes the key.
+     * cancellation is abandoned after the drain timeout, and `close()` still closes Room (no descriptor of the live
+     * file is left: the stuck collection holds no connection) and zeroes the key.
      */
     @Test
     fun close_flowThatIgnoresCancellation_isAbandonedAfterTheDrainTimeout() = runOnDefault {
         val holder = databases.holder(TestKey.Raw(ByteArray(32) { 4 }))
         val liveKey = keys.last()
+        val file = databases.files.live(GENERATION)
         val subscribed = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val collector = launch {
@@ -315,12 +318,14 @@ class DatabaseHolderTest {
         val stateAfterClose: HolderState
         val countedAfterClose: Int
         val keyZeroAfterClose: Boolean
+        val descriptorsAfterClose: Int
         try {
             returned = withTimeoutOrNull(LIMIT) { closing.await() } != null
             elapsedMs = (System.nanoTime() - start) / 1_000_000
             stateAfterClose = holder.state.value
             countedAfterClose = open.activeFlows.get()
             keyZeroAfterClose = liveKey.all { it == 0.toByte() }
+            descriptorsAfterClose = openDescriptors(file)
         } finally {
             release.complete(Unit) // before any assertion: a failure must not leave the collection, and the test, stuck
         }
@@ -334,14 +339,16 @@ class DatabaseHolderTest {
         )
         assertSame(HolderState.Closed, stateAfterClose)
         assertEquals("the stuck collection was left behind", 1, countedAfterClose)
+        assertEquals("Room was not closed after the drain timeout (open descriptors)", 0, descriptorsAfterClose)
         assertTrue("the live key is zeroed by close", keyZeroAfterClose)
     }
 
     /**
      * DEC-107: a Room flow on the generated DAO path ([roomFlow]) whose statement is running in SQLite when exclusive
-     * mode cancels it ends only after the statement has returned, so the flow drain (db-lifecycle.md § Exclusive mode
-     * step 4) waits for the statement, and Room closes with no connection in use and leaves no `-wal`. It pins the Room
-     * behavior the drain relies on, so it passes with or without the drain in `close()`.
+     * mode cancels it ends only after the statement has returned (the flow's own end is stamped, so this holds
+     * whatever Room's `close()` does), so the flow drain (db-lifecycle.md § Exclusive mode step 4) waits for the
+     * statement, and Room closes with no connection in use and leaves no `-wal`. It pins the Room behavior the drain
+     * relies on, so it passes with or without the drain in `close()`.
      */
     @Test
     fun exclusive_aFlowWhoseStatementIsRunningInSqlite_drainsOnlyAfterTheStatementReturns_andLeavesNoWal() = runOnDefault {
@@ -351,6 +358,7 @@ class DatabaseHolderTest {
         // Recorded in the block and asserted after the preconditions, which need the statement's end.
         var blockStart = NOT_YET
         var endAtBlock: Long? = null
+        var flowEndAtBlock: Long? = null
         var flowsAtBlock = -1
         var walAtBlock = true
 
@@ -360,6 +368,7 @@ class DatabaseHolderTest {
         val result = holder.exclusive {
             blockStart = statement.now()
             endAtBlock = statement.endedAt()
+            flowEndAtBlock = statement.flowEndedAt()
             flowsAtBlock = open.activeFlows.get()
             walAtBlock = statement.wal.exists()
             Reopen.Same
@@ -372,6 +381,11 @@ class DatabaseHolderTest {
         statement.assertPreconditions(drainStart, endAtDrain, walAtDrain, timeline)
         assertEquals(OpenResult.Opened, result)
         assertTrue("the exclusive block began while the statement was still running; $timeline", endAtBlock != null)
+        assertTrue("the exclusive block began before the flow had ended; $timeline", flowEndAtBlock != null)
+        assertTrue(
+            "the flow ended before its statement had returned, or after the block began; $timeline",
+            flowEndAtBlock!! >= endAtBlock!! && flowEndAtBlock!! <= blockStart,
+        )
         assertEquals("a flow of the instance had not ended when the block began; $timeline", 0, flowsAtBlock)
         assertFalse("a -wal existed when the block began; $timeline", walAtBlock)
         statement.collector.cancelAndJoin()
@@ -379,7 +393,8 @@ class DatabaseHolderTest {
 
     /**
      * DEC-107, db-lifecycle.md § Close step 3: `close()` runs the same flow drain, so it returns only after a Room
-     * flow's statement that was running in SQLite has returned, and no `-wal` is left when it returns.
+     * flow's statement that was running in SQLite has returned and the flow has ended, and no `-wal` is left when it
+     * returns.
      */
     @Test
     fun close_aFlowWhoseStatementIsRunningInSqlite_drainsOnlyAfterTheStatementReturns_andLeavesNoWal() = runOnDefault {
@@ -391,6 +406,7 @@ class DatabaseHolderTest {
         val walAtDrain = statement.wal.exists()
         holder.close()
         val endAtClose = statement.endedAt()
+        val flowEndAtClose = statement.flowEndedAt()
         val closeEnd = statement.now()
         val walAtClose = statement.wal.exists()
         statement.awaitEnd()
@@ -399,6 +415,8 @@ class DatabaseHolderTest {
             "; -wal when the drain began: $walAtDrain, when close() returned: $walAtClose"
         statement.assertPreconditions(drainStart, endAtDrain, walAtDrain, timeline)
         assertTrue("close() returned while the statement was still running; $timeline", endAtClose != null)
+        assertTrue("close() returned before the flow had ended; $timeline", flowEndAtClose != null)
+        assertTrue("the flow ended before its statement had returned; $timeline", flowEndAtClose!! >= endAtClose!!)
         assertFalse("a -wal existed when close() returned; $timeline", walAtClose)
         statement.collector.cancelAndJoin()
     }
@@ -593,8 +611,9 @@ class DatabaseHolderTest {
     /**
      * The scene of the running-statement tests (DEC-107): on a WAL database with a write in its `-wal`, a real Room
      * flow ([roomFlow]) is collected through `observe`; its first statement is [LongQuery], calibrated on this
-     * instance to run about [STATEMENT_MS]. Returns [DRAIN_AFTER_MS] after that statement began, while it is running
-     * in SQLite.
+     * instance to run about [STATEMENT_MS]. The Room flow's own `onCompletion` stamps the flow's end; it runs before
+     * the holder's `onCompletion`, which takes the flow off `activeFlows`. Returns [DRAIN_AFTER_MS] after that
+     * statement began, while it is running in SQLite.
      */
     private suspend fun CoroutineScope.startLongStatement(holder: DatabaseHolder): LongStatement {
         val db = holder.openDatabase()
@@ -604,7 +623,9 @@ class DatabaseHolderTest {
         val wal = walOf(databases.files.live(GENERATION))
         assertTrue("the write sits in the WAL", wal.length() > 0)
         val statement = LongStatement(wal, LongQuery.boundFor(STATEMENT_MS) { db.countTo(it) })
-        statement.collector = launch { holder.observe { roomFlow(it, statement::countOn) }.collect {} }
+        statement.collector = launch {
+            holder.observe { roomFlow(it, statement::countOn).onCompletion { statement.markFlowEnd() } }.collect {}
+        }
         statement.awaitStart()
         delay(DRAIN_AFTER_MS)
         return statement
@@ -651,12 +672,24 @@ class DatabaseHolderTest {
         private val runs = AtomicInteger()
         private val startMs = AtomicLong(NOT_YET)
         private val endMs = AtomicLong(NOT_YET)
+        private val flowEndMs = AtomicLong(NOT_YET)
         private val outcome = AtomicReference<String>()
 
         fun now(): Long = (System.nanoTime() - origin) / 1_000_000
 
         /** When the statement returned, or null while it runs. */
         fun endedAt(): Long? = endMs.get().takeIf { it != NOT_YET }
+
+        /** When the first instance of the flow ended, or null while it runs. */
+        fun flowEndedAt(): Long? = flowEndMs.get().takeIf { it != NOT_YET }
+
+        /**
+         * The Room flow's `onCompletion`. Only the first instance's end counts: a later instance (on a reopened
+         * instance) ends when the test cancels its collector.
+         */
+        fun markFlowEnd() {
+            flowEndMs.compareAndSet(NOT_YET, now())
+        }
 
         /** The flow's query: runs on Room's query thread, inside the flow's coroutine. */
         fun countOn(connection: SQLiteConnection): Long {
@@ -682,9 +715,13 @@ class DatabaseHolderTest {
             withTimeout(LIMIT) { while (startMs.get() == NOT_YET) delay(POLL_MS) }
         }
 
-        /** Waits for the statement's end, at most [LIMIT], so that the preconditions see the whole timeline. */
+        /**
+         * Waits for the statement's end and then for the flow's, each at most [LIMIT], so that the preconditions and
+         * the timeline see the whole picture.
+         */
         suspend fun awaitEnd() {
             withTimeoutOrNull(LIMIT) { while (endMs.get() == NOT_YET) delay(POLL_MS) }
+            withTimeoutOrNull(LIMIT) { while (flowEndMs.get() == NOT_YET) delay(POLL_MS) }
         }
 
         /**
@@ -711,14 +748,17 @@ class DatabaseHolderTest {
             )
         }
 
-        /** [moments] and the statement's end, in milliseconds from the statement's start. */
+        /** [moments], the statement's end and the flow's end, in milliseconds from the statement's start. */
         fun timeline(vararg moments: Pair<String, Long>): String {
             fun fromStart(at: Long?): String {
                 if (at == null || at == NOT_YET) return "never"
                 return (at - startMs.get()).let { if (it < 0) "$it" else "+$it" }
             }
-            return (moments.map { (what, at) -> "$what at ${fromStart(at)}" } +
-                "the statement ended at ${fromStart(endedAt())} (${outcome.get() ?: "no outcome"})")
+            val ends = listOf(
+                "the statement ended at ${fromStart(endedAt())} (${outcome.get() ?: "no outcome"})",
+                "the flow ended at ${fromStart(flowEndedAt())}",
+            )
+            return (moments.map { (what, at) -> "$what at ${fromStart(at)}" } + ends)
                 .joinToString(prefix = "timeline in ms from the statement's start: ")
         }
     }

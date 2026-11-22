@@ -58,7 +58,10 @@ sealed interface HolderState {
 
     /** Identity equality on purpose: a reopen of the same generation is a new state, so observers re-subscribe. */
     class Open(val db: AppDatabase, val generation: Long, val dataset: Long) : HolderState {
-        /** The `observe` collections currently running on [db]; exclusive mode waits for it to reach 0. */
+        /**
+         * The `observe` collections currently running on [db]; the flow drain of exclusive mode and of `close()` waits
+         * (at most 2 s) for it to reach 0.
+         */
         internal val activeFlows = AtomicInteger()
 
         override fun toString() = "Open(generation=$generation, dataset=$dataset)"

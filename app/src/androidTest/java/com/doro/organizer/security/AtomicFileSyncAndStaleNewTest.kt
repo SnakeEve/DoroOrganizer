@@ -30,18 +30,19 @@ import org.junit.runner.RunWith
 
 /**
  * Setup probes for the two `androidx.core.util.AtomicFile` (core 1.19.1) behaviors that docs/db-lifecycle.md
- * § Generation commit ("Verify at setup … Still open: the sync in `finishWrite()` and that `readFully()` deletes a
- * stale `.new`"), docs/security.md § 3.5 ("`finishWrite()` (it syncs before renaming)"; "a stale
- * `db-state.json.new` is ignored and discarded when the base file exists") and docs/testing.md L-16 rely on:
+ * § Generation commit (its "Verify at setup" item on `AtomicFile`), docs/security.md § 3.5 ("`finishWrite()` (it
+ * syncs before renaming)"; "a stale `db-state.json.new` is ignored and discarded when the base file exists") and
+ * docs/testing.md L-16 rely on:
  *
  * - `finishWrite()` fsyncs the `<name>.new` stream before it renames `.new` over the base file. A sync cannot be seen
  *   in the file afterwards, so the test watches the calls: a StrictMode thread policy with `detectDiskWrites` and a
  *   `penaltyListener` reports every disk write that goes through BlockGuard (`File.renameTo` reaches
- *   `UnixFileSystem.rename`; `FileDescriptor.sync` was expected to reach `BlockGuardOs.fsync`), synchronously and in call order on a
- *   thread without a Looper. A control run first checks that the observer sees an fsync and a rename on this device,
- *   so a missing sync cannot be confused with a blind observer; when it does not, the test is skipped as an
- *   assumption failure. On the Poco F7 (T22) the observer is blind to `FileDescriptor.sync()` (the control saw no
- *   fsync), so there this half stays inconclusive.
+ *   `UnixFileSystem.rename`; `FileDescriptor.sync` was expected to reach `BlockGuardOs.fsync`), synchronously and in
+ *   call order on a thread without a Looper. A control run first checks that the observer sees an fsync and a rename
+ *   on this device, so a missing sync cannot be confused with a blind observer; when it does not, the test is skipped
+ *   as an assumption failure. The sync is verified from the core 1.19.1 bytecode (DEC-107 (4)); this phone's
+ *   StrictMode cannot observe `FileDescriptor.sync()` (the control saw no fsync in T22), so on the Poco F7 the case
+ *   skips by assumption.
  * - `readFully()` deletes a stale `<name>.new` when the base file exists, and returns the base file's bytes; through
  *   `DefaultKeyVault.readState()` the same holds for `db-state.json.new`.
  *
@@ -74,7 +75,7 @@ class AtomicFileSyncAndStaleNewTest {
         }
         // A precondition on the observer, not on AtomicFile: without it the probe cannot answer and is skipped. On the
         // Poco F7 (T22) the control showed [open, write, rename] and no fsync: FileDescriptor.sync() does not reach
-        // BlockGuard there, so the sync in finishWrite() stays unobserved (inconclusive).
+        // BlockGuard there, so the case skips; the sync in finishWrite() is verified from the bytecode (DEC-107 (4)).
         assumeTrue(
             "the StrictMode observer cannot see an fsync followed by a rename on this device; observed=$control",
             control.indexOf(FSYNC) in 0 until control.lastIndexOf(RENAME),

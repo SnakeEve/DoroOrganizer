@@ -21,10 +21,10 @@ import org.junit.runner.RunWith
  * - db-lifecycle.md § Open sequence, "Verify at setup" (5), second half: with `NO_LOCALIZED_COLLATORS` a raw
  *   connection creates no `android_metadata` table. Asserted on production's raw verification `verifyLive` and on
  *   `RawConnections.open`, over a file built without the table, in plain mode and with a key. The same section's note
- *   says the flag is what keeps the connection code from writing the table. That cause is not asserted: as a control,
- *   a test-only connection opened `OPEN_READWRITE` without the flag on the same file, and the table count it leaves
- *   is written through [SetupProbeRecord], so the record states whether the flag or something else (sqlcipher-android
- *   skips the localized-collator setup while its codec is present) prevents the table.
+ *   (DEC-107 (3)) says that on sqlcipher-android 4.20.0 the library's codec check keeps the table out (it skips the
+ *   localized-collator setup while its codec is present) and that the flag states the intent. The control records
+ *   the outcome without the flag: a test-only connection opened `OPEN_READWRITE` without the flag on the same file,
+ *   and the table count it leaves is written through [SetupProbeRecord].
  * - db-lifecycle.md § Room builder, "Verify at setup": whether `createEmptyDatabase` leaves an `android_metadata`
  *   table. The docs leave the answer open ("it is ignored either way"), so the test asserts only that the schema was
  *   created and records the table count.
