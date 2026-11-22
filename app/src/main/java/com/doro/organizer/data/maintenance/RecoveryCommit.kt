@@ -1,7 +1,8 @@
 package com.doro.organizer.data.maintenance
 
 // The steps after a committed Restore or Start fresh (db-lifecycle.md § Restore steps 18–20, § Start fresh steps
-// 6–8). They never undo the commit: a failure is logged by class and left to startup reconciliation.
+// 6–8). They never undo the commit: a failure is logged by class and left to startup reconciliation, except a KEK
+// that a failed `DELETE_KEK` left, which startup keeps for the next encryption to reuse or replace (CS-20, CS-23).
 
 /**
  * `DELETE_OLD` of a commit from a recovery origin: every generation file set except [keep], that is the damaged or

@@ -48,7 +48,8 @@ import org.junit.runner.RunWith
  * testing.md L-14 for Restore, Start fresh and Erase (db-lifecycle.md § Pipeline steps and fault hook): every step of
  * every step-table row (one per operation and origin) fails once with an `IOException` and once with a
  * `SQLiteFullException`. Up to `COMMIT` (Erase: up to `ERASE_KEY_STATE`) the previous state stays in force, keys
- * included; after it the commit stands and the next start finishes what the failed step left. Also the restore's two
+ * included; after it the commit stands and the next start finishes what the failed step left, except a KEK that a
+ * failed `DELETE_KEK` left, which startup keeps for the next encryption (CS-20, CS-23). Also the restore's two
  * key-source guards, the `Unknown` commit outcome and a holder that closes behind a restore from `Ready`. The T12
  * operations' sweeps are `MaintenanceFailureTest`'s.
  */

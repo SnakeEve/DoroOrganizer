@@ -183,7 +183,7 @@ class MaintenanceFailureTest {
             assertEquals(MaintenanceOutcome.Reopened, setup.listener.finished.last())
             assertEquals(content, setup.dump())
             setup.hook.clear()
-            setup.restart() // the next startup finishes what the failed step left
+            setup.restart() // the next startup finishes what the failed step left; a KEK left by DELETE_KEK stays (CS-13)
             assertEquals("$step", setOf(before.generation + 1), files.generationsOnDisk().keys)
         }
     }
