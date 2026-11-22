@@ -1,2 +1,3 @@
 # Room schema versions that shipped in a release (DEC-14, DEC-88): their app/schemas JSON files are frozen.
 # One integer per line; the release checklist (M-20) appends the shipped AppDatabase.VERSION. Checked by config/check-released-schemas.sh.
+1
