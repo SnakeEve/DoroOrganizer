@@ -59,15 +59,15 @@ const val PREVIEW_EXPR = "substr(ltrim(content, $WHITESPACE_CHARS), 1, 300)"
 const val PREVIEW_OF_BOUND_CONTENT = "(SELECT $PREVIEW_EXPR FROM (SELECT :content AS content))"
 
 /**
- * The columns of `NoteRowRaw`: the stored preview, never the content (DEC-24, DEC-106), and the links as JSON arrays
- * of `[id, name]`, because names are free text that may contain any separator (data-layer.md § Rows).
+ * The columns of `NoteRowRaw`: the stored preview, never the content (DEC-24, DEC-106), and the links as
+ * `group_concat` of the linked ids, decimal and separated by `,`, in no defined order, NULL without links (DEC-106).
+ * The names come from `PersonDao.observeNames` and `ProjectDao.observeNames`, so the subqueries read only the
+ * junction tables (data-layer.md § Rows).
  */
 const val ROW_COLUMNS = """n.id, n.preview, n.date, n.checked,
     n.checked_at, n.created_at, n.updated_at,
-    (SELECT json_group_array(json_array(p.id, p.name)) FROM note_persons np
-        JOIN persons p ON p.id = np.person_id WHERE np.note_id = n.id) AS persons_json,
-    (SELECT json_group_array(json_array(j.id, j.name)) FROM note_projects nj
-        JOIN projects j ON j.id = nj.project_id WHERE nj.note_id = n.id) AS projects_json"""
+    (SELECT group_concat(np.person_id, ',') FROM note_persons np WHERE np.note_id = n.id) AS person_ids,
+    (SELECT group_concat(nj.project_id, ',') FROM note_projects nj WHERE nj.note_id = n.id) AS project_ids"""
 
 /** Every note list (data-layer.md § Perspective query). */
 const val ROWS_SQL = "SELECT $ROW_COLUMNS FROM notes n $PERSPECTIVE_WHERE $CANONICAL_ORDER"

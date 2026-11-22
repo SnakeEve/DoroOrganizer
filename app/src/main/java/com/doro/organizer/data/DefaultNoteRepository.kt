@@ -31,22 +31,28 @@ class DefaultNoteRepository(
     private val applicationScope: CoroutineScope,
     private val dispatchers: AppDispatchers,
 ) : NoteRepository {
-    // distinctUntilChanged before the mapping: Room re-runs a query on every write to a table it reads, and an equal
-    // result is neither parsed nor sorted again (data-layer.md § Reactivity).
+    // The rows carry link ids only; the names come from one map per kind, read from the same database instance in
+    // the same observe block, and a list is emitted only once every id resolves (DEC-106, [linkedNoteRows]). Each input
+    // skips an equal result, so Room's re-run on every write to a table it reads maps nothing again; the final
+    // distinctUntilChanged drops the equal list that a names-only change (a new, unlinked entity) or a reopen yields
+    // (data-layer.md § Reactivity).
     override fun observeRows(query: NoteQuery): Flow<List<NoteRow>> =
         databaseHolder.observe { db ->
-            db.noteDao().observeRows(
-                personId = query.personId,
-                projectId = query.projectId,
-                orphanOnly = query.orphanOnly,
-                undatedOnly = query.undatedOnly,
-                fromDay = query.fromDay,
-                toDay = query.toDay,
-                searchPattern = query.searchPattern,
+            linkedNoteRows(
+                rows = db.noteDao().observeRows(
+                    personId = query.personId,
+                    projectId = query.projectId,
+                    orphanOnly = query.orphanOnly,
+                    undatedOnly = query.undatedOnly,
+                    fromDay = query.fromDay,
+                    toDay = query.toDay,
+                    searchPattern = query.searchPattern,
+                ),
+                persons = db.personDao().observeNames(),
+                projects = db.projectDao().observeNames(),
             )
         }
             .distinctUntilChanged()
-            .map { it.toNoteRows() }
             .flowOn(dispatchers.default)
 
     override fun observeMarkedDays(query: NoteQuery, monthFirstDay: Long, monthLastDay: Long): Flow<Set<Long>> =
