@@ -49,7 +49,7 @@ android {
     signingConfigs {
         // DEC-109: the release key lives outside the repository. The owner's ~/.gradle/gradle.properties names it
         // (DORO_RELEASE_STORE_FILE, DORO_RELEASE_STORE_PASSWORD, DORO_RELEASE_KEY_ALIAS, DORO_RELEASE_KEY_PASSWORD); the
-        // values are never printed. Without them the release build stays unsigned, as on any other machine.
+        // values are never printed. Without them the release build signs with the debug key (see release below).
         val releaseStoreFile = providers.gradleProperty("DORO_RELEASE_STORE_FILE").orNull
         if (releaseStoreFile != null) {
             create("release") {
@@ -71,7 +71,9 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfigs.findByName("release")?.let { signingConfig = it } // DEC-109; qa and benchmark keep debug
+            // DEC-109: the owner's release key once configured; until then the debug key (owner, 2026-11-22), so the
+            // release app installs and updates over itself. qa and benchmark keep the debug key.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") // DEC-13
         }
         // qa and benchmark also get the generated rules of doro.test-apk-keep-rules when they host androidTest (DEC-103 (5)).
