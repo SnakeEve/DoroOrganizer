@@ -57,11 +57,11 @@ class TouchTargetSweepTest : ScriptedGateComposeTest() {
     }
 
     /**
-     * The open question's default: a clickable laid out at 24 dp, with room around it, gets 48 dp touch bounds from
-     * Compose and passes; requiring its own layout size to be 48 dp is the alternative the owner may choose.
+     * Q13, DEC-55: a clickable laid out at 24 dp, with room around it, gets 48 dp touch bounds from Compose and passes;
+     * the touch area counts, and its own layout size need not be 48 dp.
      */
     @Test
-    fun aVisibleClickableLaidOutSmallerThan48dp_passes_onItsPaddedTouchBounds_Q13() {
+    fun aVisibleClickableLaidOutSmallerThan48dp_passes_onItsPaddedTouchBounds() {
         showAlone {
             Box(Modifier.size(120.dp), contentAlignment = Alignment.Center) {
                 Box(Modifier.size(24.dp).testTag(SMALL).clickable {})

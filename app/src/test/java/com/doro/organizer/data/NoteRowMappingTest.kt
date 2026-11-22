@@ -33,7 +33,7 @@ class NoteRowMappingTest {
 
     /** Q15 (A), DEC-106 (b): ids name their entities through the maps, and one unresolved id holds the whole list. */
     @Test
-    fun linkIds_resolveThroughTheNameMaps_andARowWaitsForAMissingName_Q15() {
+    fun linkIds_resolveThroughTheNameMaps_andARowWaitsForAMissingName() {
         val persons = mapOf(3L to "Cleo", 17L to "Ann", 5L to "Ann")
         val projects = mapOf(8L to "Zeta", 2L to "Apollo")
         val rows = listOf(raw(id = 1, persons = "17,3,5", projects = "8,2"), raw(id = 2, projects = "2"))

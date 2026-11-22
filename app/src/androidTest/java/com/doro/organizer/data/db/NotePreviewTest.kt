@@ -65,12 +65,12 @@ class NotePreviewTest {
     fun invariantsHold() = assertDbInvariants(sql)
 
     /**
-     * Q15 default (A), DEC-106: the preview is stored when the note is written, from the content bound to that same
+     * Q15 (A), DEC-106: the preview is stored when the note is written, from the content bound to that same
      * statement. The update from `"  a"` to `"b"` stores `"b"`: the subquery reads the bound `:content`, not the row's
      * old content, which an UPDATE's right-hand side would see.
      */
     @Test
-    fun preview_isStoredFromTheBoundContent_onInsertAndUpdate_Q15() = runTest(timeout = 10.seconds) {
+    fun preview_isStoredFromTheBoundContent_onInsertAndUpdate() = runTest(timeout = 10.seconds) {
         val id = insert("  a")
         assertEquals("a", storedPreview(id))
         assertStoredPreviewMatches(id, "insert")
