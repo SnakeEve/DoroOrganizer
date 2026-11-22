@@ -21,8 +21,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Setup probe for docs/db-lifecycle.md § For sharing ("Verify at setup", still open: "that a receiver sees
- * `displayName`"): the Uri that the production share path builds (`DbMaintenance.backupForShare`,
+ * Setup probe (SPEC T22) for docs/db-lifecycle.md § For sharing, the item "that a receiver sees `displayName`"
+ * (recorded there as Verified at setup): the Uri that the production share path builds (`DbMaintenance.backupForShare`,
  * `ShareFiles.publish`, the four-argument `FileProvider.getUriForFile` of androidx.core 1.19.1) answers an
  * `OpenableColumns.DISPLAY_NAME` query with the dated backup name, not with the random on-disk name. A receiving app
  * reads the name exactly so: `ContentResolver.query` on the shared Uri, with the default projection (null) or with
