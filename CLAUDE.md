@@ -29,7 +29,11 @@ Precedence: [docs/decisions.md](docs/decisions.md) > [spec](stakeholder-notepad-
 ./gradlew :app:assembleDebug
 ./gradlew :app:installDebug                # install the debug app (com.doro.organizer.debug) on the phone
 ./gradlew :app:testDebugUnitTest           # JVM tests, pure Kotlin only
-./gradlew :app:connectedDebugAndroidTest   # instrumented, on the phone over USB; wipes only the debug app's data; HyperOS asks to confirm every install
+./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.notAnnotation=com.doro.organizer.testing.PerfTest,com.doro.organizer.testing.RealBiometric
+                                           # instrumented (device-tests, testing.md § 9), on the phone over USB; wipes only the debug app's data;
+                                           # HyperOS asks to confirm every install; without the filter the @RealBiometric tests wait 60 s each for a finger and fail
+sh dev/claude/phone-cooldown.sh && ./gradlew :app:connectedBenchmarkAndroidTest -PtestBuildType=benchmark -Pandroid.testInstrumentationRunnerArguments.annotation=com.doro.organizer.testing.PerfTest
+                                           # perf on the benchmark build, only on a cool phone (DEC-108)
 ./gradlew :app:lintRelease
 ./gradlew :app:verificationGates           # manifest, 16 KB pages, release logs, banned deps (+ build-logic tests)
 sh config/check-schemas.sh                 # Room schema JSON gate
