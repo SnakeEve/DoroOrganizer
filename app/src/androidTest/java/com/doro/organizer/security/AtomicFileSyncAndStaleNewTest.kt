@@ -23,6 +23,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,10 +36,12 @@ import org.junit.runner.RunWith
  *
  * - `finishWrite()` fsyncs the `<name>.new` stream before it renames `.new` over the base file. A sync cannot be seen
  *   in the file afterwards, so the test watches the calls: a StrictMode thread policy with `detectDiskWrites` and a
- *   `penaltyListener` reports every disk write that goes through BlockGuard (`FileDescriptor.sync` reaches
- *   `BlockGuardOs.fsync`, `File.renameTo` reaches `UnixFileSystem.rename`), synchronously and in call order on a
- *   thread without a Looper. A control run first proves that the observer sees an fsync and a rename on this device,
- *   so a missing sync cannot be confused with a blind observer.
+ *   `penaltyListener` reports every disk write that goes through BlockGuard (`File.renameTo` reaches
+ *   `UnixFileSystem.rename`; `FileDescriptor.sync` was expected to reach `BlockGuardOs.fsync`), synchronously and in call order on a
+ *   thread without a Looper. A control run first checks that the observer sees an fsync and a rename on this device,
+ *   so a missing sync cannot be confused with a blind observer; when it does not, the test is skipped as an
+ *   assumption failure. On the Poco F7 (T22) the observer is blind to `FileDescriptor.sync()` (the control saw no
+ *   fsync), so there this half stays inconclusive.
  * - `readFully()` deletes a stale `<name>.new` when the base file exists, and returns the base file's bytes; through
  *   `DefaultKeyVault.readState()` the same holds for `db-state.json.new`.
  *
@@ -69,7 +72,10 @@ class AtomicFileSyncAndStaleNewTest {
             FileOutputStream(scratch).use { it.write(BASE); it.fd.sync() }
             check(scratch.renameTo(File(dir, "control-renamed")))
         }
-        assertTrue(
+        // A precondition on the observer, not on AtomicFile: without it the probe cannot answer and is skipped. On the
+        // Poco F7 (T22) the control showed [open, write, rename] and no fsync: FileDescriptor.sync() does not reach
+        // BlockGuard there, so the sync in finishWrite() stays unobserved (inconclusive).
+        assumeTrue(
             "the StrictMode observer cannot see an fsync followed by a rename on this device; observed=$control",
             control.indexOf(FSYNC) in 0 until control.lastIndexOf(RENAME),
         )
