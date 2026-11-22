@@ -40,9 +40,9 @@ interface NoteRepository {
 
     /**
      * Inserts a new note or writes the changes of an existing one (data-layer.md § Note save). A blank new name is
-     * `Err(InvalidInput(BlankName))`; content over `MAX_CONTENT_CHARS`, a date outside `EpochDays`, a new name over
-     * `MAX_NAME_CHARS` or a `NewEntity.key` used twice within one kind throws `IllegalArgumentException`. Nothing is
-     * written in either case.
+     * `Err(InvalidInput(BlankName))`; content over `MAX_CONTENT_CHARS` or over `MAX_CONTENT_LINES` lines, a date
+     * outside `EpochDays`, a new name over `MAX_NAME_CHARS` or a `NewEntity.key` used twice within one kind throws
+     * `IllegalArgumentException`. Nothing is written in either case.
      */
     suspend fun save(draft: NoteDraft): AppResult<SaveResult>
 

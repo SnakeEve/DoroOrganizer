@@ -1,5 +1,7 @@
 package com.doro.organizer.testing
 
+import android.system.ErrnoException
+import android.system.Os
 import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.security.AndroidKekKeystore
@@ -12,6 +14,9 @@ import com.doro.organizer.security.isBioKeyAlias
 import com.doro.organizer.security.pbkdf2Sha256
 import com.doro.organizer.settings.SettingsStore
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.SyncFailedException
 import java.nio.file.Files
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -30,6 +35,9 @@ class KeyVaultRule : ExternalResource() {
     /** `db-state.json` in this test's own directory. */
     lateinit var stateFile: File
         private set
+
+    /** The key-state sync of every vault this rule builds (unless a test passes another): real until a test arms it. */
+    val stateSync = FaultyStateSync()
 
     override fun before() {
         deleteKekAlias()
@@ -54,7 +62,8 @@ class KeyVaultRule : ExternalResource() {
         newSecret: (Int) -> ByteArray = ::ByteArray,
         kdf: (ByteArray, ByteArray, Int) -> ByteArray = TestKdf(time),
         bio: BioKeystore = FaultyBioKeystore(),
-    ) = DefaultKeyVault(stateFile, kek, settings, time, dispatchers, newSecret, kdf, bio)
+        syncStream: (FileOutputStream) -> Unit = stateSync,
+    ) = DefaultKeyVault(stateFile, kek, settings, time, dispatchers, newSecret, kdf, bio, syncStream)
 
     fun kekExists(): Boolean = androidKeyStore().containsAlias(KEK_ALIAS)
 
@@ -130,6 +139,47 @@ class TestKdf(private val time: FakeAppTime, var calibrationMillis: Long = 75) :
     /** Every array the derivation returned, calibration runs included. */
     fun outputs(): List<ByteArray> = synchronized(calls) { results.toList() }
 }
+
+/**
+ * The key-state sync seam of security.md § 3.5 (`DefaultKeyVault`'s `syncStream`) over the real
+ * `FileDescriptor.sync()` of the `db-state.json.new` stream, with scripted failures: each [failNext] makes the next
+ * sync throw its error instead, before anything is synced, as a storage that reports a failed fsync does (Q16). Every
+ * sync, failed ones included, records the size of the stream's file first, so a test can check that the whole new
+ * file was written before it was synced.
+ */
+class FaultyStateSync : (FileOutputStream) -> Unit {
+    private val failures = ArrayDeque<IOException>()
+    private val syncedSizes = mutableListOf<Long>()
+
+    fun failNext(error: IOException) = synchronized(this) { failures.addLast(error) }
+
+    /** The armed failures that no sync has thrown yet. */
+    fun pending(): Int = synchronized(this) { failures.size }
+
+    /** The number of syncs, failed ones included. */
+    fun calls(): Int = synchronized(this) { syncedSizes.size }
+
+    /** The size of the synced stream's file at every sync, in order, failed ones included. */
+    fun sizes(): List<Long> = synchronized(this) { syncedSizes.toList() }
+
+    override fun invoke(out: FileOutputStream) {
+        val size = Os.fstat(out.fd).st_size
+        val failure = synchronized(this) {
+            syncedSizes += size
+            failures.removeFirstOrNull()
+        }
+        if (failure != null) throw failure
+        out.fd.sync()
+    }
+}
+
+/**
+ * What `FileDescriptor.sync()` throws when the storage reports a failed fsync with [errno]: a `SyncFailedException`
+ * whose cause is the `ErrnoException`, as libcore builds it, so DbMaintenance classifies it by that errno
+ * (db-lifecycle.md § Failure classification).
+ */
+fun syncFailure(errno: Int): SyncFailedException =
+    SyncFailedException("injected").apply { initCause(ErrnoException("fsync", errno)) }
 
 /** The operations of [KekKeystore], for scripting failures. */
 enum class KekOp { ContainsAlias, Generate, Delete, InitEncrypt, InitDecrypt, DoFinal }

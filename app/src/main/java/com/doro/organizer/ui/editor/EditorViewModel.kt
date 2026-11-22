@@ -75,8 +75,8 @@ class EditorViewModel(
     val content: TextFieldState =
         savedStateHandle.saveable(EditorSavedState.KEY_CONTENT, saver = ContentStateSaver) { TextFieldState() }
 
-    /** The content field's cap (ui.md § 6.9): each truncating change shows the notice. */
-    val contentCap = ContentCap { showMessage(UiText.Res(R.string.content_truncated), isError = true) }
+    /** The content field's cap (ui.md § 6.9): each truncating change shows the notice of the limit that cut it. */
+    val contentCap = ContentCap { limit -> showMessage(UiText.Res(limit.notice), isError = true) }
 
     private val fields: MutableStateFlow<DraftFields>
     private val screen: MutableStateFlow<Screen>
@@ -378,16 +378,17 @@ class EditorViewModel(
 
     /**
      * The stored note becomes the baseline. A fresh draft takes its values; a restored one keeps the user's edits and
-     * only takes `checked`, which the checkbox writes at once. A note above the cap (only a foreign backup holds one)
-     * is cut like typed input, with the notice, and the cut text is the baseline, so leaving writes nothing. The
-     * loaded text starts an empty undo history (DEC-104): as an undo step it would let undo (Ctrl+Z) empty the field,
-     * and leaving would then save the empty text over the note.
+     * only takes `checked`, which the checkbox writes at once. A note above either limit of the cap (only a foreign
+     * backup holds one) is cut like typed input, with the notice of the limit that cut it, and the cut text is the
+     * baseline, so leaving writes nothing. The loaded text starts an empty undo history (DEC-104): as an undo step it
+     * would let undo (Ctrl+Z) empty the field, and leaving would then save the empty text over the note.
      */
     @OptIn(ExperimentalFoundationApi::class) // TextFieldState.undoState, foundation 1.12.1
     private fun applyLoaded(detail: NoteDetail) {
         putNames(EntityKind.Person, detail.persons.associate { it.id to it.name })
         putNames(EntityKind.Project, detail.projects.associate { it.id to it.name })
-        val text = ContentCap.capped(detail.content)
+        val cut = ContentCap.cut(detail.content)
+        val text = if (cut == null) detail.content else detail.content.substring(0, cut.keptLength)
         baseline = Baseline(
             text,
             detail.date,
@@ -410,7 +411,7 @@ class EditorViewModel(
         content.setTextAndPlaceCursorAtEnd(text)
         content.undoState.clearHistory()
         saved.loaded = true
-        if (text.length < detail.content.length) showMessage(UiText.Res(R.string.content_truncated), isError = true)
+        if (cut != null) showMessage(UiText.Res(cut.limit.notice), isError = true)
     }
 
     /** A restored impact dialog re-reads its name and counts (ui.md § 6.14). */
