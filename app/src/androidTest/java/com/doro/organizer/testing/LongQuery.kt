@@ -30,6 +30,10 @@ object LongQuery {
             elapsedMs = (System.nanoTime() - start) / 1_000_000
             check(result == SAMPLE) { "calibration counted $result instead of $SAMPLE" }
         }
-        return (SAMPLE * targetMs / elapsedMs.coerceAtLeast(1)).coerceIn(SAMPLE, MAX_BOUND)
+        // maxOf and minOf on Long are inline-only (Math.max, Math.min). The ranges extensions coerceAtLeast and
+        // coerceIn would be calls into the stdlib's RangesKt, and the benchmark test APK compiles this package, so the
+        // derived keep rules (DEC-103 (5)) would make the benchmark app keep them and change its build (T22 P-1).
+        val bound = SAMPLE * targetMs / maxOf(elapsedMs, 1L)
+        return minOf(maxOf(bound, SAMPLE), MAX_BOUND)
     }
 }
