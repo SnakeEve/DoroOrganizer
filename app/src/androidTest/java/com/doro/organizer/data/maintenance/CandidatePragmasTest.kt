@@ -16,9 +16,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Setup probe (SPEC T22) for docs/db-lifecycle.md § Restore, § Steps, step 5 (`OPEN_INPUT`): "After opening:
- * `PRAGMA cell_size_check = ON` and `PRAGMA trusted_schema = OFF` on the candidate connection … SQLite ignores an
- * unknown pragma silently, so whether they take effect stays open until a test reads them back."
+ * Setup probe (SPEC T22) for docs/db-lifecycle.md § Restore, § Steps, step 5 (`OPEN_INPUT`): whether
+ * `PRAGMA cell_size_check = ON` and `PRAGMA trusted_schema = OFF`, set on the candidate connection after opening, take
+ * effect. SQLite ignores an unknown pragma silently, so this test reads them back (recorded there as Verified at
+ * setup).
  *
  * The candidate is a real backup, written by the production `MaintenanceConnection.exportTo` into
  * `restore/incoming.db`, and it is opened by the production `RestoreCandidates.open` (`openChecked`), plaintext and

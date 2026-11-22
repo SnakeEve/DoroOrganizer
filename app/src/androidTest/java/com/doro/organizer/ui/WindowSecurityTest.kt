@@ -9,21 +9,25 @@ import android.view.Menu
 import android.view.ViewTreeObserver
 import android.view.Window
 import android.view.WindowManager
+import android.view.contentcapture.ContentCaptureManager
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.SdkSuppress
 import com.doro.organizer.MainActivity
 import com.doro.organizer.session.GateState
 import com.doro.organizer.testing.GateUi
 import com.doro.organizer.testing.ScriptedGateComposeTest
+import com.doro.organizer.testing.SetupProbeRecord
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -43,7 +47,8 @@ import org.junit.runner.RunWith
  * - Verify at setup: on which side of `onCreate` this device dispatches `onActivityCreated` (inside
  *   `super.onCreate`, so before `MainActivity` adds the flag), and that the start-closed window and the splash hold
  *   are one mechanism: the closed policy that unread settings give is still emitted, releases the splash and keeps
- *   every frame secure.
+ *   every frame secure;
+ * - Verify at setup (security.md § 8, not L-22): on API 29+ content capture is disabled for `MainActivity` once Ready.
  *
  * Not observable here: that `setRecentsScreenshotEnabled(false)` was applied before the first frame on API 33+.
  * `MainActivity` calls `Activity.setRecentsScreenshotEnabled` directly; the value lives in the system's activity record
@@ -156,6 +161,29 @@ class WindowSecurityTest {
             assertEquals("API $api: FLAG_SECURE already set at onActivityCreated", false, created.secure)
             val added = log.indexOfFirst { it is Event.Attributes && it.secure && it.insideOnCreate }
             assertTrue("the recorder did not see MainActivity.onCreate add FLAG_SECURE: ${log.render()}", added > 0)
+        }
+
+        /**
+         * Verify at setup (security.md § 8, system content capture): `MainActivity.onCreate` opts out on API 29+, so
+         * once the activity is Ready its own `ContentCaptureManager` reports content capture as disabled. The system
+         * gives no manager at all when it captures nothing for the app (no service, or the app not allowlisted); that
+         * passes too, and the probe record says which of the two the device showed.
+         */
+        @Test
+        @SdkSuppress(minSdkVersion = Build.VERSION_CODES.Q)
+        fun contentCapture_isDisabledForMainActivity_onceReady() {
+            scene.launch(GateState.Ready)
+            ui.awaitShell()
+
+            var observed = ""
+            var enabled = false
+            scene.onActivity {
+                val manager = it.getSystemService(ContentCaptureManager::class.java)
+                enabled = manager?.isContentCaptureEnabled == true
+                observed = if (manager == null) "no ContentCaptureManager" else "isContentCaptureEnabled=$enabled"
+            }
+            SetupProbeRecord.record("WindowSecurityTest#contentCapture_isDisabledForMainActivity_onceReady", observed)
+            assertFalse("content capture is enabled for MainActivity once Ready", enabled)
         }
 
         private fun secureNow(): Boolean {
