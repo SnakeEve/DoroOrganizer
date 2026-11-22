@@ -173,7 +173,9 @@ class WindowSecurityTest {
          * once the activity is Ready its own `ContentCaptureManager` reports content capture as disabled.
          *
          * `FLAG_SECURE` disables the session as well: `Activity.onPostCreate` starts it with the window's attributes,
-         * and a session started on a secure window starts disabled. So the window policy is open (the setting off)
+         * and the content-capture service disables a session started on a secure window when it answers that start,
+         * which is also when the opt-out takes effect (until the answer the manager still reports the session
+         * enabled, so the test waits for it, bounded). So the window policy is open (the setting off)
          * before the launch: `MainActivity.onCreate` collects it at once (`Dispatchers.Main.immediate`) and clears the
          * flag it added, the recorder shows that clear inside `onCreate`, before `onPostCreate`, and the window is
          * still not secure when the manager is read. Only the opt-out can then have disabled the session. The system
@@ -213,6 +215,23 @@ class WindowSecurityTest {
             )
             assertFalse("FLAG_SECURE is set when content capture is read", secure)
             assumeTrue("the system offers content capture to MainActivity on this device", hasManager)
+            // The opt-out takes effect when the content-capture service answers the session start, asynchronously;
+            // until then isContentCaptureEnabled() reports true. Without the opt-out the answer keeps the session
+            // enabled, so this bounded wait times out and the assertion below fails: the wait cannot make the check
+            // vacuous.
+            runCatching {
+                compose.waitUntil(GateUi.TIMEOUT_MS) {
+                    scene.onActivity {
+                        val manager = it.getSystemService(ContentCaptureManager::class.java)
+                        enabled = manager?.isContentCaptureEnabled == true
+                    }
+                    !enabled
+                }
+            }
+            SetupProbeRecord.record(
+                "WindowSecurityTest#contentCapture_isDisabledForMainActivity_onceReady",
+                "after waiting for the session's answer: isContentCaptureEnabled=$enabled",
+            )
             assertFalse("content capture is enabled for MainActivity once Ready", enabled)
         }
 
