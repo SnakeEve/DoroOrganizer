@@ -11,8 +11,11 @@ import com.doro.organizer.data.HolderState
 import com.doro.organizer.debug.ReadBackFailingVault
 import com.doro.organizer.debug.RecordingDocumentsProvider
 import com.doro.organizer.model.KeyMode
+import com.doro.organizer.security.KEK_ALIAS
 import com.doro.organizer.security.KeyFailure
+import com.doro.organizer.security.KeySlot
 import com.doro.organizer.security.KeyVaultException
+import com.doro.organizer.security.UnlockResult
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.MaintenanceSetup
@@ -23,6 +26,8 @@ import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.testing.seed
 import java.io.File
 import java.io.IOException
+import java.security.KeyStore
+import java.util.Date
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -181,6 +186,49 @@ class MaintenanceFailureTest {
             setup.restart() // the next startup finishes what the failed step left
             assertEquals("$step", setOf(before.generation + 1), files.generationsOnDisk().keys)
         }
+    }
+
+    /**
+     * The leftover KEK of crash-safety row CS-13, on the real AndroidKeyStore: a change to `PLAIN` whose `DELETE_KEK`
+     * step fails still commits (db-lifecycle.md § Failure classification), the next start keeps the KEK, and the next
+     * change to `PASSWORD` reuses it (security.md § 3.1: generated only when the alias is missing), so the password
+     * unlocks the new slot after a restart. The after-commit sweep above follows the same failure with a change to
+     * `DEVICE`.
+     */
+    @Test
+    fun aKeyChangeToPassword_overTheKekAFailedDeleteKekLeft_reusesIt_andThePasswordUnlocks() = runFailureTest {
+        seeded()
+        val content = setup.dump()
+        setup.changeKey(KeyMode.DEVICE)
+        val device = setup.state() // its slot is wrapped with the KEK that this change generated
+        val kekCreated = kekCreationDate()
+        setup.hook.throwAt(MaintenanceOp.KeyChange, PipelineStep.DELETE_KEK, IOException("injected"))
+
+        val toPlain = setup.maintenance.changeKey(KeyMode.PLAIN, null, null)
+
+        assertEquals(AppResult.Ok(MaintenanceResult.KeyChanged(KeyMode.DEVICE, KeyMode.PLAIN)), toPlain)
+        val plain = setup.state()
+        assertEquals(KeyMode.PLAIN, plain.slot.mode)
+        assertEquals(device.generation + 1, plain.generation)
+        val steps = setup.hook.steps(MaintenanceOp.KeyChange) // the change to DEVICE runs no DELETE_KEK
+        assertTrue("the change to PLAIN never reached DELETE_KEK", PipelineStep.DELETE_KEK in steps)
+        assertTrue("the failed DELETE_KEK step deleted the KEK", vaults.kekExists())
+        setup.hook.clear()
+        setup.restart() // the cold start after the failure: CS-13 proceeds on PLAIN and leaves the KEK
+        assertTrue("the next start deleted the KEK", vaults.kekExists())
+        assertSameKek("after the next start", device.slot, kekCreated)
+
+        val toPassword = setup.maintenance.changeKey(KeyMode.PASSWORD, null, KEY_PASSWORD.toCharArray())
+
+        assertEquals(AppResult.Ok(MaintenanceResult.KeyChanged(KeyMode.PLAIN, KeyMode.PASSWORD)), toPassword)
+        val committed = setup.state()
+        assertEquals(KeyMode.PASSWORD, committed.slot.mode)
+        assertEquals(plain.generation + 1, committed.generation)
+        assertSameKek("after the change to PASSWORD", device.slot, kekCreated)
+        assertEquals(content, setup.dump())
+
+        setup.restart(KEY_PASSWORD) // E1 and E2: the password unlocks the committed slot, and its generation opens
+        assertEquals(content, setup.dump())
     }
 
     @Test
@@ -348,6 +396,23 @@ class MaintenanceFailureTest {
 
     private fun finished() = setup.maintenance.status.value as MaintenanceStatus.Finished
 
+    /** The KEK's creation date, read under the production alias from the AndroidKeyStore `AndroidKekKeystore` uses. */
+    private fun kekCreationDate(): Date {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        return checkNotNull(keyStore.getCreationDate(KEK_ALIAS)) { "no KEK creation date" }
+    }
+
+    /**
+     * The KEK under the alias is still the key that wrapped [deviceSlot]: only that key passes the GCM tag of the
+     * slot's unwrap, checked first, so that a creation date that differs for another reason shows as such.
+     */
+    private suspend fun assertSameKek(case: String, deviceSlot: KeySlot, created: Date) {
+        val unwrapped = setup.vault.openKey(deviceSlot, null)
+        if (unwrapped is UnlockResult.Key) unwrapped.rawKey.fill(0)
+        assertTrue("$case: the KEK no longer unwraps the DEVICE slot, $unwrapped", unwrapped is UnlockResult.Key)
+        assertEquals("$case: the KEK has another creation date", created, kekCreationDate())
+    }
+
     private fun errors(): List<Throwable> = listOf(IOException("injected"), SQLiteFullException("injected"))
 
     private class Document(val file: File, val uri: Uri)
@@ -357,6 +422,7 @@ class MaintenanceFailureTest {
 
     private companion object {
         const val BACKUP_PASSWORD = "backup password 3"
+        const val KEY_PASSWORD = "database password 4"
 
         val DOCUMENT_STEPS = listOf(
             PipelineStep.PRECHECK, PipelineStep.CLOSE_ROOM, PipelineStep.CHECK_SOURCE, PipelineStep.EXPORT,
