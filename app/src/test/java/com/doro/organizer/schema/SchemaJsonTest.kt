@@ -7,8 +7,10 @@ import org.junit.Test
 
 /**
  * testing.md I-47: `preview`, `content` and `content_fold` are the last columns of `notes`, in this order, so the small
- * columns that `WHERE` and `ORDER BY` read, then the stored preview that lists read (DEC-106), sit before any overflow
- * page of the two large columns (data-layer.md § Size and performance). Checked in every exported schema version.
+ * columns that `WHERE` and `ORDER BY` read come first and the stored preview that lists read (DEC-106) comes before the
+ * two large columns (data-layer.md § Size and performance). Checked in every exported schema version. Only the order
+ * is checked: whether a long multibyte preview of an overflowing row stays on the leaf page depends on SQLite's
+ * overflow rule, which no column order can guarantee.
  */
 class SchemaJsonTest {
     /** Keeps the per-version checks below from passing vacuously once the database exists (DEC-14). */

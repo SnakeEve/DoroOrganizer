@@ -305,6 +305,21 @@ class RestoreValidationTest {
         assertRejected(forged, BackupRejection.Damaged, case = "R-6")
     }
 
+    /**
+     * A BLOB preview is counted by R-4 (its type) and by R-6 (a BLOB never equals the text of [PREVIEW_EXPR]); every
+     * other check passes on it. The rejection alone cannot show R-4's `preview` term, because R-6 rejects the file
+     * too, so the count of each check is asserted on the forged file (L-11).
+     */
+    @Test
+    fun aBlobPreview_isCountedByR4AndR6_andIsDamaged() = runValidationTest {
+        val forged = mutated("r4-blob-preview.db") {
+            execSQL("UPDATE notes SET preview = X'00' WHERE id = (SELECT min(id) FROM notes)")
+            val counts = RestoreChecks.forVersion(AppDatabase.VERSION).map { longOf(it) }
+            assertEquals("R-1 to R-6", listOf(0L, 0L, 0L, 1L, 0L, 1L), counts)
+        }
+        assertRejected(forged, BackupRejection.Damaged, case = "R-4 and R-6")
+    }
+
     @Test
     fun schemaStructureChangesBehindACopiedIdentityHash_areIncompatible() = runValidationTest {
         assertRejected(mutated("extra-column.db") { execSQL("ALTER TABLE notes ADD COLUMN extra TEXT") }, BackupRejection.Incompatible)

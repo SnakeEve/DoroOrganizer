@@ -7,9 +7,10 @@ import androidx.room.PrimaryKey
 
 /**
  * A row of `notes` (data-layer.md § Entities). Each §9 index that DEC-30 keeps has its explicit name. `content` and
- * `content_fold` are declared last and `preview` right before them, so Room emits them as the last columns and the
- * small columns that `WHERE` and `ORDER BY` read, then the preview that lists read, stay before any overflow page
- * (testing.md I-47, DEC-106).
+ * `content_fold` are declared last and `preview` right before them, so Room emits them as the last columns: the small
+ * columns that `WHERE` and `ORDER BY` read always stay on the row's leaf page, and so does the preview that lists read
+ * unless it is a long multibyte one in a row that overflows (SQLite then may keep only about 480 bytes of the record on
+ * the leaf page; data-layer.md § Size and performance, testing.md I-47, DEC-106).
  */
 @Entity(
     tableName = "notes",
