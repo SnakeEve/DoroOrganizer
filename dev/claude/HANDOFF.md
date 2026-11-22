@@ -261,4 +261,5 @@ adb="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"
 | `workflows/doro-device-fix-template.js` | Fixing a phone run's failures, area by area: sequential fixers on the one phone, then two review lenses, review fixes, and the Record stage. Replace its `AREAS` with the current failure groups. Args: `root`, `evidenceDir` |
 | `check-docs.js` | `node dev/claude/check-docs.js <repo>`: links, anchors, DEC and Q references, leftover "pending decision" notes |
 | `journal-report.js` | `node dev/claude/journal-report.js <run>/journal.jsonl`: one line per agent result of a workflow run |
+| `phone-cooldown.sh` | `sh dev/claude/phone-cooldown.sh [limit_C=44] [max_wait_min=15]`: waits until the phone's hottest live CPU sensor is at or below the limit (DEC-108). Run it before every perf job and archive its line. Exit 0 cool, 1 still warm, 2 no reading |
 | `usage-sum.js` | `node dev/claude/usage-sum.js <transcript workflows dir> [main transcript]`: token use per workflow run |
