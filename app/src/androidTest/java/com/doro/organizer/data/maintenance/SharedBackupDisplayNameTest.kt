@@ -21,13 +21,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Setup probe (SPEC T22) for docs/db-lifecycle.md § For sharing, the item "that a receiver sees `displayName`"
- * (recorded there as Verified at setup): the Uri that the production share path builds (`DbMaintenance.backupForShare`,
- * `ShareFiles.publish`, the four-argument `FileProvider.getUriForFile` of androidx.core 1.19.1) answers an
- * `OpenableColumns.DISPLAY_NAME` query with the dated backup name, not with the random on-disk name. A receiving app
- * reads the name exactly so: `ContentResolver.query` on the shared Uri, with the default projection (null) or with
- * `DISPLAY_NAME` and `SIZE`. This test queries from the app's own process, so it skips the Uri grant a receiver needs;
- * the provider's answer is the same.
+ * Setup probe (SPEC T22) for docs/db-lifecycle.md § For sharing, the item on whether a receiving app sees the share's
+ * `displayName` (recorded there as Verified at setup): the Uri that the production share path builds
+ * (`DbMaintenance.backupForShare`, `ShareFiles.publish`, the four-argument `FileProvider.getUriForFile` of
+ * androidx.core 1.19.1) answers an `OpenableColumns.DISPLAY_NAME` query with the dated backup name, not with the random
+ * on-disk name. A receiving app reads the name exactly so: `ContentResolver.query` on the shared Uri, with the default
+ * projection (null) or with `DISPLAY_NAME` and `SIZE`. This test queries from the app's own process, so it skips the
+ * Uri grant a receiver needs; the provider's answer is the same.
  *
  * Failure messages name what the query returned by its kind (the display name, the on-disk name, null, another value
  * and its length), never the names themselves (DEC-70: backup names and Uris stay out of messages).
