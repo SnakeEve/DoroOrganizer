@@ -99,7 +99,7 @@ class LongContentLayoutTest : ListComposeTest() {
         }
 
     @Test
-    fun theQ14ProbeNote_atTwiceTheFontScale_opensCutToItsFirst100000Lines_withTheNotice_andStaysStored() =
+    fun theT22ProbeNote_atTwiceTheFontScale_opensCutToItsFirst100000Lines_withTheNotice_andStaysStored() =
         atFontScale(2f) {
             var id = 0L
             startWith { id = note(content = PROBE_NOTE, createdAt = now) }
