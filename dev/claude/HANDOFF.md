@@ -57,6 +57,7 @@ For Claude Code on any machine that continues this build, and for the owner. Rea
   - Never weaken, skip or delete a test to get green.
   - Design docs have no length caps; CLAUDE.md stays small.
 - **Phone only.** All device testing happens on the owner's own phone over USB, from the command line. No emulator, no Android Studio.
+- **Phone windows.** The owner uses the phone between runs. Say when it is needed and when it is free; when they take it, hold the phone lock so a waiting run waits instead of failing, and ask for it back as soon as a run needs it. Perf runs want it out of its case (DEC-108).
 - **Progress reports.** The owner often asks to "check progress with detailed progress percentage and estimation". Answer with a percentage, a step-by-step table with status and an ETA.
 - **Usage budget.** The account has 5-hour and weekly usage limits, and the owner may name a stopping point ("until T14, then stop"). Honor it, keep runs resumable, and save state in notes after each stage.
 - **Git.**
