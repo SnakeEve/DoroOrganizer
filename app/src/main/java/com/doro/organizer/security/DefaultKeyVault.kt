@@ -13,6 +13,7 @@ import com.doro.organizer.settings.Settings
 import com.doro.organizer.settings.SettingsStore
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.FileOutputStream
 import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.MessageDigest
@@ -31,7 +32,8 @@ import kotlinx.coroutines.withContext
  *
  * Seams that only tests replace (security.md § 3.6): [kek] (the Keystore half of the KEK layer), [newSecret] (the
  * allocator of every DEK, password KEK, outer-layer plaintext and raw key, so tests can check the zeroing), [kdf]
- * (the password derivation, so tests can count derivations) and [bio] (the Keystore half of the biometric slot).
+ * (the password derivation, so tests can count derivations), [bio] (the Keystore half of the biometric slot) and
+ * [syncStream] (the sync of a new key-state before its rename, so tests can make it fail, security.md § 3.5).
  *
  * Locking: every public member enters [locked] exactly once and calls only private `*Locked` helpers, which never
  * lock; Kotlin's Mutex is not reentrant, so a public member calling another would hang the cold start (security.md
@@ -47,6 +49,8 @@ class DefaultKeyVault(
     private val newSecret: (Int) -> ByteArray = ::ByteArray,
     private val kdf: (password: ByteArray, salt: ByteArray, iterations: Int) -> ByteArray = ::pbkdf2Sha256,
     bio: BioKeystore = AndroidBioKeystore(),
+    /** Syncs the `db-state.json.new` stream to the storage; throws when the storage reports a failed sync. */
+    private val syncStream: (FileOutputStream) -> Unit = { it.fd.sync() },
 ) : KeyVault {
     private val mutex = Mutex()
     private val atomicFile = AtomicFile(stateFile)
@@ -126,8 +130,9 @@ class DefaultKeyVault(
                 writeLocked(bytes)
                 readBackLocked()
             }
-            // finishWrite only logs a failed rename (db-lifecycle.md § Generation commit): the effects below apply only
-            // when the file now holds these inputs; DbMaintenance's read-back decides the outcome either way.
+            // A failed sync throws from writeLocked before the rename, but finishWrite only logs a failed rename
+            // (db-lifecycle.md § Generation commit): the effects below apply only when the file now holds these
+            // inputs; DbMaintenance's read-back decides the outcome either way.
             if (onDisk == null || !parsesBackTo(onDisk, generation, slot, bio)) return@locked
             // A commit that installs a new key configuration follows a verified password, a fingerprint reset or a
             // recovery action; one that keeps the slot (a biometric slot commit, a restore) leaves the backoff alone,
@@ -253,11 +258,18 @@ class DefaultKeyVault(
         null
     }
 
+    /**
+     * The `AtomicFile` write of security.md § 3.5: [bytes] go to `db-state.json.new`, which is synced here before
+     * `finishWrite()` renames it over the base file. `finishWrite()` syncs too, but only logs a failed sync
+     * (DEC-107 (4)), so a failed sync throws here instead, before the rename (Q16): `failWrite()` deletes `.new`, the
+     * base file keeps the previous state, and the caller's read-back finds nothing committed.
+     */
     private fun writeLocked(bytes: ByteArray) {
         val out = atomicFile.startWrite()
         try {
             out.write(bytes)
-            atomicFile.finishWrite(out) // syncs before the rename
+            syncStream(out)
+            atomicFile.finishWrite(out) // its own sync finds the bytes on disk already; a failed rename is only logged
         } catch (e: Throwable) {
             atomicFile.failWrite(out)
             throw e

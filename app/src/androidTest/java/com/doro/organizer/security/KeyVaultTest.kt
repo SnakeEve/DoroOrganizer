@@ -1,5 +1,6 @@
 package com.doro.organizer.security
 
+import android.system.OsConstants
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.PasswordReminder
@@ -13,8 +14,10 @@ import com.doro.organizer.testing.SecretRecorder
 import com.doro.organizer.testing.TEST_SLOT_KEY_ALIAS
 import com.doro.organizer.testing.TestKdf
 import com.doro.organizer.testing.assertThrowsSuspending
+import com.doro.organizer.testing.syncFailure
 import com.doro.organizer.testing.testDispatchers
 import java.io.File
+import java.io.SyncFailedException
 import java.security.KeyStoreException
 import java.security.ProviderException
 import java.time.Duration
@@ -157,6 +160,45 @@ class KeyVaultTest {
         vault.commit(1, typed.slot, null)
 
         assertEquals(Settings(unlockFailures = 3), settings.snapshot())
+    }
+
+    /**
+     * Q16 (security.md § 3.5): the commit syncs the whole `db-state.json.new` before `finishWrite()` renames it, and a
+     * sync that fails throws there: `failWrite()` removes `.new`, the previous state stays in force and unlocks, no
+     * settings effect applies, and the same commit succeeds once the sync works again.
+     */
+    @Test
+    fun aCommitWhoseSyncFails_throwsBeforeTheRename_andThePreviousStateStaysInForce() = runVaultTest {
+        val vault = vault()
+        val previous = vault.install(KeyMode.PASSWORD, password)
+        val installedAt = time.nowMillis()
+        val before = rule.stateFile.readBytes()
+        settings.setBackoff(failures = 3, retryAtElapsedMs = 0)
+        time.advanceBy(Duration.ofMinutes(1))
+        val typed = vault.prepare(KeyMode.PASSWORD, "new horse 43".toByteArray()) // a new password, freshly typed
+        rule.stateSync.failNext(syncFailure(OsConstants.EIO))
+
+        assertThrowsSuspending<SyncFailedException> { vault.commit(2, typed.slot, null) }
+
+        assertEquals("the commit did not run the armed sync", 0, rule.stateSync.pending())
+        assertArrayEquals("the previous key-state was replaced", before, rule.stateFile.readBytes())
+        assertFalse("db-state.json.new was left behind", File(rule.stateFile.path + ".new").exists())
+        assertEquals(Settings(unlockFailures = 3, passwordVerifiedAt = installedAt), settings.snapshot())
+        val state = requireNotNull(vault.readState())
+        assertEquals(1L, state.generation)
+        assertTrue(state.slot.sameAs(previous.slot))
+        val unlocked = vault.unlock(password.copyOf()) as UnlockResult.Key
+        assertArrayEquals(previous.rawKey, unlocked.rawKey)
+
+        vault.commit(2, typed.slot, null) // the sync works again
+
+        assertEquals(2L, vault.readState()?.generation)
+        val written = rule.stateFile.length()
+        assertEquals(
+            "a sync ran before the whole new file was written",
+            listOf(before.size.toLong(), written, written),
+            rule.stateSync.sizes(),
+        )
     }
 
     @Test
