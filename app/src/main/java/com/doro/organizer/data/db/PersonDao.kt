@@ -19,6 +19,9 @@ interface PersonDao : EntityDao {
     @Query(PERSON_REF_SQL)
     override fun observe(id: Long): Flow<EntityRef?>
 
+    @Query(PERSON_NAMES_SQL)
+    override fun observeNames(): Flow<List<EntityRef>>
+
     /** A new person; returns its id. */
     @Insert
     suspend fun insert(person: PersonEntity): Long

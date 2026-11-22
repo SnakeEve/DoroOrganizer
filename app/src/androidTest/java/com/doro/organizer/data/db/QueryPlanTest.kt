@@ -46,6 +46,8 @@ class QueryPlanTest {
             assertTrue("$label rows: $rows", rows.any { it.startsWith("USE TEMP B-TREE FOR ORDER BY") })
             assertUses(rows, "np", AUTOINDEX_PERSONS, "$label rows")
             assertUses(rows, "nj", AUTOINDEX_PROJECTS, "$label rows")
+            // The link subqueries return ids only; the names come from observeNames (DEC-106).
+            assertFalse("$label rows: $rows", rows.any { ENTITY_READ.containsMatchIn(it) })
             assertPerspectiveSubqueriesSearchKeys(rows, "$label rows")
 
             val ids = plan(IDS_SQL, args)
@@ -79,6 +81,16 @@ class QueryPlanTest {
             val projects = plan(PROJECT_OPTIONS_SQL, mapOf("coLinkedTo" to coLinkedTo))
             assertUses(projects, "c", "idx_note_projects_project", "projects")
             assertTrue("projects: $projects", projects.any { ENTITY_INDEX.containsMatchIn(it) && it.matches(COLINKED) })
+        }
+    }
+
+    /** The name maps of the note lists want every entity, so a full scan of the table is the plan (DEC-106). */
+    @Test
+    fun nameMaps_scanTheirTable() {
+        listOf(PERSON_NAMES_SQL to "persons", PROJECT_NAMES_SQL to "projects").forEach { (statement, table) ->
+            val plan = plan(statement, emptyMap())
+            assertEquals("$table: $plan", 1, plan.size)
+            assertTrue("$table: $plan", Regex("""^SCAN $table\b""").containsMatchIn(plan.single()))
         }
     }
 
@@ -231,6 +243,9 @@ class QueryPlanTest {
         val DATE_INDEX = Regex("""^SEARCH n USING (?:COVERING )?INDEX idx_notes_date\b""")
         val ENTITY_INDEX = Regex("""idx_note_persons_person|idx_note_projects_project""")
         val COLINKED = Regex("""^SEARCH [xy] USING .*""")
+
+        /** A plan row that reads `persons` or `projects`, by name or by the aliases the statements give them. */
+        val ENTITY_READ = Regex("""^(?:SCAN|SEARCH) (?:TABLE )?(?:persons|projects|p|j)\b""")
         const val PERSON_INDEX = "idx_note_persons_person"
         const val PROJECT_INDEX = "idx_note_projects_project"
         const val AUTOINDEX_PERSONS = "sqlite_autoindex_note_persons_1"

@@ -144,8 +144,8 @@ class RedactionTest {
             checkedAt = null,
             createdAt = 1,
             updatedAt = 2,
-            personsJson = SENTINEL,
-            projectsJson = SENTINEL,
+            personIds = SENTINEL,
+            projectIds = SENTINEL,
         )
 
         assertEquals("NoteRowRaw(id=10)", raw.toString())

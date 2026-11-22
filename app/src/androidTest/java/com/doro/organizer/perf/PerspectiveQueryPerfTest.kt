@@ -3,8 +3,10 @@ package com.doro.organizer.perf
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.data.DatabaseHolder
 import com.doro.organizer.data.EntityRepository
+import com.doro.organizer.data.NoteRepository
 import com.doro.organizer.data.db.AppDatabase
 import com.doro.organizer.model.DateFilter
+import com.doro.organizer.model.EntityRef
 import com.doro.organizer.model.NoteFilter
 import com.doro.organizer.model.NoteQuery
 import com.doro.organizer.model.Perspective
@@ -22,6 +24,7 @@ import com.doro.organizer.testing.SeedModel
 import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.entityRepository
 import com.doro.organizer.testing.markedDays
+import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.ok
 import com.doro.organizer.testing.openDatabase
 import com.doro.organizer.testing.rowUpdates
@@ -31,6 +34,7 @@ import com.doro.organizer.testing.selectedIds
 import java.time.LocalDate
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -42,8 +46,9 @@ import org.junit.runner.RunWith
 
 /**
  * testing.md P-1: every perspective query on the 10,000-note seed, from subscribing to the first Flow emission, within
- * 100 ms p90 (architecture.md § Performance budgets). The calendar month marks, the Select-all ids and the
- * delete-impact counts of the 2,000-note person are recorded without a budget.
+ * 100 ms p90 (architecture.md § Performance budgets). The All list through `NoteRepository.observeRows` (the rows
+ * named from the name maps, DEC-106: what the list screen waits for), the calendar month marks, the Select-all ids and
+ * the delete-impact counts of the 2,000-note person are recorded without a budget.
  */
 @PerfTest
 @RunWith(AndroidJUnit4::class)
@@ -61,13 +66,16 @@ class PerspectiveQueryPerfTest {
     private lateinit var db: AppDatabase
     private lateinit var model: SeedModel
     private lateinit var entities: EntityRepository
+    private lateinit var notes: NoteRepository
 
     @Before
     fun seedDatabase() {
         holder = databases.holder()
         db = holder.openDatabase()
         model = db.seed()
-        entities = entityRepository(holder, FakeAppTime(), applicationScope)
+        val time = FakeAppTime()
+        entities = entityRepository(holder, time, applicationScope)
+        notes = noteRepository(holder, time, applicationScope)
     }
 
     @Test
@@ -86,10 +94,15 @@ class PerspectiveQueryPerfTest {
 
         // Room installs its table triggers for the first observer of a table and drops them after the last one. An
         // observer of the list tables for the whole test keeps them, so each run times the query and its first
-        // emission, not the trigger setup (P-2 times a whole tab switch).
-        val watching = CompletableDeferred<Unit>()
-        backgroundScope.launch { db.noteDao().rowUpdates().collect { watching.complete(Unit) } }
-        watching.await()
+        // emission, not the trigger setup (P-2 times a whole tab switch). The name maps' tables, persons and projects,
+        // are watched too, for the repository measurement.
+        val watching = listOf(db.noteDao().rowUpdates(), db.personDao().observeNames(), db.projectDao().observeNames())
+            .map { updates ->
+                CompletableDeferred<Unit>().also { watched ->
+                    backgroundScope.launch { updates.collect { watched.complete(Unit) } }
+                }
+            }
+        watching.forEach { it.await() }
 
         // Never vacuous: the search term hits many notes and the miss none, and each query returns the reference list.
         assertTrue(NoteOracle.listIds(model, NoteFilter(Perspective.All, search = COMMON_TERM)).size > 100)
@@ -103,6 +116,20 @@ class PerspectiveQueryPerfTest {
     }
 
     private suspend fun recordTheRest() {
+        // The list screen's wait: the rows named from the name maps (DEC-106). Never vacuous: the reference ids, and
+        // every chip under its seed name.
+        val all = notes.observeRows(ALL_NOTES).first()
+        assertEquals(NoteOracle.listIds(model, NoteFilter(Perspective.All)), all.map { it.id })
+        val personNames = model.persons.associate { it.id to it.name }
+        val projectNames = model.projects.associate { it.id to it.name }
+        val seedNotes = model.notes.associateBy { it.id }
+        all.forEach { row ->
+            val seed = checkNotNull(seedNotes[row.id])
+            assertEquals("persons of ${row.id}", seed.personIds.refs(personNames), row.persons.toSet())
+            assertEquals("projects of ${row.id}", seed.projectIds.refs(projectNames), row.projects.toSet())
+        }
+        perf.measure("Repository rows: All", budget = null) { notes.observeRows(ALL_NOTES).first() }
+
         val month = LocalDate.ofEpochDay(SeedGenerator.BASE_DAY).withDayOfMonth(1)
         val monthDays = month.toEpochDay() to month.plusMonths(1).toEpochDay() - 1
         val personQuery: NoteQuery = checkNotNull(PERSON_FILTER.toQuery())
@@ -116,6 +143,9 @@ class PerspectiveQueryPerfTest {
             entities.personDeleteImpact(SeedGenerator.HEAVY_PERSON).ok()
         }
     }
+
+    private fun Set<Long>.refs(names: Map<Long, String>): Set<EntityRef> =
+        mapTo(HashSet()) { EntityRef(it, checkNotNull(names[it])) }
 
     private fun dateFilter(fromDay: Long, toDay: Long) =
         NoteFilter(Perspective.Date, primaryDays = DateFilter.Range(fromDay, toDay))

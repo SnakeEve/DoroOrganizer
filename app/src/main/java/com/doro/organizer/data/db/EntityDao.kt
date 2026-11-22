@@ -14,6 +14,12 @@ interface EntityDao {
     /** The entity [id], or null once it is gone: the existence probe of data-layer.md § Reactivity. */
     fun observe(id: Long): Flow<EntityRef?>
 
+    /**
+     * Every entity's id and name, unsorted: the id-to-name map of the note lists, which carry link ids only
+     * (DEC-106, data-layer.md § Rows).
+     */
+    fun observeNames(): Flow<List<EntityRef>>
+
     /** The ids of [ids] that still exist. */
     suspend fun existingIds(ids: List<Long>): List<Long>
 
