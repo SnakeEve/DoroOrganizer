@@ -7,12 +7,14 @@ import com.doro.organizer.data.db.AppDatabase
 import com.doro.organizer.model.BatchResult
 import com.doro.organizer.model.EpochDays
 import com.doro.organizer.model.MAX_CONTENT_CHARS
+import com.doro.organizer.model.MAX_CONTENT_LINES
 import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.NoteDetail
 import com.doro.organizer.model.NoteDraft
 import com.doro.organizer.model.NoteQuery
 import com.doro.organizer.model.NoteRow
 import com.doro.organizer.model.SaveResult
+import com.doro.organizer.model.lineBreakCount
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -104,6 +106,7 @@ class DefaultNoteRepository(
 
     override suspend fun save(draft: NoteDraft): AppResult<SaveResult> {
         require(draft.content.length <= MAX_CONTENT_CHARS) { "content longer than $MAX_CONTENT_CHARS chars" }
+        require(lineBreakCount(draft.content) < MAX_CONTENT_LINES) { "content over $MAX_CONTENT_LINES lines" }
         requireNoteDate(draft.date)
         newEntityError(draft.newPersons, draft.newProjects)?.let { return AppResult.Err(it) }
         return write { db, now -> saveNote(db, draft, now) }

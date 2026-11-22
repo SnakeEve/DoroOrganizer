@@ -22,7 +22,9 @@ fun assertDbInvariants(db: SupportSQLiteDatabase) {
 }
 
 private const val MAX_CONTENT_CHARS = 200_000 // DEC-24, INV-1
+private const val MAX_CONTENT_LINES = 100_000 // Q14, INV-1: at most 99,999 line breaks (U+000A)
 private const val MAX_NAME_CHARS = 200 // DEC-32, INV-9
+private const val LINE_FEED = '\u000A'
 
 private val SQL_CHECKS = listOf(
     "notes.checked not 0 or 1 (DEC-22)" to "SELECT id FROM notes WHERE checked NOT IN (0, 1)",
@@ -51,6 +53,7 @@ private fun SupportSQLiteDatabase.foreignKeyViolations(): List<String> =
     }
 
 // Kotlin, not SQL: the fold needs Locale.ROOT lowercasing (DEC-29) and the length counts UTF-16 units (INV-1).
+// The line breaks are counted here too, by the rule's own literal rather than the app's helper (Q14, INV-1).
 private fun SupportSQLiteDatabase.contentViolations(): List<String> =
     query("SELECT id, content, content_fold FROM notes").use { cursor ->
         buildList {
@@ -59,6 +62,9 @@ private fun SupportSQLiteDatabase.contentViolations(): List<String> =
                 val content = cursor.getString(1)
                 if (content.length > MAX_CONTENT_CHARS) {
                     add("notes.content over $MAX_CONTENT_CHARS chars (INV-1): id $id")
+                }
+                if (content.count { it == LINE_FEED } >= MAX_CONTENT_LINES) {
+                    add("notes.content over $MAX_CONTENT_LINES lines (INV-1): id $id")
                 }
                 if (cursor.getString(2) != content.lowercase(Locale.ROOT)) {
                     add("notes.content_fold differs from content (DEC-29): id $id")

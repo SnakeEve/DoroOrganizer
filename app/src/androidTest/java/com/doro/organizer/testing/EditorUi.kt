@@ -59,6 +59,7 @@ class EditorUi(private val compose: ComposeTestRule, private val ui: GateUi) {
         const val DELETE_PERSON = "Delete person…"
         const val PERSON_DELETED = "Person deleted"
         const val TRUNCATED = "Notes are limited to 200,000 characters. The text was cut at that limit."
+        const val LINES_TRUNCATED = "Notes are limited to 100,000 lines. The text was cut at that limit."
     }
 }
 
