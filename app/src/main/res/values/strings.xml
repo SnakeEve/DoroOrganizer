@@ -146,6 +146,7 @@
     <string name="project_deleted">Project deleted</string>
     <string name="note_gone">This note no longer exists.</string>
     <string name="content_truncated">Notes are limited to 200,000 characters. The text was cut at that limit.</string>
+    <string name="content_lines_truncated">Notes are limited to 100,000 lines. The text was cut at that limit.</string>
     <string name="editor_save_failed">The note could not be saved. %1$s</string>
 
     <!-- EntityPicker (ui.md § 11.7). -->

@@ -116,8 +116,9 @@ internal fun EditorBody(
  * would take the height of its whole text, and M3's `TextField` measures its container with a fixed `Constraints` of
  * that height, which Compose cannot represent from 262,143 px on (ui-unit 1.12.1 `Constraints`; material3 1.4.0
  * `TextFieldMeasurePolicy`): from about 3,300 lines at 100 % font on a 3.25x screen, opening, typing into or pasting
- * a long note threw `IllegalArgumentException`. The field still lays out its whole text, so a note above Compose's
- * 16,777,215 px layout limit (more than about 122,000 line breaks at 200 % font) still crashes it (Q14).
+ * a long note threw `IllegalArgumentException`. The field still lays out its whole text, which Compose cannot do above
+ * 16,777,215 px (more than about 122,000 lines at 200 % font on that screen threw `IllegalStateException`); the line
+ * limit of `ContentCap` keeps a note at 100,000 lines, about 13.7 M px there (Q14, ui.md § 6.9).
  */
 @Composable
 private fun ContentField(vm: EditorViewModel, focus: FocusRequester, maxHeight: Dp) {

@@ -10,6 +10,7 @@ import com.doro.organizer.data.db.NoteDetailRow
 import com.doro.organizer.model.BatchResult
 import com.doro.organizer.model.EpochDays
 import com.doro.organizer.model.MAX_CONTENT_CHARS
+import com.doro.organizer.model.MAX_CONTENT_LINES
 import com.doro.organizer.model.MAX_NAME_CHARS
 import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.TextWhitespace
@@ -331,7 +332,8 @@ class NoteWriteRulesTest {
     @Test
     fun bounds_limitsThemselvesAreAccepted() = runTest(timeout = 10.seconds) {
         val name = "n".repeat(MAX_NAME_CHARS)
-        val content = "c".repeat(MAX_CONTENT_CHARS)
+        // Both content limits at once (INV-1): 200,000 units holding 99,999 line breaks, so 100,000 lines.
+        val content = "\n".repeat(MAX_CONTENT_LINES - 1) + "c".repeat(MAX_CONTENT_CHARS - (MAX_CONTENT_LINES - 1))
 
         listOf(EpochDays.MIN, EpochDays.MAX).forEach { day ->
             val newPersons = listOf(NewEntity("p", " $name "))
@@ -354,6 +356,8 @@ class NoteWriteRulesTest {
             draft(noteId = existing, content = "kept", date = EpochDays.MIN - 1),
             draft(content = "c".repeat(MAX_CONTENT_CHARS + 1)),
             draft(noteId = existing, content = "c".repeat(MAX_CONTENT_CHARS + 1)),
+            draft(content = "\n".repeat(MAX_CONTENT_LINES)), // 100,001 lines (Q14)
+            draft(noteId = existing, content = "c\n".repeat(MAX_CONTENT_LINES)), // 200,000 units, 100,001 lines
             draft(newPersons = listOf(NewEntity("p", "p".repeat(TOO_LONG)))),
             draft(noteId = existing, content = "kept", newProjects = listOf(NewEntity("x", "x".repeat(TOO_LONG)))),
         )

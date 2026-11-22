@@ -12,6 +12,7 @@ import com.doro.organizer.model.DeleteImpact
 import com.doro.organizer.model.DraftInsert
 import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.MAX_CONTENT_CHARS
+import com.doro.organizer.model.MAX_CONTENT_LINES
 import com.doro.organizer.model.NewEntity
 import com.doro.organizer.settings.SettingsStore
 import com.doro.organizer.testing.FakeAppTime
@@ -41,9 +42,10 @@ import org.junit.Test
 /**
  * `EditorViewModel` over in-memory repositories (ui.md § 6.6–§ 6.12; DEC-33, DEC-37): which leaves save, the single
  * insert of a note and of its created entities across saves and across a process death (`draftKey` record), the
- * Save action, the truncation on load with its notice (testing.md I-08, JVM part), a load that undo never reverts
- * (DEC-104), a vanished note, an older data epoch, the deletes, the checkbox of a saved note, the chip names and the
- * picker results. The same rules over the real repositories are `EditorViewModelTest` (I-36).
+ * Save action, the cut on load by either limit of the content cap and the notice of each limit, on load and on input
+ * (testing.md I-08, JVM part; Q14), a load that undo never reverts (DEC-104), a vanished note, an older data epoch,
+ * the deletes, the checkbox of a saved note, the chip names and the picker results. The same rules over the real
+ * repositories are `EditorViewModelTest` (I-36).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class EditorViewModelRulesTest {
@@ -206,6 +208,60 @@ class EditorViewModelRulesTest {
         assertTrue(vm.uiState.value.message?.isError == true)
         vm.saveOnLeave()
         assertEquals(0, notes.saves.size)
+    }
+
+    @Test
+    fun aStoredNoteOverTheLineLimit_isCutOnLoadToItsFirst100000Lines_withTheLineNotice_andLeavingWritesNothing() =
+        runTest(dispatcher) {
+            // Q14's probe note: 199,999 line breaks and "x", which crashed the editor at 200 % font (T22).
+            notes.notes[7] = StoredNote("\n".repeat(199_999) + "x")
+            val vm = editor(EditorKey(7, visit = 1))
+            collect(vm)
+
+            assertEquals("\n".repeat(MAX_CONTENT_LINES - 1), vm.content.text.toString())
+            assertEquals(UiText.Res(R.string.content_lines_truncated), vm.uiState.value.message?.text)
+            assertTrue(vm.uiState.value.message?.isError == true)
+            vm.saveOnLeave()
+            assertEquals(0, notes.saves.size)
+        }
+
+    @Test
+    fun aStoredNoteOverBothLimits_isCutToTheShorterText_withTheNoticeOfTheLimitThatCutIt() = runTest(dispatcher) {
+        notes.notes[7] = StoredNote("\n".repeat(150_000) + "a".repeat(100_000)) // lines cut at unit 99,999
+        notes.notes[8] = StoredNote("a".repeat(250_000) + "\n".repeat(MAX_CONTENT_LINES)) // characters cut first
+        val byLines = editor(EditorKey(7, visit = 1))
+        val byChars = editor(EditorKey(8, visit = 2))
+        collect(byLines)
+        collect(byChars)
+
+        assertEquals(MAX_CONTENT_LINES - 1, byLines.content.text.length)
+        assertEquals(UiText.Res(R.string.content_lines_truncated), byLines.uiState.value.message?.text)
+        assertEquals("a".repeat(MAX_CONTENT_CHARS), byChars.content.text.toString())
+        assertEquals(UiText.Res(R.string.content_truncated), byChars.uiState.value.message?.text)
+    }
+
+    @Test
+    fun theFieldsCap_showsTheNoticeOfTheLimitThatCutTheChange() = runTest(dispatcher) {
+        val lines = editor(EditorKey(null, visit = 1))
+        val chars = editor(EditorKey(null, visit = 2))
+        collect(lines)
+        collect(chars)
+
+        lines.content.edit {
+            append("x\n".repeat(MAX_CONTENT_LINES))
+            with(lines.contentCap) { transformInput() }
+        }
+        chars.content.edit {
+            append("y".repeat(MAX_CONTENT_CHARS + 1))
+            with(chars.contentCap) { transformInput() }
+        }
+
+        assertEquals("x\n".repeat(MAX_CONTENT_LINES - 1) + "x", lines.content.text.toString())
+        assertEquals(UiText.Res(R.string.content_lines_truncated), lines.uiState.value.message?.text)
+        assertTrue(lines.uiState.value.message?.isError == true)
+        assertEquals(MAX_CONTENT_CHARS, chars.content.text.length)
+        assertEquals(UiText.Res(R.string.content_truncated), chars.uiState.value.message?.text)
+        assertTrue(chars.uiState.value.message?.isError == true)
     }
 
     @OptIn(ExperimentalFoundationApi::class)
