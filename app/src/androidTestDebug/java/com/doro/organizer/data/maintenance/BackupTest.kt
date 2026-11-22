@@ -17,6 +17,7 @@ import com.doro.organizer.model.backupFileName
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.MaintenanceSetup
+import com.doro.organizer.testing.RAW_NOTE_INSERT
 import com.doro.organizer.testing.TestDatabases
 import com.doro.organizer.testing.TestKey
 import com.doro.organizer.testing.canonicalDump
@@ -273,8 +274,8 @@ class BackupTest {
 
     private fun insertNote(content: String) {
         setup.holder.openDatabase().openHelper.writableDatabase.execSQL(
-            "INSERT INTO notes (checked, created_at, updated_at, content, content_fold) VALUES (0, 1, 1, ?, ?)",
-            arrayOf(content, content),
+            RAW_NOTE_INSERT,
+            arrayOf<Any?>(null, null, 0, null, 1, 1, content, content),
         )
     }
 

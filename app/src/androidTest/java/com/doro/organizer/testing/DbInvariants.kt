@@ -1,13 +1,16 @@
 package com.doro.organizer.testing
 
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.doro.organizer.data.db.PREVIEW_EXPR
 import com.doro.organizer.model.TextWhitespace
 import java.util.Locale
 
 /**
  * testing.md I-01, asserted in `@After` of every database test class: the data invariants of data-layer.md
- * (INV-1, INV-3 to INV-5, INV-7, INV-9, INV-10) and restore checks R-1 to R-3 and R-5. Fails with every violation,
- * naming rows by id only (DEC-70). The limits are literals copied from the docs, so a changed constant fails here.
+ * (INV-1, INV-3 to INV-5, INV-7, INV-9, INV-10, INV-13) and restore checks R-1 to R-3, R-5 and R-6. Fails with every
+ * violation, naming rows by id only (DEC-70). The limits are literals copied from the docs, so a changed constant
+ * fails here; the preview is compared with the production [PREVIEW_EXPR], its only definition, evaluated by SQLite
+ * (DEC-106; `NotePreviewTest` and `NoteRowTest` pin what the expression yields).
  */
 fun assertDbInvariants(db: SupportSQLiteDatabase) {
     val violations = SQL_CHECKS.flatMap { (label, sql) -> db.longsOf(sql).map { "$label: id $it" } } +
@@ -36,6 +39,8 @@ private val SQL_CHECKS = listOf(
     // EpochDays.MIN..MAX = 1900-01-01..2100-12-31 (DEC-26, INV-5, R-3)
     "notes.date outside 1900-01-01..2100-12-31 (R-3)" to
         "SELECT id FROM notes WHERE date IS NOT NULL AND date NOT BETWEEN -25567 AND 47846",
+    "notes.preview differs from PREVIEW_EXPR of content (INV-13, R-6)" to
+        "SELECT id FROM notes WHERE preview IS NOT $PREVIEW_EXPR",
 )
 
 private fun SupportSQLiteDatabase.foreignKeyViolations(): List<String> =

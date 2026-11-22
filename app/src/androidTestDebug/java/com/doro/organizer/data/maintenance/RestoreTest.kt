@@ -7,16 +7,20 @@ import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.data.HolderState
 import com.doro.organizer.data.RawConnections
 import com.doro.organizer.model.EntityKind
+import com.doro.organizer.model.EntityRef
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.NoteQuery
+import com.doro.organizer.model.NoteRow
 import com.doro.organizer.settings.Settings
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.KeyVaultRule
 import com.doro.organizer.testing.MaintenanceSetup
+import com.doro.organizer.testing.RAW_NOTE_INSERT
 import com.doro.organizer.testing.RestoreAnswer.Companion.backupPassword
 import com.doro.organizer.testing.RestoreAnswer.Companion.confirm
 import com.doro.organizer.testing.SeedGenerator
 import com.doro.organizer.testing.TestDatabases
+import com.doro.organizer.testing.TestRows
 import com.doro.organizer.testing.backupTo
 import com.doro.organizer.testing.longOf
 import com.doro.organizer.testing.longsOf
@@ -106,7 +110,7 @@ class RestoreTest {
         assertEquals(listOf(false), setup.listener.startedFor(MaintenanceOp.Restore))
         assertEquals(MaintenanceOutcome.Reopened, setup.listener.finished.last())
         val restored = setup.holder.openDatabase().openHelper.writableDatabase
-        restored.execSQL("INSERT INTO notes (checked, created_at, updated_at, content, content_fold) VALUES (0, 1, 1, '', '')")
+        restored.execSQL(RAW_NOTE_INSERT, arrayOf<Any?>(null, null, 0, null, 1, 1, "", ""))
         assertTrue(restored.longOf("SELECT max(id) FROM notes") > highest) // INV-11
     }
 
@@ -203,6 +207,48 @@ class RestoreTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    /**
+     * DEC-106 (b): the name maps are replaced together with the rows. Person id 1 is Ann in the backup and Bob in the
+     * live file (ids name different entities in different files), each linked from a note of its own file. Across the
+     * swap every emitted chip carries its own file's name, never the other file's, and the list ends at the backup's.
+     */
+    @Test
+    fun aListFlowCollectedAcrossTheSwap_namesTheRestoredLinksFromTheRestoredFile() = runRestoreTest {
+        setup.start()
+        val now = setup.time.nowMillis()
+        val backupRows = TestRows(setup.holder.openDatabase().openHelper.writableDatabase)
+        val ann = EntityRef(backupRows.person("Ann", now), "Ann")
+        val inBackup = backupRows.note("in the backup", createdAt = now)
+        backupRows.linkPerson(inBackup, ann.id)
+        val backup = setup.backupTo(context, "names.db")
+        // The backup reopened Room. In the live file the same id names Bob: Ann goes with her note and the sequence is
+        // set back, which only a test does (INV-11 keeps ids unique within one file, not across files).
+        val live = setup.holder.openDatabase().openHelper.writableDatabase
+        listOf("DELETE FROM note_persons", "DELETE FROM notes", "DELETE FROM persons").forEach(live::execSQL)
+        live.execSQL("UPDATE sqlite_sequence SET seq = 0 WHERE name = 'persons'")
+        val liveRows = TestRows(live)
+        val bob = EntityRef(liveRows.person("Bob", now), "Bob")
+        assertEquals(ann.id, bob.id)
+        val inLive = liveRows.note("in the live file", createdAt = now)
+        liveRows.linkPerson(inLive, bob.id)
+        val chipsOf = mapOf(inBackup to listOf(ann), inLive to listOf(bob))
+        val notes = noteRepository(setup.holder, setup.time, scope)
+
+        notes.observeRows(ALL).test(timeout = 60.seconds) {
+            assertEquals(mapOf(inLive to listOf(bob)), awaitItem().chips())
+
+            setup.maintenance.restoreAnswering(backup.uri, MaintenanceOrigin.Ready, confirm())
+
+            do {
+                val chips = awaitItem().chips() // the swap may first emit the rows of neither state
+                chips.forEach { (note, persons) -> assertEquals("chips of note $note", chipsOf[note], persons) }
+            } while (chips != mapOf(inBackup to listOf(ann)))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    private fun List<NoteRow>.chips(): Map<Long, List<EntityRef>> = associate { it.id to it.persons }
 
     /** The row counts of notes, persons and projects in a `canonicalDump`. */
     private fun atBackupCounts(dump: Map<String, List<List<String?>>>) =

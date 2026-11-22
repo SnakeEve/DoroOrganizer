@@ -6,9 +6,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * testing.md I-47: `content` and `content_fold` are the last columns of `notes`, so the small columns that `WHERE`
- * and `ORDER BY` read sit before any overflow page (data-layer.md § Size and performance). Checked in every
- * exported schema version.
+ * testing.md I-47: `preview`, `content` and `content_fold` are the last columns of `notes`, in this order, so the small
+ * columns that `WHERE` and `ORDER BY` read come first and the stored preview that lists read (DEC-106) comes before the
+ * two large columns (data-layer.md § Size and performance). Checked in every exported schema version. Only the order
+ * is checked: whether a long multibyte preview of an overflowing row stays on the leaf page depends on SQLite's
+ * overflow rule, which no column order can guarantee.
  */
 class SchemaJsonTest {
     /** Keeps the per-version checks below from passing vacuously once the database exists (DEC-14). */
@@ -42,8 +44,22 @@ class SchemaJsonTest {
         assertFalse(endsWithContentColumns(schema(misplaced)))
     }
 
+    /** DEC-106: the stored preview must sit right before the two large columns, not behind them or elsewhere. */
+    @Test
+    fun previewNotRightBeforeTheContentColumns_isDetected() {
+        val behind = NOTES_SQL.replace("`preview` TEXT NOT NULL, ", "").replace(
+            "`content_fold` TEXT NOT NULL)",
+            "`content_fold` TEXT NOT NULL, `preview` TEXT NOT NULL)",
+        )
+        val early = NOTES_SQL.replace("`preview` TEXT NOT NULL, ", "")
+            .replace("`date` INTEGER, ", "`preview` TEXT NOT NULL, `date` INTEGER, ")
+        val missing = NOTES_SQL.replace("`preview` TEXT NOT NULL, ", "")
+
+        listOf(behind, early, missing).forEach { assertFalse(it, endsWithContentColumns(schema(it))) }
+    }
+
     private fun endsWithContentColumns(json: String): Boolean =
-        SchemaFiles.createSqlColumns(json, "notes").takeLast(2) == listOf("content", "content_fold")
+        SchemaFiles.createSqlColumns(json, "notes").takeLast(3) == listOf("preview", "content", "content_fold")
 
     private fun schema(createSql: String, table: String = "notes") =
         """{"formatVersion":1,"database":{"version":1,"entities":[{"tableName":"$table","createSql":"$createSql"}]}}"""
@@ -52,7 +68,7 @@ class SchemaJsonTest {
         const val NOTES_SQL = "CREATE TABLE IF NOT EXISTS `\${TABLE_NAME}` (" +
             "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `date` INTEGER, `checked` INTEGER NOT NULL DEFAULT 0, " +
             "`checked_at` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, " +
-            "`content` TEXT NOT NULL, `content_fold` TEXT NOT NULL)"
+            "`preview` TEXT NOT NULL, `content` TEXT NOT NULL, `content_fold` TEXT NOT NULL)"
         const val JUNCTION_SQL = "CREATE TABLE IF NOT EXISTS `\${TABLE_NAME}` (`note_id` INTEGER NOT NULL, " +
             "`person_id` INTEGER NOT NULL, PRIMARY KEY(`note_id`, `person_id`), FOREIGN KEY(`note_id`) " +
             "REFERENCES `notes`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"

@@ -1,6 +1,7 @@
 package com.doro.organizer.testing
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.doro.organizer.data.db.PREVIEW_EXPR
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -35,6 +36,9 @@ class DbInvariantsTest {
             sql("UPDATE notes SET date = -25568 WHERE id = 2", "notes.date outside" to 2L),
             sql("UPDATE notes SET date = 47847 WHERE id = 1", "notes.date outside" to 1L),
             sql("UPDATE notes SET content_fold = 'Ä' WHERE id = 1", "notes.content_fold differs" to 1L),
+            sql("UPDATE notes SET preview = 'Ärger' WHERE id = 1", "notes.preview differs" to 1L),
+            sql("UPDATE notes SET preview = ' ' WHERE id = 2", "notes.preview differs" to 2L),
+            sql("UPDATE notes SET content = ' x', content_fold = ' x' WHERE id = 2", "notes.preview differs" to 2L),
             sql(setContent(repeated("a", 200_001)), "notes.content over 200000 chars" to 1L),
             // 200,000 UTF-16 units never exceed 600,000 bytes, so the byte check fires only together with INV-1.
             sql(
@@ -84,8 +88,9 @@ class DbInvariantsTest {
     private fun sql(statement: String, vararg expected: Pair<String, Long>) =
         Case(expected.toList()) { it.execSQL(statement) }
 
-    /** Sets note 1's content and its matching fold to [value], an SQL expression. */
-    private fun setContent(value: String) = "UPDATE notes SET content = $value, content_fold = $value WHERE id = 1"
+    /** Sets note 1's content and its matching fold and preview to [value], an SQL expression (INV-13 holds). */
+    private fun setContent(value: String) = "UPDATE notes SET content = $value, content_fold = $value, " +
+        "preview = (SELECT $PREVIEW_EXPR FROM (SELECT $value AS content)) WHERE id = 1"
 
     /** An SQL expression for [char] repeated [count] times. */
     private fun repeated(char: String, count: Int) = "replace(hex(zeroblob($count)), '00', '$char')"
@@ -98,10 +103,8 @@ class DbInvariantsTest {
             close()
         }
         val db = databases.raw(file, TestKey.Plain)
-        db.execSQL(
-            "INSERT INTO notes (id, date, checked, checked_at, created_at, updated_at, content, content_fold) " +
-                "VALUES (1, 20000, 0, NULL, 10, 20, 'Ärger Über', 'ärger über'), (2, NULL, 1, 30, 10, 10, '', '')",
-        )
+        db.execSQL(RAW_NOTE_INSERT, arrayOf<Any?>(1, 20000, 0, null, 10, 20, "Ärger Über", "ärger über"))
+        db.execSQL(RAW_NOTE_INSERT, arrayOf<Any?>(2, null, 1, 30, 10, 10, "", ""))
         db.execSQL("INSERT INTO persons (id, name, created_at, updated_at) VALUES (1, 'Ann', 10, 10)")
         db.execSQL("INSERT INTO projects (id, name, created_at, updated_at) VALUES (1, 'Apollo', 10, 10)")
         db.execSQL("INSERT INTO note_persons (note_id, person_id) VALUES (1, 1)")

@@ -44,15 +44,30 @@ const val WHITESPACE_CHARS = """char(9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 160,
     8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288)"""
 
 /**
- * The columns of `NoteRowRaw`: a preview instead of the content (`substr` counts code points, DEC-24), and the links
- * as JSON arrays of `[id, name]`, because names are free text that may contain any separator (data-layer.md § Rows).
+ * The list preview of `content` (DEC-24, DEC-106): at most 300 code points (`substr` counts code points) from the
+ * first character that is not [WHITESPACE_CHARS]. The only definition of the preview, over the bare column name
+ * `content`: the write path stores it in `notes.preview` ([PREVIEW_OF_BOUND_CONTENT]), restore check R-6 compares the
+ * column with it, and no Kotlin code computes a preview (data-layer.md INV-13).
  */
-const val ROW_COLUMNS = """n.id, substr(ltrim(n.content, $WHITESPACE_CHARS), 1, 300) AS preview, n.date, n.checked,
+const val PREVIEW_EXPR = "substr(ltrim(content, $WHITESPACE_CHARS), 1, 300)"
+
+/**
+ * [PREVIEW_EXPR] applied to the bound `:content` of `INSERT_NOTE_SQL` and `UPDATE_NOTE_SQL`, in the statement that
+ * writes the content. A subquery over the bound value, not the column: an UPDATE evaluates its right-hand sides on the
+ * old row, so `preview = PREVIEW_EXPR` there would store the old text's preview (data-layer.md § Note save, step 7).
+ */
+const val PREVIEW_OF_BOUND_CONTENT = "(SELECT $PREVIEW_EXPR FROM (SELECT :content AS content))"
+
+/**
+ * The columns of `NoteRowRaw`: the stored preview, never the content (DEC-24, DEC-106), and the links as
+ * `group_concat` of the linked ids, decimal and separated by `,`, in no defined order, NULL without links (DEC-106).
+ * The names come from `PersonDao.observeNames` and `ProjectDao.observeNames`, so the subqueries read only the
+ * junction tables (data-layer.md § Rows).
+ */
+const val ROW_COLUMNS = """n.id, n.preview, n.date, n.checked,
     n.checked_at, n.created_at, n.updated_at,
-    (SELECT json_group_array(json_array(p.id, p.name)) FROM note_persons np
-        JOIN persons p ON p.id = np.person_id WHERE np.note_id = n.id) AS persons_json,
-    (SELECT json_group_array(json_array(j.id, j.name)) FROM note_projects nj
-        JOIN projects j ON j.id = nj.project_id WHERE nj.note_id = n.id) AS projects_json"""
+    (SELECT group_concat(np.person_id, ',') FROM note_persons np WHERE np.note_id = n.id) AS person_ids,
+    (SELECT group_concat(nj.project_id, ',') FROM note_projects nj WHERE nj.note_id = n.id) AS project_ids"""
 
 /** Every note list (data-layer.md § Perspective query). */
 const val ROWS_SQL = "SELECT $ROW_COLUMNS FROM notes n $PERSPECTIVE_WHERE $CANONICAL_ORDER"

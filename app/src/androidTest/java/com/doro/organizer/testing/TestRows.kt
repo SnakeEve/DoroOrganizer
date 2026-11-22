@@ -7,8 +7,9 @@ import net.zetetic.database.sqlcipher.SQLiteDatabase
 
 /**
  * Writes rows with bound SQL on [db], independently of the DAOs that read them, so a read test never depends on a
- * write path it does not check. Notes get `content_fold` from the production fold (DEC-29), as the single write path
- * does. Returns ids through `insert`, never `last_insert_rowid()`, whose answer depends on the pooled connection.
+ * write path it does not check. Notes get `content_fold` from the production fold (DEC-29) and `preview` from the
+ * production `PREVIEW_EXPR`, evaluated by SQLite ([RAW_NOTE_INSERT], INV-13), as the single write path does. Returns
+ * ids through `insert` or `executeInsert`, never `last_insert_rowid()`, whose answer depends on the pooled connection.
  *
  * Writes bypass Room's transaction API, so they notify no Room `Flow`: a test that expects a re-emission runs the
  * write inside `withTransaction`, whose end refreshes the invalidation tracker.
@@ -21,16 +22,17 @@ class TestRows(private val db: SupportSQLiteDatabase) {
         updatedAt: Long = createdAt,
         checkedAt: Long? = null,
         date: Long? = null,
-    ): Long = insert(
-        "notes",
-        "date" to date,
-        "checked" to if (checkedAt != null) 1 else 0,
-        "checked_at" to checkedAt,
-        "created_at" to createdAt,
-        "updated_at" to updatedAt,
-        "content" to content,
-        "content_fold" to SearchText.fold(content),
-    )
+    ): Long = db.compileStatement(RAW_NOTE_INSERT).use { insert ->
+        insert.bindNull(1)
+        if (date != null) insert.bindLong(2, date) else insert.bindNull(2)
+        insert.bindLong(3, if (checkedAt != null) 1 else 0)
+        if (checkedAt != null) insert.bindLong(4, checkedAt) else insert.bindNull(4)
+        insert.bindLong(5, createdAt)
+        insert.bindLong(6, updatedAt)
+        insert.bindString(7, content)
+        insert.bindString(8, SearchText.fold(content))
+        insert.executeInsert()
+    }
 
     fun person(name: String, createdAt: Long): Long =
         insert("persons", "name" to name, "created_at" to createdAt, "updated_at" to createdAt)

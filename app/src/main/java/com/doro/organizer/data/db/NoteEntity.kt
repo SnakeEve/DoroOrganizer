@@ -7,8 +7,10 @@ import androidx.room.PrimaryKey
 
 /**
  * A row of `notes` (data-layer.md § Entities). Each §9 index that DEC-30 keeps has its explicit name. `content` and
- * `content_fold` are declared last, so Room emits them as the last columns and the small columns that `WHERE` and
- * `ORDER BY` read stay before any overflow page (testing.md I-47).
+ * `content_fold` are declared last and `preview` right before them, so Room emits them as the last columns: the small
+ * columns that `WHERE` and `ORDER BY` read always stay on the row's leaf page, and so does the preview that lists read
+ * unless it is a long multibyte one in a row that overflows (SQLite then may keep only about 480 bytes of the record on
+ * the leaf page; data-layer.md § Size and performance, testing.md I-47, DEC-106).
  */
 @Entity(
     tableName = "notes",
@@ -28,6 +30,12 @@ data class NoteEntity(
     @ColumnInfo(name = "checked_at") val checkedAt: Long?,
     @ColumnInfo(name = "created_at") val createdAt: Long,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
+    /**
+     * `PREVIEW_EXPR` of [content], the stored list preview (DEC-24, DEC-106, INV-13). No default on purpose: a write
+     * that forgets it fails on NOT NULL. Only `INSERT_NOTE_SQL` and `UPDATE_NOTE_SQL` write it, in SQL; nothing
+     * inserts a `NoteEntity`, so this class only declares the table.
+     */
+    val preview: String,
     /** Never null; empty is `""` (DEC-24, INV-1). */
     val content: String,
     /** `SearchText.fold(content)`, written together with [content] (DEC-29, INV-2). */

@@ -16,7 +16,7 @@ object RestoreChecks {
 
     /** R-4: column value types, which Room is not strict about and a cursor read would throw on. */
     private const val R4 = """SELECT (SELECT COUNT(*) FROM notes WHERE typeof(content) <> 'text' OR typeof(content_fold) <> 'text'
-            OR typeof(checked) <> 'integer' OR typeof(date) NOT IN ('integer', 'null')
+            OR typeof(preview) <> 'text' OR typeof(checked) <> 'integer' OR typeof(date) NOT IN ('integer', 'null')
             OR typeof(checked_at) NOT IN ('integer', 'null')
             OR typeof(created_at) <> 'integer' OR typeof(updated_at) <> 'integer')
      + (SELECT COUNT(*) FROM persons WHERE typeof(name) <> 'text'
@@ -29,10 +29,18 @@ object RestoreChecks {
      + (SELECT COUNT(*) FROM projects WHERE length(CAST(name AS BLOB)) > 600)"""
 
     /**
-     * Version to its list. A migration that renames, retypes or drops a checked column adds a list for its target
-     * version and never edits an older one.
+     * R-6: the stored preview is [PREVIEW_EXPR] of the row's content (INV-13, DEC-106), built from the constant the
+     * write path uses. A release that changes [PREVIEW_EXPR] first gives the older versions' lists a literal copy of
+     * this text, so an older list never changes meaning.
      */
-    private val BY_VERSION: Map<Int, List<String>> = mapOf(1 to listOf(R1, R2, R3, R4, R5))
+    private const val R6 = "SELECT COUNT(*) FROM notes WHERE preview IS NOT $PREVIEW_EXPR"
+
+    /**
+     * Version to its list. A migration that renames, retypes or drops a checked column adds a list for its target
+     * version and never edits an older one. R-6 and R-4's `preview` term joined the version-1 list only because
+     * version 1 is unreleased and its schema changed with them (DEC-14, DEC-106).
+     */
+    private val BY_VERSION: Map<Int, List<String>> = mapOf(1 to listOf(R1, R2, R3, R4, R5, R6))
 
     /** The checks of a backup at schema [version] (≥ 1): its own list, or the newest list below it. */
     fun forVersion(version: Int): List<String> {

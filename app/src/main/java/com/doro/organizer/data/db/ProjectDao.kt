@@ -19,6 +19,9 @@ interface ProjectDao : EntityDao {
     @Query(PROJECT_REF_SQL)
     override fun observe(id: Long): Flow<EntityRef?>
 
+    @Query(PROJECT_NAMES_SQL)
+    override fun observeNames(): Flow<List<EntityRef>>
+
     /** A new project; returns its id. */
     @Insert
     suspend fun insert(project: ProjectEntity): Long
