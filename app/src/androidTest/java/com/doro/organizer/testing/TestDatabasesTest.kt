@@ -68,6 +68,24 @@ class TestDatabasesTest {
     }
 
     @Test
+    fun readOnly_plainFileInWalMode_isRejectedBeforeOpening() {
+        val file = databases.file("wal.db")
+        databases.createRaw(file, TestKey.Plain).use { db ->
+            db.execSQL("CREATE TABLE t (x INTEGER)")
+            assertEquals(listOf("wal"), db.stringsOf("PRAGMA journal_mode = WAL"))
+        }
+        val wal = File(file.path + "-wal")
+        assertFalse("precondition: no -wal after the WAL connection closed", wal.exists())
+
+        assertThrows(IllegalStateException::class.java) { databases.readOnly(file, TestKey.Plain) }
+        assertFalse("readOnly created a -wal", wal.exists())
+
+        // Control: back in rollback-journal mode, the same file opens read-only.
+        databases.raw(file, TestKey.Plain).use { assertEquals(listOf("delete"), it.stringsOf("PRAGMA journal_mode = DELETE")) }
+        databases.readOnly(file, TestKey.Plain).use { assertEquals(listOf("t"), it.stringsOf("SELECT name FROM sqlite_master")) }
+    }
+
+    @Test
     fun raw_encodesDekAsSqlcipherRawKey() {
         val key = TestKey.Raw(ByteArray(32) { 0xAB.toByte() })
 
