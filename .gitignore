@@ -23,3 +23,6 @@ signing.properties
 # Per-user agent state
 .claude/settings.local.json
 .claude/*.lock
+
+# The owner's app backups (real notes, DEC-70) are kept here on this laptop only and never enter history.
+/DoroBackup/
