@@ -2127,7 +2127,7 @@ TalkBack visits the row node first and then its checkbox, so the checkbox is alw
 
 ### 12.4 Touch targets
 
-- Every interactive element has a touch target of at least 48 × 48 dp (DEC-55, testing.md I-35): M3 components keep `minimumInteractiveComponentSize()`, custom clickables add it, rows are at least 56 dp (pickers, Settings) or 72 dp (notes) high.
+- Every interactive element has a touch target of at least 48 × 48 dp (DEC-55, Q13, testing.md I-35): its touch bounds (`touchBoundsInRoot`, the area a finger gets: Compose pads them to its 48 dp minimum touch target, and clipping ancestors cut them) reach 48 × 48 dp, while the element itself may be laid out smaller. M3 components keep `minimumInteractiveComponentSize()`; custom clickables need not add it. Rows are at least 56 dp (pickers, Settings) or 72 dp (notes) high.
 - There is no exception (DEC-55): `MonthGrid` day columns never fall below 48 dp, so below 336 dp of available width the grid scrolls horizontally instead (section 4.4.1).
 - No two touch targets overlap: the link chip as a whole is the remove target (no nested close button), and the row checkbox sits outside the row's text area.
 
