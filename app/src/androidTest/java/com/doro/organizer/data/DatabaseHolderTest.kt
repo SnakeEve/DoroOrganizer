@@ -215,18 +215,7 @@ class DatabaseHolderTest {
     @Test
     fun exclusive_flowThatIgnoresCancellation_isAbandonedAfterTheDrainTimeout() = runOnDefault {
         val holder = databases.holder()
-        val subscribed = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-        val collector = launch {
-            holder.observe {
-                flow {
-                    emit(Unit)
-                    subscribed.complete(Unit)
-                    withContext(NonCancellable) { release.await() }
-                }
-            }.collect {}
-        }
-        subscribed.await()
+        val stuck = startStuckCollection(holder)
         val open = holder.state.value as HolderState.Open
 
         val result = holder.exclusive {
@@ -235,8 +224,7 @@ class DatabaseHolderTest {
         }
 
         assertEquals(OpenResult.Opened, result)
-        release.complete(Unit)
-        collector.cancelAndJoin()
+        stuck.end()
     }
 
     /**
@@ -295,18 +283,7 @@ class DatabaseHolderTest {
         val holder = databases.holder(TestKey.Raw(ByteArray(32) { 4 }))
         val liveKey = keys.last()
         val file = databases.files.live(GENERATION)
-        val subscribed = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-        val collector = launch {
-            holder.observe {
-                flow {
-                    emit(Unit)
-                    subscribed.complete(Unit)
-                    withContext(NonCancellable) { release.await() }
-                }
-            }.collect {}
-        }
-        subscribed.await()
+        val stuck = startStuckCollection(holder)
         val open = holder.state.value as HolderState.Open
 
         val start = System.nanoTime()
@@ -327,10 +304,10 @@ class DatabaseHolderTest {
             keyZeroAfterClose = liveKey.all { it == 0.toByte() }
             descriptorsAfterClose = openDescriptors(file)
         } finally {
-            release.complete(Unit) // before any assertion: a failure must not leave the collection, and the test, stuck
+            stuck.release() // before any assertion: a failure must not leave the collection, and the test, stuck
         }
         closing.await()
-        collector.cancelAndJoin()
+        stuck.end()
 
         assertTrue("close() did not return within $LIMIT; it waited for the stuck collection", returned)
         assertTrue(

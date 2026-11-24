@@ -73,7 +73,7 @@ class DefaultDatabaseHolder(
 
     /**
      * db-lifecycle.md § Close (DEC-81): the same drain as exclusive mode (the calls in flight, then the collected flows
-     * for at most the drain timeout), then Room is closed and the key is zeroed.
+     * for at most the drain timeout) with its own timeout line, then Room is closed and the key is zeroed.
      */
     override suspend fun close() = transition.withLock {
         when (val current = mutableState.value) {
@@ -82,7 +82,7 @@ class DefaultDatabaseHolder(
                 // Even when Room's close fails, the holder leaves Draining and the key is zeroed.
                 try {
                     drainCalls()
-                    drainFlows(current)
+                    drainFlows(current, CLOSE_DRAIN_TIMEOUT_LINE)
                     closeRoom(current)
                 } finally {
                     stayClosed()
@@ -136,7 +136,7 @@ class DefaultDatabaseHolder(
         withContext(NonCancellable) {
             try {
                 drainCalls()
-                drainFlows(open)
+                drainFlows(open, EXCLUSIVE_DRAIN_TIMEOUT_LINE)
                 closeRoom(open)
             } catch (t: Throwable) {
                 stayClosed()
@@ -233,14 +233,14 @@ class DefaultDatabaseHolder(
     /**
      * Exclusive mode step 4 and close step 3 (db-lifecycle.md): waits at most [FLOW_DRAIN_TIMEOUT_MS] for the cancelled
      * flows of [open] to end; a Room flow ends only after its running statement has returned (DEC-107). `exclusive` and
-     * `close` call it after [drainCalls], holding [transition], in [NonCancellable]. On timeout it logs one constant
-     * line, the same for both callers.
+     * `close` call it after [drainCalls], holding [transition], in [NonCancellable]. On timeout it logs [timeoutLine],
+     * its caller's constant line: [EXCLUSIVE_DRAIN_TIMEOUT_LINE] or [CLOSE_DRAIN_TIMEOUT_LINE].
      */
-    private suspend fun drainFlows(open: HolderState.Open) {
+    private suspend fun drainFlows(open: HolderState.Open, timeoutLine: String) {
         val drained = withTimeoutOrNull(FLOW_DRAIN_TIMEOUT_MS) {
             while (open.activeFlows.get() > 0) delay(FLOW_DRAIN_POLL_MS)
         }
-        if (drained == null) AppLog.d("exclusive: flow drain timeout")
+        if (drained == null) AppLog.d(timeoutLine)
     }
 
     private suspend fun closeRoom(open: HolderState.Open) = withContext(dispatchers.io) { open.db.close() }
@@ -316,5 +316,11 @@ class DefaultDatabaseHolder(
         const val FLOW_RETRY_DELAY_MS = 2_000L
         const val FLOW_DRAIN_TIMEOUT_MS = 2_000L
         const val FLOW_DRAIN_POLL_MS = 10L
+
+        /** The flow drain's timeout line of `exclusive` (db-lifecycle.md § Exclusive mode step 4; DEC-70). */
+        const val EXCLUSIVE_DRAIN_TIMEOUT_LINE = "exclusive: flow drain timeout"
+
+        /** The flow drain's timeout line of `close` (db-lifecycle.md § Close step 3; DEC-70). */
+        const val CLOSE_DRAIN_TIMEOUT_LINE = "close: flow drain timeout"
     }
 }

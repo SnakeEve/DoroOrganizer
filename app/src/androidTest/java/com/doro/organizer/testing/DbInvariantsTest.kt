@@ -46,6 +46,8 @@ class DbInvariantsTest {
                 "notes.content over 200000 chars" to 1L,
                 "notes.content over 600,000 bytes" to 1L,
             ),
+            // 100,000 line feeds are 100,001 lines (Q14), in 100,000 units and bytes: within the other two limits.
+            sql(setContent(repeated("\n", 100_000)), "notes.content over 100000 lines" to 1L),
             sql("UPDATE persons SET name = '' WHERE id = 1", "persons.name blank" to 1L),
             sql("UPDATE persons SET name = 'Ann' || char(10) WHERE id = 1", "persons.name blank" to 1L),
             sql("UPDATE projects SET name = ${repeated("p", 201)} WHERE id = 1", "projects.name blank" to 1L),
@@ -77,7 +79,18 @@ class DbInvariantsTest {
         db.execSQL("UPDATE notes SET date = -25567 WHERE id = 1")
         db.execSQL("UPDATE notes SET date = 47846 WHERE id = 2")
         db.execSQL(setContent(repeated("€", 200_000)))
+        // 99,999 line feeds are 100,000 lines (Q14): alone in note 2, and with 100,001 more units in note 3, which is
+        // thereby at the 200,000-unit limit too.
+        db.execSQL(setContent(repeated("\n", 99_999), id = 2))
+        db.execSQL(RAW_NOTE_INSERT, arrayOf<Any?>(3, null, 0, null, 10, 10, "", ""))
+        db.execSQL(setContent("${repeated("\n", 99_999)} || ${repeated("a", 100_001)}", id = 3))
         db.execSQL("UPDATE persons SET name = ${repeated("n", 200)} WHERE id = 1")
+        // What each note holds, measured by SQLite: characters (here each one UTF-16 unit), line feeds, UTF-8 bytes.
+        val sizes = db.stringsOf(
+            "SELECT length(content) || ' ' || (length(content) - length(replace(content, char(10), ''))) || ' ' || " +
+                "length(CAST(content AS BLOB)) FROM notes ORDER BY id",
+        )
+        assertEquals(listOf("200000 0 600000", "99999 99999 99999", "200000 99999 200000"), sizes)
 
         assertDbInvariants(db)
     }
@@ -88,11 +101,14 @@ class DbInvariantsTest {
     private fun sql(statement: String, vararg expected: Pair<String, Long>) =
         Case(expected.toList()) { it.execSQL(statement) }
 
-    /** Sets note 1's content and its matching fold and preview to [value], an SQL expression (INV-13 holds). */
-    private fun setContent(value: String) = "UPDATE notes SET content = $value, content_fold = $value, " +
-        "preview = (SELECT $PREVIEW_EXPR FROM (SELECT $value AS content)) WHERE id = 1"
+    /** Sets note [id]'s content and its matching fold and preview to [value], an SQL expression (INV-13 holds). */
+    private fun setContent(value: String, id: Int = 1) = "UPDATE notes SET content = $value, content_fold = $value, " +
+        "preview = (SELECT $PREVIEW_EXPR FROM (SELECT $value AS content)) WHERE id = $id"
 
-    /** An SQL expression for [char] repeated [count] times. */
+    /**
+     * An SQL expression for [char] repeated [count] times. [char] goes into an SQL string literal as it is, so `"\n"`
+     * gives line feeds.
+     */
     private fun repeated(char: String, count: Int) = "replace(hex(zeroblob($count)), '00', '$char')"
 
     /** Two notes (one unchecked and linked, one checked), one person and one project, all valid. */
