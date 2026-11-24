@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.util.AtomicFile
 import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.io.syncDirectory
+import com.doro.organizer.core.io.syncFile
 import com.doro.organizer.core.log.AppLog
 import com.doro.organizer.core.time.AppTime
 import com.doro.organizer.model.KeyMode
@@ -49,8 +50,11 @@ class DefaultKeyVault(
     private val newSecret: (Int) -> ByteArray = ::ByteArray,
     private val kdf: (password: ByteArray, salt: ByteArray, iterations: Int) -> ByteArray = ::pbkdf2Sha256,
     bio: BioKeystore = AndroidBioKeystore(),
-    /** Syncs the `db-state.json.new` stream to the storage; throws when the storage reports a failed sync. */
-    private val syncStream: (FileOutputStream) -> Unit = { it.fd.sync() },
+    /**
+     * Syncs the `db-state.json.new` stream to the storage and throws when the storage reports a failed sync. The
+     * default, [syncFile], keeps the errno as the cause, so a full storage is classified as storage full (DEC-107 (4)).
+     */
+    private val syncStream: (FileOutputStream) -> Unit = { syncFile(it.fd) },
 ) : KeyVault {
     private val mutex = Mutex()
     private val atomicFile = AtomicFile(stateFile)

@@ -66,7 +66,7 @@ internal class BiometricSlotCommits(private val deps: MaintenanceDeps) {
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
-            return repair(state, cipher) // the directory sync or the read-back failed: the outcome is unknown
+            return repair(state, cipher) // the read-back threw: the outcome is unknown
         }
         return when {
             readBack != null && readBack.matches(state.generation, state.slot, bio) -> {
@@ -136,8 +136,9 @@ internal class BiometricSlotCommits(private val deps: MaintenanceDeps) {
     }
 
     /**
-     * `KeyVault.commit` of [state]'s generation and key slot with [bio], then the directory sync; returns the commit's
-     * error. A failed sync throws: whether the write is durable is then unknown.
+     * `KeyVault.commit` of [state]'s generation and key slot with [bio], then the best-effort directory sync, which
+     * never throws. Returns what the commit threw, or null: a failed key-state sync is returned like any other failure
+     * of the commit, with its errno kept (DEC-107 (4)). Nothing here decides the outcome; the caller's read-back does.
      */
     private suspend fun commitSlot(state: KeyState, bio: BioSlot?): Throwable? {
         val error = try {

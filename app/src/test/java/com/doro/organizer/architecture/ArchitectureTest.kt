@@ -389,6 +389,36 @@ class ArchitectureTest {
     }
 
     @Test
+    fun fileSyncsOnlyThroughSyncFile() = assertClean(FileSyncRule::check)
+
+    @Test
+    fun fileSyncsOnlyThroughSyncFile_planted() {
+        val source = planted(
+            "data/maintenance/Commit.kt",
+            """
+            import kotlinx.coroutines.sync.Mutex
+            fun a(out: FileOutputStream) = out.fd.sync()
+            fun b(out: OutputStream) = (out as? FileOutputStream)?.fd?.sync()
+            fun c(file: RandomAccessFile) = file.getFD().sync ( )
+            fun d(fd: FileDescriptor) = with(fd) { sync() }
+            val e: (FileDescriptor) -> Unit = FileDescriptor::sync
+            fun f(out: FileOutputStream) = out.fd.let(FileDescriptor :: sync)
+            class Named { fun sync() = Unit }
+            fun h(out: FileOutputStream) = out.channel.force(true)
+            fun i(buffer: MappedByteBuffer) = buffer.force ()
+            val j: (FileChannel, Boolean) -> Unit = FileChannel::force
+            fun g(fd: FileDescriptor, dir: File) { syncFile(fd); syncDirectory(dir); syncStream(fd) } // fd.sync()
+            fun k(on: Boolean) = enforce(on) || forced(on) || forceSync(on) || syncNow(on) // channel.force(true)
+            const val H = "fd.sync() and ::sync, channel.force(true) and ::force"
+            """,
+        )
+        assertEquals(listOf(4, 5, 6, 7, 8, 9, 10, 11, 12, 13), FileSyncRule.check(source).map { it.line })
+        // No exemption: the helper itself, and the debug source set, are held to the rule too.
+        assertReported(planted("core/io/SyncFile.kt", "fun syncFile(fd: FileDescriptor) = fd.sync()"), 3, FileSyncRule::check)
+        assertReported(planted("debug/CrashRuns.kt", "fun f(fd: FileDescriptor) = fd.sync()", sourceSet = "debug"), 3, FileSyncRule::check)
+    }
+
+    @Test
     fun instrumentedTestMethods_areAllAcceptedByJUnit() {
         val classes = ClassFile.readAll(TestMethodRule.androidTestClassRoots)
         // The scan is real: the compiled instrumented tests, parameterized classes included.
