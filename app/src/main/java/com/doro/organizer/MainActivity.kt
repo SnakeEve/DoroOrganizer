@@ -37,10 +37,7 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge() // before setContent (DEC-13)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) setRecentsScreenshotEnabled(false)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Not persisted across reboots, so on every onCreate (security.md § 8).
-            getSystemService(ContentCaptureManager::class.java)?.setContentCaptureEnabled(false)
-        }
+        disableContentCapture()
         container = (application as DoroApplication).container
         var policyApplied = false // main thread only
         val policyWindow = ActivityWindow(this)
@@ -64,5 +61,18 @@ class MainActivity : FragmentActivity() {
     override fun onDestroy() {
         container.appLockController.detach(this)
         super.onDestroy()
+    }
+
+    /**
+     * System content capture off on API 29+ (DEC-66, security.md § 8). Not persisted across reboots, so it runs on
+     * every `onCreate`. The call is deprecated in API 37: Android 17's behavior changes (behavior-changes-17) say it
+     * no longer disables content capture for apps that target 37 or higher, so it is kept while targetSdk stays below
+     * 37. Its effect on an API 37 device for this app is inferred from that page, not observed (DEC-01, DEC-66).
+     */
+    private fun disableContentCapture() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            @Suppress("DEPRECATION") // API 37, see the KDoc (DEC-66)
+            getSystemService(ContentCaptureManager::class.java)?.setContentCaptureEnabled(false)
+        }
     }
 }
