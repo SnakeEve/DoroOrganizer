@@ -983,7 +983,7 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()                                      // before setContent (DEC-13)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) // closed until the policy is known (DEC-67)
         if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
-        if (Build.VERSION.SDK_INT >= 29) getSystemService(ContentCaptureManager::class.java)?.setContentCaptureEnabled(false)   // every onCreate (security.md § 8)
+        disableContentCapture()                                 // API 29+, every onCreate (DEC-66, security.md § 8)
         container = (application as DoroApplication).container
         var policyApplied = false                               // main thread only
         lifecycleScope.launch { container.windowPolicy.collect { p ->
@@ -999,6 +999,14 @@ class MainActivity : FragmentActivity() {
         window.decorView.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS   // after setContent (DEC-71)
     }
     override fun onDestroy() { container.appLockController.detach(this); super.onDestroy() }
+    /** Deprecated in API 37: ineffective for apps that target 37 or higher (behavior-changes-17), so kept while targetSdk < 37;
+     *  its effect on an API 37 device at targetSdk 35 is inferred, not observed (DEC-01, DEC-66). */
+    private fun disableContentCapture() {
+        if (Build.VERSION.SDK_INT >= 29) {
+            @Suppress("DEPRECATION")                            // API 37, see the KDoc (DEC-66)
+            getSystemService(ContentCaptureManager::class.java)?.setContentCaptureEnabled(false)
+        }
+    }
 }
 ```
 
