@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import com.doro.organizer.core.io.syncFile
 import com.doro.organizer.core.log.AppLog
 import com.doro.organizer.core.result.AppError
 import com.doro.organizer.data.isStorageFull
@@ -65,7 +66,7 @@ internal class SafDocuments(private val resolver: ContentResolver) {
             val copied = source.inputStream().use { copyWithProgress(it, out, source.length(), onProgress) }
             out.flush()
             try {
-                (out as? FileOutputStream)?.fd?.sync()
+                (out as? FileOutputStream)?.fd?.let(::syncFile)
             } catch (e: IOException) {
                 // Pipe-backed providers cannot sync; the copy itself has succeeded.
             }

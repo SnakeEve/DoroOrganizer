@@ -4,6 +4,7 @@ import android.system.ErrnoException
 import android.system.Os
 import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.core.coroutines.AppDispatchers
+import com.doro.organizer.core.io.syncFile
 import com.doro.organizer.security.AndroidKekKeystore
 import com.doro.organizer.security.BioKeystore
 import com.doro.organizer.security.CALIBRATION_ITERATIONS
@@ -141,11 +142,11 @@ class TestKdf(private val time: FakeAppTime, var calibrationMillis: Long = 75) :
 }
 
 /**
- * The key-state sync seam of security.md § 3.5 (`DefaultKeyVault`'s `syncStream`) over the real
- * `FileDescriptor.sync()` of the `db-state.json.new` stream, with scripted failures: each [failNext] makes the next
- * sync throw its error instead, before anything is synced, as a storage that reports a failed fsync does (Q16). Every
- * sync, failed ones included, records the size of the stream's file first, so a test can check that the whole new
- * file was written before it was synced.
+ * The key-state sync seam of security.md § 3.5 (`DefaultKeyVault`'s `syncStream`) over the production sync of the
+ * `db-state.json.new` stream, [syncFile], with scripted failures: each [failNext] makes the next sync throw its error
+ * instead, before anything is synced, as a storage that reports a failed fsync does (Q16; [syncFailure] builds the
+ * class and cause that [syncFile] throws then). Every sync, failed ones included, records the size of the stream's
+ * file first, so a test can check that the whole new file was written before it was synced.
  */
 class FaultyStateSync : (FileOutputStream) -> Unit {
     private val failures = ArrayDeque<IOException>()
@@ -169,14 +170,16 @@ class FaultyStateSync : (FileOutputStream) -> Unit {
             failures.removeFirstOrNull()
         }
         if (failure != null) throw failure
-        out.fd.sync()
+        syncFile(out.fd)
     }
 }
 
 /**
- * What `FileDescriptor.sync()` throws when the storage reports a failed fsync with [errno]: a `SyncFailedException`
- * whose cause is the `ErrnoException`, as libcore builds it, so DbMaintenance classifies it by that errno
- * (db-lifecycle.md § Failure classification).
+ * An exception of the class and cause that the app's [syncFile] throws when the storage reports a failed fsync with
+ * [errno]: a `SyncFailedException` whose cause is the `ErrnoException` of `Os.fsync`, so DbMaintenance classifies it by
+ * that errno (db-lifecycle.md § Failure classification). Only its message differs: "injected", as for every injected
+ * failure; nothing classifies by message (DEC-70). Not what `FileDescriptor.sync()` throws: libcore's has no cause,
+ * which is why the app syncs through [syncFile] (`SyncFileTest`, `FileDescriptorSyncLosesErrnoTest`, DEC-107 (4)).
  */
 fun syncFailure(errno: Int): SyncFailedException =
     SyncFailedException("injected").apply { initCause(ErrnoException("fsync", errno)) }

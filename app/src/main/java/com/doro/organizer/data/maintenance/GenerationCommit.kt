@@ -2,6 +2,7 @@ package com.doro.organizer.data.maintenance
 
 import android.system.Os
 import com.doro.organizer.core.io.syncDirectory
+import com.doro.organizer.core.io.syncFile
 import com.doro.organizer.data.DbFiles
 import com.doro.organizer.security.BioSlot
 import com.doro.organizer.security.KeySlot
@@ -51,7 +52,7 @@ internal suspend fun commitGeneration(
     try {
         if (staged != null) {
             step(PipelineStep.RENAME)
-            RandomAccessFile(staged, "r").use { it.fd.sync() } // the staged bytes are on disk
+            RandomAccessFile(staged, "r").use { syncFile(it.fd) } // the staged bytes are on disk
             check(files.deleteGeneration(generation)) { "stale generation files" } // nothing stale under the new name
             Os.rename(staged.path, live.path) // atomic: one filesystem
             renamed = true
