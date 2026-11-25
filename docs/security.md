@@ -18,7 +18,7 @@ Ownership: this file owns the threat model and residual risks; the key model (in
 | Password-reminder timestamp | `SettingsStore` `security.password_verified_at` (section 5.6); not secret |
 | Database and backup passwords | Process memory for one operation (section 6) |
 | Screen content | The window, the Recents thumbnail, screenshots, screen recordings, the platform's content capture |
-| UI state | `SavedStateHandle` holds drafts, filters and search text (DEC-28, DEC-37); `SettingsStore` holds no user text |
+| UI state | `SavedStateHandle` holds drafts, filters, search text and the text of an open rename dialog (DEC-28, DEC-37, DEC-113); `SettingsStore` holds no user text |
 
 ### 1.2 Adversaries in scope
 | Adversary | Can | Controls |
@@ -856,7 +856,7 @@ Within the database lifecycle the table of [db-lifecycle.md](db-lifecycle.md#key
 
 ### 6.5 Known limitations
 - Compose text buffers, IME and accessibility copies and any `String` made by text layout cannot be zeroed; a moving GC can leave stale array copies; `SecretKeySpec`, `Mac` and `Cipher` keep key copies that cannot be cleared; SQLCipher keeps its key schedule in native memory while a connection is open; AndroidKeyStore returns unwrapped key bytes (the DEK released by the biometric slot or by the KEK layer) through binder copies that cannot be cleared. Zeroing shortens lifetimes; it does not guarantee erasure (live process access is out of scope).
-- Editor drafts and search text in `SavedStateHandle` (DEC-28, DEC-37) are kept by the system across process death, outside the app's encryption. They are never shown before unlock because `NavDisplay` is composed only in `Ready` and `Maintenance` (DEC-90).
+- Editor drafts, search text and the text of an open rename dialog in `SavedStateHandle` (DEC-28, DEC-37, DEC-113) are kept by the system across process death, outside the app's encryption. They are never shown before unlock because `NavDisplay` is composed only in `Ready` and `Maintenance` (DEC-90).
 
 ## 7. Biometric app lock (DEC-65)
 
@@ -1258,7 +1258,7 @@ class KeySlot(val mode: KeyMode, val outerIv: ByteArray?, val wrappedDek: ByteAr
 
 Per DEC-71 (Q11: the keyboard must never learn) the covered fields always ask for no personalized learning, whatever the screenshot setting or the window policy, and autofill is excluded for every window of the app, password fields included, so password managers cannot fill or save the database or backup password (accepted for v1).
 - Password fields: section 6.2.
-- Fields covered below: note content, person name, project name, and every search field (perspective search and `EntityPicker` search, which carry the same words; person and project names are typed in the picker's search field).
+- Fields covered below: note content, person name, project name, and every search field (perspective search and `EntityPicker` search, which carry the same words; person and project names are typed in the picker's search field, and a name is changed in the rename field of the People and Projects overflow menu, DEC-113).
 - Autofill: always excluded. Compose has no per-field exclusion (`ContentType` has no "not important" value, and fields without one are still offered to service heuristics), so `MainActivity` sets `window.decorView.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS` after `setContent`. Compose `Dialog`, `AlertDialog`, `DatePickerDialog`, `ModalBottomSheet` and `DropdownMenu` create their own windows with their own root view, which that flag does not reach, so every one of them wraps its content in `SecureDialogWindow` (`ui/common`, DEC-102). The wrapper sits inside the window it guards, in its content lambda (for an `AlertDialog`, the `text` slot), where `LocalView` is that window's own view; wrapped around the dialog it would set both flags on the activity's window only. A `DropdownMenu` popup's root is no `DialogWindowProvider`, and menus never pass `hideOverlays`:
 ```kotlin
 @Composable

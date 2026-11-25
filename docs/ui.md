@@ -41,12 +41,13 @@ MainActivity (FragmentActivity) -> DoroTheme -> DoroRoot: one screen per gate st
     |      shell dialogs: maintenance outcomes, notices (including the kekBroken notice), fingerprint set-up offer (sections 2.4, 8.12, 8.13)
     |
     +-- Tab "All" ........ NoteListScreen(All)
-    +-- Tab "People" ..... NoteListScreen(Individual): EntityPicker body until a person is chosen
-    +-- Tab "Projects" ... NoteListScreen(Project):    EntityPicker body until a project is chosen
+    +-- Tab "People" ..... NoteListScreen(Individual): EntityPicker body while no person is chosen ("All people" returns to it, DEC-112)
+    +-- Tab "Projects" ... NoteListScreen(Project):    EntityPicker body while no project is chosen ("All projects" returns to it, DEC-112)
     +-- Tab "Calendar" ... NoteListScreen(Date): MonthGrid + day or range list
     +-- Tab "Orphans" .... NoteListScreen(Orphan)
     |      every NoteListScreen: search bar, filter chips, date filter sheet, selection mode,
     |      batch dialogs, snackbars (sections 3-5)
+    |      People and Projects with a person or project shown: ⋮ menu, rename dialog, delete impact dialog (sections 4.2, 8.4, 8.17)
     |
     +-- EditorKey ........ EditorScreen (section 6)
     |      date picker dialog, unlink sheet, delete-note dialog, entity delete impact dialog
@@ -80,7 +81,7 @@ The shell is what `DoroRoot` composes in `Ready` (and under the overlay in `Main
 
 - All uses `ic_notes` and Orphans `ic_link_off` in both states (DEC-50): the Material Symbols `notes` fill glyph is identical to its outline, and `link_off` has no distinct filled form. The selected state is still carried by the M3 indicator and the selected semantics. These are the only tabs without a filled variant, and no look-alike `ic_notes_filled` or `ic_link_off_filled` file is added.
 - Labels are always shown (`alwaysShowLabel = true` on the bar), single line, with ellipsis at large font sizes. Icons are decorative (`contentDescription = null`); the label names the item.
-- Tapping another tab calls `Navigator.selectTab(p)`. Each tab keeps its own stack, ViewModel, list scroll position, filters and search text (DEC-50).
+- Tapping another tab calls `Navigator.selectTab(p)`. Each tab keeps its own stack, ViewModel, list scroll position, filters and search text (DEC-50). A tab switch alone never moves a list; how a list's position follows new rows, and the reveal of a note just created, are section 3.11 (DEC-110).
 - Leaving a tab clears its selection (DEC-36, section 5.5). Tapping the tab that is already current scrolls its list to the top (animated) and changes nothing else. Neither event can be derived from composition or lifecycle: a tab that is not current is not passed to `NavDisplay`, and `onDispose` or `ON_STOP` also fire on rotation, on a lock and while a picker covers the list, all of which must keep the selection (section 5.5). Both are explicit counters:
   - `NavigationState` keeps two saveable `IntArray`s indexed by `Perspective`: `leaves` and `reselects`. `Navigator.selectTab(p)` increments `leaves[current]` when `p != current` and `reselects[p]` when `p == current`. Back from the root of a tab other than All increments `leaves[current]` ([architecture.md § Back behavior](architecture.md#back-behavior)).
   - The `TabKey` entry passes `leaveCount = leaves[p]` and `reselectCount = reselects[p]` to `NoteListScreen`.
@@ -91,15 +92,17 @@ The shell is what `DoroRoot` composes in `Ready` (and under the overlay in `Main
 
 ### 2.2 Top app bar of a perspective
 
-Every perspective screen has an M3 `TopAppBar` (small, pinned scroll behavior so the container tints while the list is scrolled) with a title, a Search action and a Settings action (DEC-51).
+Every perspective screen has an M3 `TopAppBar` (small, pinned scroll behavior so the container tints while the list is scrolled) with a title, a Search action and a Settings action (DEC-51); in Individual and Project, while a person or project is shown, a third action follows: the overflow menu of section 4.2 (DEC-113).
 
 | Element | Content | Behavior |
 |---|---|---|
 | Title | Per perspective, section 4: "All notes", "People" or the chosen person's name, "Projects" or the chosen project's name, "Calendar", "Orphans" | One line, ellipsis. In Individual and Project with an entity chosen, the title is a button (section 4.2) |
 | Search action | `ic_search`, content description "Search" (`action_search`) | Turns the bar into the search bar (section 3.3). In Individual and Project while the picker body is shown, it moves focus to the picker's own name search field instead (section 4.2), so the action exists on every perspective (DEC-51, testing.md I-38) |
 | Settings action | `ic_settings`, content description "Settings" (`action_settings`) | `Navigator.open(SettingsKey)` |
+| Overflow (Individual and Project while a person or project is shown, DEC-113) | `ic_more_vert`, content description "More options" (`action_more`), test tag `entity_menu` | A `DropdownMenu` with "Rename…" (`menu_rename_entity`) and "Delete…" (`menu_delete_entity`), section 4.2; not shown while `Loading` or on the picker body, and never in All, Calendar and Orphans |
 
 - No navigation icon on a tab root.
+- The actions keep their 48 dp at every font scale; the title (one line, ellipsis) takes the width that is left. With three actions that is about 230 dp on the owner's phone (1,280 px at 3.25x, about 394 dp, less 144 dp of actions and the bar's 4 dp, 12 dp and 4 dp insets), the title's arrow included (DEC-51, testing.md I-66).
 - In selection mode the bar is replaced by the contextual bar (section 5.2); in search mode by the search bar (section 3.3).
 - The screen root sets `Modifier.semantics { paneTitle = <title text> }`, so TalkBack announces the screen when it changes. Every full-screen destination (editor, picker, Settings, gate screens) does the same with its own title.
 
@@ -161,10 +164,10 @@ Top to bottom inside the list screen's `Scaffold`:
 1. Top app bar (section 2.2), or the search bar (section 3.3), or the contextual selection bar (section 5.2).
 2. Filter chip row (section 3.4).
 3. Date only: `MonthGrid` and the selection header (section 4.4).
-4. The list area: loading, empty or rows (sections 3.6 and 3.7). A `LazyColumn` with items keyed by note id.
+4. The list area: loading, empty or rows (sections 3.6 and 3.7). A `LazyColumn` with items keyed by note id; its position when the rows change: section 3.11.
 5. The create button, floating at the bottom end (section 2.3), and the snackbar host (section 2.4).
 
-In Individual and Project, items 2–4 are replaced by the `EntityPicker` body until an entity is chosen (section 4.2).
+In Individual and Project, items 2–4 are replaced by the `EntityPicker` body while no entity is chosen (section 4.2; "All people" / "All projects" returns to it, DEC-112).
 
 ### 3.2 PerspectiveSpec
 
@@ -261,7 +264,7 @@ Rules:
 | Rows | The latest emission has ≥ 1 row | The rows (section 3.7) |
 | Empty | The latest emission has 0 rows | "(No data)" (`no_data`, verbatim §5) in `bodyLarge`, `onSurfaceVariant`, centered in the list area. Below it, only while `filtersActive`, a `TextButton` "Clear filters" (`action_clear_filters`) |
 
-- `loading` is true before the first emission of a query for the current primary. When the primary changes (the Individual or Project entity, the Calendar day or the range), `rows` is cleared and `loading` becomes true until the new query's first emission, so rows of another entity or day are never shown under the new title or header. Only secondary filter and search changes keep the previous rows until the new emission arrives, so nothing flashes.
+- `loading` is true before the first emission of a query for the current primary. When the primary changes (the Individual or Project entity, the Calendar day or the range), `rows` is cleared and `loading` becomes true until the new query's first emission, so rows of another entity or day are never shown under the new title or header. The new primary's list then starts at its first row (section 3.11 rule 4, Q27; in the single-column Calendar a grid or header on screen stays where it is). Only secondary filter and search changes, and the re-read after a note was created (section 3.11), keep the previous rows until the new emission arrives, so nothing flashes.
 - "(No data)" depends only on the row count of the fully filtered query (DEC-25, Q4). A note with blank content is a row, not an empty state (section 3.7).
 - `filtersActive` = a secondary person or project filter is set, the date filter is not "Any", or the search text is not blank. The primary selection (person, project, Calendar day or range) never counts.
 - "Clear filters" clears the person, project and date filters, empties the search text and closes the search bar. It never touches the primary selection.
@@ -292,6 +295,7 @@ data class NoteRowUi(
     val people: List<String>,    // row.persons.filter { it.id != primaryPersonId }.map { it.name }, row order kept
     val projects: List<String>,  // row.projects.filter { it.id != primaryProjectId }.map { it.name }, row order kept
     val orphan: Boolean,         // row.orphan (DEC-27)
+    val orderedAt: Long,         // the time DEC-23 sorts the row by: row.updatedAt when not done, row.checkedAt when done; section 3.11 rule 3 (DEC-110)
 ) { override fun toString() = "NoteRowUi(id=$id)" }   // DEC-70
 ```
 
@@ -332,7 +336,7 @@ The row container uses `Modifier.combinedClickable` (it merges the row's text in
 1. The checkbox calls `NoteListViewModel.setChecked(row.id, checked = !row.checked)`, which calls `NoteRepository.setChecked(noteId, checked)` with the target state, never "toggle" (DEC-22, [data-layer.md § Check and uncheck](data-layer.md#check-and-uncheck-dec-22)). A double tap therefore sends the same target twice and changes the note once.
 2. The UI does not change the row itself. Room re-emits the list and the checkbox, the styling and the position change from the new emission (architecture.md § Layering, rule 3).
 3. Rows animate to their new place with `Modifier.animateItem()` (DEC-54): checking moves the note to the very bottom of the list (the last position of the checked group), unchecking moves it to the top of the list (§4, DEC-23).
-4. Scroll anchoring: `LazyColumn` normally follows its first visible item by key, so toggling that item would scroll the viewport with it. When the toggled row is the first visible item, the screen records `firstVisibleItemIndex` and `firstVisibleItemScrollOffset` before the write (`ToggleAnchor`, `ui/notes`). When the first `rows` value that holds the toggled row in its new state arrives, it calls `listState.requestScrollToItem(index, offset)` in the same composition that hands the new rows to the `LazyColumn`: the call is non-suspending and overrides key anchoring for that one remeasure, so the data change and the restored position land in the same frame, with no jump. The viewport stays put and the row animates away. A `rows` value without the toggled row ends the anchor, and a write that changed nothing (it failed, or the row already had that state, so no emission follows; item 5) drops it, so a later, unrelated rows change never jumps the list. Verify at setup: `LazyListState.requestScrollToItem` and `Modifier.animateItem` exist in the pinned foundation (settled from the library classes, T16); that `animateItem()` still animates the moved row and that the restored position does not jump are device checks. T22's device tests assert only the order the rows end in (`ToggleUiTest#check_movesTheRowToTheBottom_andUncheck_backToTheTop`, build/t22-full-2, build/t22-full-3), not the animation or the viewport, so both checks move to T23 with M-21.
+4. Scroll anchoring: `LazyColumn` normally follows its first visible item by key, so toggling that item would scroll the viewport with it. When the toggled row is the first visible item, the screen records `firstVisibleItemIndex` and `firstVisibleItemScrollOffset` before the write (`ToggleAnchor`, `ui/notes`). When the first `rows` value that holds the toggled row in its new state arrives, it calls `listState.requestScrollToItem(index, offset)` in the same composition that hands the new rows to the `LazyColumn`: the call is non-suspending and overrides key anchoring for that one remeasure, so the data change and the restored position land in the same frame, with no jump. The viewport stays put and the row animates away. When the reveal of a note just created lands in the same composition, the reveal wins, and the anchor still ends with those rows (section 3.11, DEC-110). Rule 3 of section 3.11 keeps the viewport the same way when the first visible row moves for another reason: an edit, a check or an uncheck in the editor, or a batch action. A `rows` value without the toggled row ends the anchor, and a write that changed nothing (it failed, or the row already had that state, so no emission follows; item 5) drops it, so a later, unrelated rows change never jumps the list. Verify at setup: `LazyListState.requestScrollToItem` and `Modifier.animateItem` exist in the pinned foundation (settled from the library classes, T16); that `animateItem()` still animates the moved row and that the restored position does not jump are device checks. T22's device tests assert only the order the rows end in (`ToggleUiTest#check_movesTheRowToTheBottom_andUncheck_backToTheTop`, build/t22-full-2, build/t22-full-3). Since SPEC T28, `ListPositionUiTest` (testing.md I-58) asserts on the device that toggling the first visible row of a scrolled list keeps the viewport; the animation stays a T23 check (M-21).
 5. `setChecked(noteId, checked, onDone)` runs in `viewModelScope` and reports through `onDone(changed)` whether the row changed (DEC-99). When `changed` is true, the screen announces "Marked as done" or "Marked as not done" (`announce_marked_done`, `announce_marked_not_done`) through the `Announcer` helper in `ui/common`, which wraps `View.announceForAccessibility`; a screen gets the current view's announcer with `rememberAnnouncer(graph)`, which asks `GateGraph.announcer(view)` ([architecture.md § Dependency injection](architecture.md#dependency-injection)), so the instrumented tests record every call. Verify at setup: `announceForAccessibility` is deprecated from API 36; on a targetSdk 36 build, switch the helper to a polite live region and keep the call sites unchanged (DEC-01).
 6. There is no undo (§7, DEC-36). Unchecking always sets a fresh `updated_at` (DEC-21), so an undo could not restore the previous position.
 
@@ -346,6 +350,8 @@ data class NoteListUiState(
     val loading: Boolean,
     val primary: Primary,                // Loading | None | Entity(id, name) | Day(epochDay) | Range(fromDay, toDay)
     val rows: List<NoteRowUi>,
+    val rowsRead: Int,                   // the read that produced rows: 0, then the number of each re-read after a note was created (section 3.11, DEC-110)
+    val newNoteMarked: Boolean,          // NewNoteMarker holds a mark, which the list that is the top entry takes (section 3.11)
     val today: LocalDate,                // AppTime.todayFlow: the date pickers' initial month
     val chips: List<FilterChipUi>,       // one per spec.filters entry, with its display value
     val filtersActive: Boolean,
@@ -368,6 +374,8 @@ sealed interface ListDialog {            // saved as the String key listDialog, 
     data object RangePicker : ListDialog            // the Calendar DateRangePicker, section 4.4.2
     data object SetDate : ListDialog                // batch date picker, section 5.3
     data object BatchDelete : ListDialog            // section 8.3
+    data class Rename(val id: Long) : ListDialog    // ⋮ "Rename…" of Individual/Project, section 8.17 (DEC-113)
+    data class DeleteEntity(val id: Long, val n: Int, val m: Int) : ListDialog   // ⋮ "Delete…": the impact counts, section 8.4
 }
 ```
 
@@ -382,14 +390,46 @@ Saved per perspective in the entry's `SavedStateHandle` (DEC-28): it survives ro
 | `searchOpen`, `searchText` | `Boolean`, `String` | Search bar state and raw text |
 | `selection` | `LongArray?` | Selected note ids; absent = not in selection mode, or a selection of more than 1,000 ids (budget below): a larger selection removes the key rather than leaving an older, smaller value, so absent always means no saved selection |
 | `day`, `rangeFrom`, `rangeTo`, `month` | `Long?` | Date only: selected day, or range ends; first day of the displayed month (epoch days) |
-| `listDialog` | `String?` | The open `ListDialog`: its simple name, with the end for `DateEndPicker`, for example `"DateEndPicker:From"`; absent = none |
+| `listDialog` | `String?` | The open `ListDialog`: its simple name, with the end for `DateEndPicker` or the entity id for `Rename` and `DeleteEntity`, for example `"DateEndPicker:From"` or `"Rename:12"`; absent = none |
+| `renameText` | `String?` | Individual and Project: the rename dialog's text (section 8.17, DEC-113), at most `MAX_NAME_CHARS` (200) UTF-16 units; present only while `Rename` is open |
 | `handledLeaves` | `Int` | The last `leaveCount` of section 2.1 this ViewModel has handled |
-| `unsavedChoice` | `Long?` | Individual and Project: a primary choice the settings could not save (section 4.2, DEC-99): the entity id, 0 once that entity was deleted (the picker body shows), absent or null for none |
+| `unsavedChoice` | `Long?` | Individual and Project: a primary choice the settings could not save (section 4.2, DEC-99): the entity id, 0 once that entity was deleted or once "All people" / "All projects" could not be remembered (the picker body shows, DEC-112), absent or null for none |
 
-- The Individual and Project primary is not in the `SavedStateHandle`: it is `SettingsStore.rememberedPersonId` / `rememberedProjectId` (DEC-28, architecture.md § Dependency injection), cleared by the existence probe when the entity disappears. The one exception is `unsavedChoice`, a choice whose settings write failed (DEC-99): it is shown in place of the remembered id for the life of this saved state, so a process death keeps it and the next start does not.
+- The Individual and Project primary is not in the `SavedStateHandle`: it is `SettingsStore.rememberedPersonId` / `rememberedProjectId` (DEC-28, architecture.md § Dependency injection), cleared by the existence probe when the entity disappears or by "All people" / "All projects" (DEC-112). The one exception is `unsavedChoice`, a choice (or an "All …") whose settings write failed (DEC-99, DEC-112 (3)): it is shown in place of the remembered id for the life of this saved state, so a process death keeps it and the next start does not.
 - A restored `selection` is pruned to the ids of the first emission; if nothing remains, selection mode ends, and a restored `SetDate` or `BatchDelete` dialog is dropped with it. A restored `SetDate` or `BatchDelete` dialog without a restored `selection` (it held more than 1,000 ids) is dropped when the ViewModel starts, and its `listDialog` key is cleared.
-- Every sheet and dialog of the list screen is a `ListDialog`, so each survives rotation and process death (section 8.1). The selection inside an open `DatePicker` is UI-local (`rememberDatePickerState` is saveable) and not part of the ViewModel. Overflow `DropdownMenu`s are UI-local and are not restored after process death.
+- Every sheet and dialog of the list screen is a `ListDialog`, so each survives rotation and process death (section 8.1). `Rename` and `DeleteEntity` belong to the entity whose id they hold: they show only while Individual or Project shows that entity, and close (the rename text removed) when another entity or the picker body replaces it; a restored `DeleteEntity` keeps only its id and reads its counts again once the existence probe finds the entity, as the editor's impact dialog does (section 6.14). A delete dialog whose impact read returns after the tab shows another entity or its picker body is not opened (DEC-113 (6)). The selection inside an open `DatePicker` is UI-local (`rememberDatePickerState` is saveable) and not part of the ViewModel. Overflow `DropdownMenu`s are UI-local and are not restored after process death.
+- `rowsRead`, `newNoteMarked`, the mark of a note just created, a reveal's wait and the row a list keeps across a return (`NoteListViewModel.keepRow`) are not saved: they live in memory only (section 3.11, DEC-110), so this table has no key for them.
+- `NoteListScreen` saves, beside the list's scroll position (`rememberSaveable`), which primary that position belongs to (`PrimaryAnchor`: a short text of an entity id, an epoch day or a range, or the picker body; at most about 45 characters), so a primary chosen after a process death still starts its list at the top (section 3.11 rule 4, DEC-110 (4)). It is screen state, not a key of this table.
 - Saved-state budget: the whole activity state stays below 500 KB (500,000 bytes, DEC-57), because it crosses Binder in `onStop`, in the oneway `activityStopped` call, whose limit is half of `system_server`'s Binder buffer (about 520 KB, shared with other pending oneway calls); above it `TransactionTooLargeException` (API 24+) crashes the app at `ON_STOP` and could lose the draft save (T22: 814,712 bytes failed). Hence the 1,000-id limit on `selection` (a larger selection survives rotation in the ViewModel but not process death) and the cap on the search text (section 3.3). The editor draft, the largest entry, is budgeted in section 6.14.
+
+### 3.11 List position when rows change
+
+`LazyColumn` follows its first visible item by key (section 3.1 item 4): when a new `rows` value arrives, the item that was first on screen stays first on screen. That keeps a scrolled list still while other rows move, but it goes wrong in three ways. At the very top it hides whatever arrives above the old first row. When the first visible row itself moves (an edit or an uncheck takes it to the top, a check to the end), the list scrolls along with it. And a list that comes back to the screen (from the editor, a picker, Settings or another tab, or after a rotation or a lock) gets a new `LazyListState` that holds only the index and offset: rows that changed while it was away shift it when they arrive before its first layout, and a list that returns from the editor first shows its last rows (section 3.6), so a note just created arrived above the screen even at the very top (owner note 37). Three rules decide the position instead (DEC-110, Q17), and a fourth starts the list of a newly chosen person, project, day or range at its top (Q27, rule 4). Rules 1 to 3 act in the composition that hands the new rows to the `LazyColumn`, through `listState.requestScrollToItem(index, offset)`, which overrides key anchoring for that one remeasure, so the rows and the position land in the same frame (the technique of section 3.9 item 4). None of rules 1 to 3 acts while a drag or fling is in progress (`isScrollInProgress`): `requestScrollToItem` would move the list under the finger. Rule 4 acts in the composition that first shows a new primary, also during a fling.
+
+1. A list at its very top stays at its top.
+   - At its very top means: in its last layout the first visible item had index 0 and offset 0. The rules read the last layout through `LastLayout` (`ui/notes/KeepAnchor.kt`): its first visible index, offset and key and whether a scroll is in progress, read without observation (`Snapshot.withoutReadObservation`), so `NoteListBody` does not recompose on every scroll frame.
+   - When a new `rows` value arrives whose first row differs from the first row of the previous value, such a list asks for item 0 at offset 0 (`TopAnchor`, `ui/notes`). So a new note, a note edited or unchecked (it moves to the top, DEC-21, DEC-23) and rows that a cleared filter or search brings back above the old first row show at the top. In the single-column Calendar item 0 is the `MonthGrid`, which stays where it is.
+2. The list an editor returns to reveals the note that editor created.
+   - The mark. When the editor's entry is popped, `EditorViewModel.onCleared` waits for the save `Mutex`, which resumes waiters first in, first out, so the saves that leaving started have returned: the one the entry's `ON_STOP` starts at the pop and the one the end of its composition starts (section 6.8). Then it marks the note in `NewNoteMarker`, with its key's `visit` (DEC-100), if the editor was opened for a new note (`noteId = null`), its draft holds an inserted note id, the draft was not discarded (the note was deleted in the editor, or is gone) and the draft's `epoch` is the current `dataEpoch`. Whether that last save succeeded does not matter: a note inserted earlier, when a picker opened, is revealed as stored, next to the "could not be saved" snackbar. `NewNoteMarker` is an application-scoped member of `UiGraph` ([architecture.md § Dependency injection](architecture.md#dependency-injection)) that holds that id and nothing else, in memory only: never in a `SavedStateHandle`, a navigation key or the settings, and gone with the process. A newer mark replaces an older one.
+   - Only the editor's return. The mark comes after the editor's exit animation, so it is bound to the pop: `Navigator.back()`, which Back, the predictive back gesture and Save all go through, tells `NewNoteMarker` the `visit` of a new note's editor it pops (`expect`), and the marker keeps a mark only with that `visit`. Every other navigation clears the expectation and the mark: `Navigator.open` (a row, the create button, a chip, the title, Associate, Settings) and every tab change. So a tab switch or another screen opened between Back and the mark drops the reveal, and an editor that is cleared without a pop (the task removed from Recents, the activity finishing with the editor in a tab's stack) marks nothing. A rotation, a lock or Home in that moment do not navigate: the mark still comes, and the list takes it when it shows again. Back at the root of All in that moment finishes the activity; a relaunch in the same process then reveals the note once.
+   - Taking it. The `NoteListScreen` that is the top entry (`LocalIsTopEntry`, section 2.4) takes the mark as soon as `NoteListUiState.newNoteMarked` shows one, with `NoteListViewModel.takeNewNote()`, which clears it, so it is used once. After the editor closes, the top entry is the root of the tab it was opened from (section 1). On the embedded picker body of Individual or Project there is no list: `takeNewNote()` drops the mark and returns null.
+   - Fresh rows. The rows shown when the mark is taken can predate the note. So `takeNewNote()` reads the same `NoteQuery` once more: the rows flow restarts, and every `rows` value carries the number of the read that produced it (`NoteListUiState.rowsRead`, section 3.10). Rows of an earlier read can still arrive after the restart, but they carry a lower number and never count. `takeNewNote()` returns the wait (`NewNoteWait`: the note id and the new read's number). The screen keeps it (`NewNoteReveal`, `ui/notes`, plain fields) and judges the first `rows` whose `rowsRead` is at least that number. Until then the list shows its previous rows, so nothing flashes.
+   - The reveal. If those rows hold the note at row index i, the list moves at once, without animation, so that the note's row is at the top of the screen: to item i plus the items before the rows (2 in the single-column Calendar, the grid and the selection header; else 0) at offset 0. When i is 0 and the list is at its very top, it asks for item 0 at offset 0 instead, which in the single-column Calendar keeps the grid above the note; there it does so only when the last layout showed the first row's place (item 2) entirely above the bottom content padding, and otherwise the note's row goes to the top. A not-done note is the first row (DEC-23), so it shows as the top row. A note saved as done is the last row, and the list stops at its end, so it shows as the last row, above the create button's clearance (section 2.3). A note found anywhere else, which only a clock set back can cause (DEC-20), moves to the top of the screen.
+   - Hidden or interrupted. If those rows do not hold the note (a filter, the search or the perspective hides it, or a link the list needs was removed in the editor), nothing moves and the wait ends. A scrolled list then does not jump to the note when the filter is cleared later; a list at its very top shows the rows that come back (rule 1). A drag or fling in progress when those rows arrive, or a drag that started after the mark was taken (`DragInteraction.Start` on `listState.interactionSource`), also ends the wait without a move.
+   - What never starts a reveal. Only a mark does. The screen drops a wait when it leaves composition (a rotation, a lock, a tab switch, a covering screen), shows the picker body or shows a new primary (rule 4). A data reset clears the mark ([architecture.md § Data reset](architecture.md#data-reset)). After a process death no mark is left, so a note whose editor finished before it is not revealed; rule 1 still applies.
+3. A list that is not at its very top keeps its position, also for edits.
+   - When a new `rows` value arrives and holds the row that was first on screen in the last layout, unmoved, key anchoring keeps that row first on screen at the same offset.
+   - When that row moved, because its done state or the time the canonical order sorts it by changed (`NoteRowUi.orderedAt`, section 3.7: the `updated_at` of a not-done note, the `checked_at` of a done one, DEC-23), the list asks for the last layout's first visible index and offset (`KeepAnchor`, `ui/notes`), as the toggle anchor of section 3.9 item 4 does: the rows around it stay where they were, and the row next to it takes its place. This covers an edit, a check or an uncheck made in the list, in the editor or by a batch action.
+   - Across a return the list keeps that row as well. When `NoteListBody` leaves composition, it hands the row that is first on screen in its last layout (its id, done state and `orderedAt`; nothing when a header item or no row is first) to `NoteListViewModel.keepRow()`, in memory only; the next `NoteListBody` of that list starts its `KeepAnchor` from `NoteListViewModel.takeKeptRow()`. With the first `rows` value that holds rows, it asks for that row at the restored offset when the row is there and unmoved, and keeps the restored index and offset when it moved or is gone. After a process death nothing is kept, and the list starts from the restored index and offset, as before. A kept row belongs to the primary it was kept under: `NoteListBody` drops one it has not used yet in the composition that first shows a new primary (rule 4).
+   - A row that leaves the list (deleted, or no longer matching) leaves the index and offset as they were, as `LazyColumn` does when it cannot find the key.
+4. A newly chosen primary's list starts at its top (Q27; built in SPEC T30).
+   - What counts. A decided primary (an entity, a day or a range) other than the one the list's position belongs to: another person or project chosen in the title's picker; any person or project chosen on the picker body, after "All people" / "All projects" (DEC-112), after a deletion or at first start; another day or range in the Calendar (a day tap, Today, a new range, Clear range). `Loading`, the first decided primary of a list with no record (a cold start, a tab's first visit, a data reset), the same primary chosen again and a rename (same id) do not count. After a process death the record comes back with the position: the same primary keeps the restored position, another one counts.
+   - The record. `NoteListScreen` keeps the primary that `listState` belongs to in `PrimaryAnchor` (`ui/notes`, plain fields), saved with the list's position (`rememberSaveable` with its `Saver`), so a picker covering the list, a tab switch, a rotation, a lock or a process death keep it. While the picker body shows, `pickerBody()` records the body, so whatever entity comes next is new, the earlier one included.
+   - What it ends. In the composition that first shows a new primary, `NoteListBody` ends a reveal's wait (rule 2) and drops a kept row (rule 3) it has not used yet (`KeepAnchor.drop()`), both without a move, so a note marked or a row kept under one primary never places another.
+   - The move. In that composition `NoteListBody` asks for item 0 at offset 0 in a list without header items (Individual, Project, the end pane of the two-pane Calendar), whether the rows are still loading (the `LazyColumn` is not composed then, and the request sets the position it starts from), empty or present. It acts also while a fling of the old list runs: the old position means nothing on another primary's rows, and the change comes from a tap outside the list. `requestScrollToItem` then launches the fling's stop and snaps at once; a frame applies the fling's scroll before it recomposes, and the stop runs before the next frame, so the snap stands. The single-column Calendar does not move while the grid or the selection header (items 0 and 1) is on screen, as it is for every day, Today, range or Clear range tap there: they keep their place and the new rows start right below the header. Only when a row is its first visible item (a range dialog left open across a turn from the two-pane layout, whose end pane shares `listState`, and confirmed in portrait) does it ask for item 0 at offset 0 too.
+5. Precedence in one composition: rule 4 when the primary changed; else the reveal, else the toggle anchor of section 3.9 item 4, else rule 1 at the very top or rule 3 below it, else key anchoring. Each helper still ends or updates its own state, so no anchor applies to a later, unrelated rows value.
+
+There is no message, button or announcement for any rule (Q17; snackbars carry no action, section 2.4), and no string is added. The order of the rows (DEC-21, DEC-23) and the tab re-tap scroll of section 2.1 are unchanged.
 
 ## 4. Perspective specifics
 
@@ -404,21 +444,27 @@ The primary entity is `SettingsStore.rememberedPersonId` (Individual) or `rememb
 
 Before anything can be decided the primary is `Primary.Loading`. It holds until `SettingsStore.settings` has emitted (it is null until the first read) and, when an id is remembered, until the existence probe's first emission. While `Loading` the title is the tab title without a dropdown, the chips are hidden, the Search action does nothing, and the body shows nothing for 500 ms and then the centered progress indicator (`a11y_loading`). The picker body below appears only when no id is remembered or the probe emitted null, so it never flashes before a remembered entity is known. `Loading` happens only before this first decision: afterwards a new choice, or a collection restarted after the tab was left, keeps the shown primary (the picker body or the old entity) until the probe answers, and then only the rows clear and load under the new title (section 3.6, DEC-99).
 
-Nothing chosen (no remembered id, or the existence probe found the entity gone, [data-layer.md § Reactivity](data-layer.md#reactivity)):
+Nothing chosen (no remembered id, the existence probe found the entity gone ([data-layer.md § Reactivity](data-layer.md#reactivity)), or "All people" / "All projects" was chosen in the title's picker, DEC-112):
 - The title is "People" or "Projects", with no dropdown.
 - The body below the app bar is the `EntityPicker` in its embedded single-select form (DEC-52, section 7): name search field, every entity including those with zero notes (DEC-33), each with "N notes · added <date>", sorted by `Collator`, then id (DEC-32). No "Any" row and no create row: persons and projects are created only from a note (§3).
 - No entities at all: "(No data)" (`no_data`) and below it the hint "People are created in a note: tap + and use Add person." (`picker_empty_people_hint`) or "Projects are created in a note: tap + and use Add project." (`picker_empty_projects_hint`). A name search that matches nothing shows "(No data)" alone.
 - The Search action focuses the picker's name search field (section 2.2). The filter chips are hidden. The create button is shown and creates a note without prefill.
-- Tapping an entity stores its id in `SettingsStore` and shows its notes. If that write fails (a DataStore `IOException`, a full disk), its notes open anyway, nothing is remembered for the next start, and an error-styled snackbar says "Not enough free storage to remember this choice for next time." (`primary_not_remembered`, DEC-99). The choice is kept in the list's saved state (`unsavedChoice`, section 3.10) until a later choice is saved; if its entity is deleted, the picker body returns rather than an older remembered entity.
-- When the picker body returns (the entity is gone or nothing is remembered), an open list search bar is closed and its text dropped, because the Search action now belongs to the picker's field.
+- Tapping an entity stores its id in `SettingsStore` and shows its notes. If that write fails (a DataStore `IOException`, a full disk), its notes open anyway, nothing is remembered for the next start, and an error-styled snackbar says "Not enough free storage to remember this choice for next time." (`primary_not_remembered`, DEC-99). The choice is kept in the list's saved state (`unsavedChoice`, section 3.10) until a later choice or "All people" / "All projects" is saved (DEC-112); if its entity is deleted, the picker body returns rather than an older remembered entity.
+- When the picker body returns (the entity is gone, "All …" was chosen or nothing is remembered), an open list search bar is closed and its text dropped, because the Search action now belongs to the picker's field. (When "All …" is chosen the bar cannot be open: the search bar replaces the title.)
 
 An entity chosen:
-- The title is the entity name followed by `ic_arrow_drop_down`. The whole title is one button (`Modifier.clickable(role = Role.Button, onClickLabel = "Change person" / "Change project")`, keys `a11y_change_person`, `a11y_change_project`; at least 48 dp high) that opens `PickerKey(kind, PickerPurpose.PerspectivePrimary(selectedId))` (section 7). Picking another entity replaces the remembered id; Back keeps the current one (DEC-52).
+- The title is the entity name followed by `ic_arrow_drop_down`. The whole title is one button (`Modifier.clickable(role = Role.Button, onClickLabel = "Change person" / "Change project")`, keys `a11y_change_person`, `a11y_change_project`; at least 48 dp high) that opens `PickerKey(kind, PickerPurpose.PerspectivePrimary(selectedId))` (section 7). Its first row, "All people" / "All projects", returns the tab to the picker body (below, DEC-112); picking an entity replaces the remembered id; Back keeps the current one (DEC-52).
 - The list holds every note linked to the entity, with the secondary chips (Individual: Project, Date; Project: Person, Date, §2). Row summaries omit the primary entity (section 3.7).
-- The secondary picker puts co-linked entities first: the Project chip of Individual passes `coLinkedTo = personId`, the Person chip of Project passes `coLinkedTo = projectId` (section 7.4, [data-layer.md § Editor loads, pickers and existence probes](data-layer.md#editor-loads-pickers-and-existence-probes)). This is how the Project perspective shows "everyone" related to a project (§2) without a stored person–project relation.
-- Changing the entity keeps the secondary filters and search text and clears the selection (DEC-36).
+- The secondary picker puts co-linked entities first: the Project chip of Individual passes `coLinkedTo = personId`, the Person chip of Project passes `coLinkedTo = projectId` (section 7.4, [data-layer.md § Editor loads, pickers and existence probes](data-layer.md#editor-loads-pickers-and-existence-probes)). This is how the Project perspective shows "everyone" related to a project (§2) without a stored person–project relation. In Project, batch Associate also lists the project's people first on its People tab (section 7.4, DEC-111).
+- Changing the entity keeps the secondary filters and search text and clears the selection (DEC-36). The new entity's list starts at its first row (section 3.11 rule 4, Q27); choosing the same entity again in the title's picker keeps the position.
 - New notes are prefilled with the entity (DEC-38).
-- When the entity is deleted from an editor menu (DEC-34) or replaced by a restore (DEC-84), the remembered id is cleared and the picker body returns.
+- While the entity is shown, the top app bar has a third action after Search and Settings: the overflow button (`ic_more_vert`, "More options", `action_more`, test tag `entity_menu`; DEC-113, Q21), whose `DropdownMenu` (items wrapped in `SecureDialogWindow`, DEC-102; UI-local like every overflow menu) holds "Rename…" (`menu_rename_entity`) and "Delete…" (`menu_delete_entity`). It is not there while `Loading` or on the picker body, and the search bar and the contextual bar of selection mode replace the app bar, so it is not there in those modes either. Neither item navigates.
+- "Rename…" opens the rename dialog (section 8.17) with the entity's name. "Rename" writes the trimmed name through `EntityRepository.rename` (DEC-113): the title and the pane title show the new name; the list keeps its rows, their order and its position, because no note changes (DEC-21, DEC-110); every list, chip and picker shows the new name, and pickers sort it into its new place (DEC-32). A Short snackbar says "Person renamed" / "Project renamed" (`person_renamed`, `project_renamed`); a name that did not change writes nothing and shows nothing; a failure shows the `AppError` text (section 11.13) in a Long snackbar and keeps the old name. Duplicates are allowed: there is no hint when the new name equals another (Q23).
+- "Delete…" reads the shown entity's impact and opens the impact dialog of section 8.4 (DEC-34), the editor's dialog. "Delete" deletes it in the transaction of DEC-34 and shows "Person deleted" / "Project deleted" (`person_deleted`, `project_deleted`); nothing shows when it was already gone, and a failure shows the `AppError` text and keeps it. Before the delete runs, the screen empties the picker body's name search and asks its list for the first row, as "All people" / "All projects" does (DEC-112 (4)), so the tab returns to its list of everyone from its first name; the existence probe forgets the remembered id (next bullet).
+- When the entity is deleted, from an editor menu or from this tab's overflow menu (DEC-34, DEC-113), or replaced by a restore (DEC-84), the remembered id is cleared and the picker body returns.
+- "All people" / "All projects" (DEC-112, Q18), the first row of the title's picker, returns `PickerResult.Primary(kind, null)`. The screen empties the body's name search and asks the body's list for its first row, then `NoteListViewModel.clearPrimary()` removes the remembered id of this kind (`SettingsStore.clearRemembered(kind)`, whatever id it holds, also one behind an unsaved choice) and resets `unsavedChoice`: the picker body shows, and every later start opens on it until an entity is chosen. The other perspective's remembered id stays. If that write fails (a full disk), the picker body shows anyway (`unsavedChoice` = 0, section 3.10), the error snackbar "Not enough free storage to remember this choice for next time." (`primary_not_remembered`) shows, and the next start opens on the remembered entity (DEC-99).
+- "All …" changes nothing else: the secondary filters and the date filter stay (hidden while the body shows; they apply to the next entity, as for any change of entity); Back on the body or on an entity's list is the stack-level Back (to All) and never returns to the body, which only "All …", a deletion or a restore does; the create button on the body creates a note without prefill (DEC-38).
+- The picker body at its very top stays at its top while its rows change (DEC-112 (4)): when its first row differs from the previous rows' first row and its last layout had the first visible item at index 0 and offset 0 with no scroll in progress, it asks for item 0 at offset 0 in that composition (`TopAnchor.positionForPicker`, the rule 1 of section 3.11 for the body). A body that comes back first shows the names it had when it was last shown (its ViewModel's last state; the upstream stops 5 s after the body leaves), then the names read again, which may include a person or project added in a note meanwhile; this rule keeps the first name on top. It also brings the first name back when a name search is cleared at the very top.
 
 ### 4.3 Orphan
 
@@ -536,7 +582,7 @@ All actions work on the current selection pruned to the ids of the current query
 | Action | Flow | On success |
 |---|---|---|
 | Select all | `NoteRepository` returns the ids of the full current query (the same `NoteQuery`: primary, chips, search; checked and off-screen notes included; `selectIds` in [data-layer.md § Perspective query](data-layer.md#perspective-query)). They replace the selection | Selection mode stays; the title shows the new count |
-| Associate | Opens `PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate(selectionSaved))` with the purpose from `NoteListViewModel.associatePurpose()` (`selectionSaved`: the `selection` key of section 3.10 is present, DEC-57): the two-tab picker of section 7.6. Its "Associate" button returns the chosen persons and projects, including names created there (DEC-33). The ViewModel calls `NoteRepository.associate(noteIds, personIds, projectIds, newPersons, newProjects)`: one transaction, additive, existing links ignored (DEC-36). Back in the picker returns nothing and keeps the selection | Snackbar "N notes associated" (`batch_associated`); selection mode ends |
+| Associate | Opens `PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate(selectionSaved, coLinkedTo))` with the purpose from `NoteListViewModel.associatePurpose()` (`selectionSaved`: the `selection` key of section 3.10 is present, DEC-57; `coLinkedTo`: the chosen project in Project, else null, so that the People tab lists that project's people first, section 7.4, DEC-111): the two-tab picker of section 7.6. Its "Associate" button returns the chosen persons and projects, including names created there (DEC-33). The ViewModel calls `NoteRepository.associate(noteIds, personIds, projectIds, newPersons, newProjects)`: one transaction, additive, existing links ignored (DEC-36). Back in the picker returns nothing and keeps the selection | Snackbar "N notes associated" (`batch_associated`); selection mode ends |
 | Set date… | Opens a `DatePickerDialog` titled "Set date" (`dialog_set_date_title`; the `DatePicker`'s title slot holds that `Text` with the padding of the default title: start 24 dp, end 12 dp, top 16 dp), initially showing the date that every selected note shares, else no selection and the current month. Buttons, end-aligned: "Remove date" (`action_remove_date`), "Cancel", "OK" (enabled while a day is selected), mapped onto the two slots of `DatePickerDialog`: `confirmButton = { TextButton(onClick = ok, enabled = state.selectedDateMillis != null) { Text(action_ok) } }` and `dismissButton = { Row { TextButton(removeDate) { Text(action_remove_date) }; TextButton(cancel) { Text(action_cancel) } } }`. OK calls `NoteRepository.setDate(noteIds, day)`; "Remove date" calls it with `null` (DEC-36). Conversion as in section 3.5 rule 8 | "Date set on N notes" (`batch_date_set`) or "Date removed from N notes" (`batch_date_removed`); selection mode ends |
 | Delete | Opens the batch delete dialog (section 8.3). Confirm calls `NoteRepository.deleteNotes(noteIds)`: one transaction (DEC-35, DEC-36) | "N notes deleted" (`batch_deleted`); selection mode ends |
 
@@ -630,9 +676,10 @@ The area that §3 calls "association area for Persons and Projects (multi-select
 - Container: a `Column` with `Modifier.semantics { contentDescription = "Associate persons and projects"; isTraversalGroup = true }` (`a11y_associate`, verbatim §4), so TalkBack announces the area and then visits its chips.
 - Two groups, people first. Each group has a label ("People", `assoc_people`; "Projects", `assoc_projects`; `labelLarge`, `onSurfaceVariant`) and a `FlowRow` (8 dp spacing) of chips:
   - One `InputChip` per linked entity: label = the name (one line, ellipsis, at most 240 dp wide), trailing `ic_close` (18 dp). A tap removes the link from the draft. Semantics: `Modifier.clearAndSetSemantics { role = Role.Button; contentDescription = …; onClick { … } }` with the content description "Remove %1$s" (`a11y_remove_link`), for example "Remove Alice".
-  - Last in the row, an `AssistChip` "Add person" / "Add project" (`action_add_person`, `action_add_project`) with leading `ic_add`. It opens `PickerKey(kind, PickerPurpose.EditorLinks(selectedIds = <draft ids of that kind>))` (section 7).
+  - Last in the row, an `AssistChip` "Add person" / "Add project" (`action_add_person`, `action_add_project`) with leading `ic_add`. It opens `PickerKey(kind, PickerPurpose.EditorLinks(selectedIds = <draft ids of that kind>, coLinkedTo, exceptNoteId, projectCount))` (section 7). For Add person, `coLinkedTo` holds the ids of the stored projects the draft links at that moment, sorted, `exceptNoteId` the draft's note id (null for a note never inserted, and when the draft links no stored project), and `projectCount` the number of projects the draft links, stored and created in this edit, so the picker lists the people of the note's projects first (section 7.4, DEC-111). For Add project the list is empty, the id null and the count 0 (Q20).
 - Chip order: saved links by `Collator` on the name, then id (DEC-32, like row summaries), then entities created in the picker during this edit, in creation order. `EditorViewModel` sorts the chips itself, with a new `Collator` per pass (it is not thread-safe, and the locale may change). A created entity looks like any other chip; it is inserted only with the note save (DEC-33).
-- The picker result replaces the ids the picker was opened with and appends the newly created names (section 7.7): the draft's ids of that kind become (draft ids − the ids passed as `selectedIds`) + the result's `ids`. Opening the picker covers the editor, and the save that this may start (section 6.8) can insert entities created earlier in this edit, which join the draft's ids only after the picker opened; they stay chips. `selectedIds` lists the draft's ids sorted, and the same ids are saved under `pickerBasePersonIds` / `pickerBaseProjectIds` until the result arrives (section 6.14). Removing a chip that stands for a created entity drops it; nothing is ever inserted for it (DEC-33).
+- Entities created in an earlier visit of this edit (DEC-111 (7), Q31). When the draft holds a person (for "Add person") or a project (for "Add project") that a picker of an earlier visit created and no save has inserted yet, the chip first saves the draft as leaving would (section 6.8; `EditorViewModel.requestLinks`), and the picker opens once that save is done, if the editor is then still the top entry (`EditorViewModel.takeLinksRequest`, `Navigator.isTop`). The save has inserted those entities and moved them into the draft's ids, so `selectedIds` holds them: the picker shows them checked, like every other link of the note, by name in the first group where it has groups (section 7.4). Unticking one and confirming removes it from the draft; it stays a stored entity, and the next save removes this note's link. Cancel or Back keeps it. A failed save shows the `AppError` text in the editor's Long snackbar and opens no picker, and a note that no longer exists closes the editor with "This note no longer exists.", as the save before the impact dialog does (section 6.11). Without such an entity the picker opens at once. From the tap until the picker opens, more taps on "Add person" or "Add project" are ignored, and so is such a tap while Save or Delete note runs; Save, Delete note, a dialog or sheet, the delete picker or Back started after the tap cancels the opening. A chip of that kind removed during that save stays out of the draft: the save has already stored the entity, so the next save unlinks it and the picker lists it unchecked.
+- The picker result replaces the ids the picker was opened with and appends the newly created names (section 7.7): the draft's ids of that kind become (draft ids − the ids passed as `selectedIds`) + the result's `ids`, so an id that joined the draft after the picker opened stays. Opening the picker covers the editor, and the save of this draft that this may start (section 6.8) inserts no entity of the picker's kind (the bullet above); it can insert the note, its links and entities of the other kind. `selectedIds` lists the draft's ids sorted, and the same ids are saved under `pickerBasePersonIds` / `pickerBaseProjectIds` until the result arrives (section 6.14). Removing a chip that stands for a created entity drops it; no later save inserts it (DEC-33), and only a save already running when the chip is removed can have inserted it (the bullet above).
 - Link changes are draft changes, written by the next save (section 6.8); they bump `updated_at` (DEC-21).
 
 ### 6.5 Date field
@@ -664,6 +711,8 @@ When the editor writes:
 |---|---|---|
 | Save action | Always inserts, even a completely blank note (§3 "prepare a note in advance"), then closes | Writes if content, date or links differ from the stored note, then closes |
 | Back (system or toolbar), leaving by navigation, the app going to the background (`ON_STOP`) | Inserts only if the draft differs from its initial value (the prefill is part of it, section 6.7) and is not blank | Writes if content, date or links differ from the stored note |
+| "Add person" / "Add project" while the draft holds an entity of that kind created in an earlier visit of this edit (section 6.4, DEC-111 (7), Q31) | As on Back (the created entity makes the draft differ and not blank), then the picker opens | As on Back (the created entity is a change), then the picker opens |
+| A pick in "Delete person…" / "Delete project…" (section 6.11, step 2) | As on Back, then the impact dialog opens | As on Back, then the impact dialog opens |
 | Opening the note, scrolling, focusing | never | never (no `updated_at` change, DEC-21) |
 
 - "Blank" means: empty content, no date, unchecked, no links and no created entities. This keeps "+ then Back" and "remove the prefill, then Back" from creating empty notes, while the Save action still creates a deliberately blank note. The "not blank" condition is DEC-37's rule for a prefill that the user removed: such a draft differs from its initial value but holds nothing worth saving, so leaving inserts nothing (testing.md I-36 pins it).
@@ -672,8 +721,9 @@ When the editor writes:
 - `EditorScreen` calls `EditorViewModel.saveOnLeave()` on the entry's `ON_STOP` and when its composition ends ([architecture.md § Threading](architecture.md#threading)); a call that finds the draft equal to its baseline writes nothing.
 - The editor leaves by itself through `EditorUiState.closed` (after Save, a delete, or a vanished note); the screen then calls `Navigator.back()` while it is the top entry.
 - There is no "Saved" message on success.
+- When the entry is popped, an editor opened for a new note whose draft was inserted and not discarded marks that note in `NewNoteMarker` once its last save has returned, also when that save failed, and the list it returns to reveals it (section 3.11, DEC-110). That is still no message.
 - The Save action awaits the write before closing. If it fails, the editor stays open with the draft and shows the `AppError` text (section 11.13) in a Long snackbar. On an existing note whose content, date and links equal the stored note it writes nothing and closes; on a draft of an older data epoch it closes without writing ([architecture.md § Data reset](architecture.md#data-reset)).
-- Other failures: a `loadNote` error closes the editor and posts the `AppError` text to `AppMessages`. A failed read of the draft-insert record (an `IOException` from `SettingsStore.draftInsert`) counts as no record, the residual risk accepted below; a failed `putDraftInsert` or `dropDraftInsert` is ignored, because the note is already saved and only the record is affected (a record left behind goes with the oldest-record limit of `SettingsStore` or the next data reset). Errors of the saved-note checkbox, of an entity delete and of the note delete show in the editor's own Long snackbar (`EditorUiState.message`).
+- Other failures: a `loadNote` error closes the editor and posts the `AppError` text to `AppMessages`. A failed read of the draft-insert record (an `IOException` from `SettingsStore.draftInsert`) counts as no record, the residual risk accepted below; a failed `putDraftInsert` or `dropDraftInsert` is ignored, because the note is already saved and only the record is affected (a record left behind goes with the oldest-record limit of `SettingsStore` or the next data reset). Errors of the saved-note checkbox, of the save before the impact dialog (section 6.11) or before a links picker (section 6.4), of an entity delete and of the note delete show in the editor's own Long snackbar (`EditorUiState.message`), not through `AppMessages`, because the editor stays open.
 - A save on Back or `ON_STOP` runs after the editor has closed. If it fails, the save posts "The note could not be saved. %1$s" (`editor_save_failed`, the argument being the `AppError` text) to `AppMessages` (section 2.4), shown as a Long snackbar, because the editor's ViewModel is already gone.
 - After the first insert the editor keeps the new `noteId`; later saves update that note and never insert it or its new entities twice (data-layer.md § Note save, caller rules).
 - If the note no longer exists (`loadNote` returns null on open, or a save returns `NoteGone`), the editor closes without writing and posts "This note no longer exists." (`note_gone`) to `AppMessages`.
@@ -737,6 +787,7 @@ data class EditorUiState(
     val dialog: EditorDialog?,             // DeleteNote | Unlink | DatePicker | DeleteImpact(kind, id, name, n, m)
     val message: UserMessage?,
     val closed: Boolean,                   // the editor asks to leave: Save finished, the note was deleted or is gone
+    val openLinks: EntityKind?,            // "Add person"/"Add project" after the save before its picker: take it (takeLinksRequest) and open that picker while on top (DEC-111 (7)); not saved
 ) { override fun toString() = "EditorUiState(noteId=$noteId)" }   // DEC-70
 data class LinkChip(val id: Long?, val newKey: String?, val name: String) {   // id for saved entities, newKey for created ones
     override fun toString() = "LinkChip(id=$id)"
@@ -755,13 +806,13 @@ data class LinkChip(val id: Long?, val newKey: String?, val name: String) {   //
 
 ### 7.1 Purposes
 
-`PickerKey(kind: EntityKind, purpose: PickerPurpose)` is defined in architecture.md; `PickerPurpose` is defined here. Payloads hold ids only, never names (architecture.md § Keys and stacks).
+`PickerKey(kind: EntityKind, purpose: PickerPurpose)` is defined in architecture.md; `PickerPurpose` is defined here. Payloads hold ids, flags and counts only (`BatchAssociate.selectionSaved`, `EditorLinks.projectCount`), never names (architecture.md § Keys and stacks).
 
 ```kotlin
 @Serializable
 sealed interface PickerPurpose {
-    @Serializable data class EditorLinks(val selectedIds: List<Long>) : PickerPurpose      // editor "Add person/project"
-    @Serializable data class BatchAssociate(val selectionSaved: Boolean) : PickerPurpose   // selection bar "Associate"; selectionSaved: the list saved its selection (DEC-57)
+    @Serializable data class EditorLinks(val selectedIds: List<Long>, val coLinkedTo: List<Long>, val exceptNoteId: Long?, val projectCount: Int) : PickerPurpose  // editor "Add person/project"; coLinkedTo, exceptNoteId, projectCount: DEC-111 (empty, null and 0 for Add project, Q20)
+    @Serializable data class BatchAssociate(val selectionSaved: Boolean, val coLinkedTo: Long?) : PickerPurpose   // selection bar "Associate"; selectionSaved: the list saved its selection (DEC-57); coLinkedTo: the chosen project in Project (DEC-111)
     @Serializable data class PerspectivePrimary(val selectedId: Long?) : PickerPurpose     // Individual/Project title
     @Serializable data class SecondaryFilter(val selectedId: Long?, val coLinkedTo: Long?) : PickerPurpose  // Person/Project chip
     @Serializable data class DeleteEntity(val linkedIds: List<Long>) : PickerPurpose       // editor "Delete person/project…"
@@ -772,7 +823,7 @@ sealed interface PickerPurpose {
 |---|---|---|---|---|---|
 | `EditorLinks` | Editor "Add person" / "Add project" (section 6.4) | multi-select, one kind | "Add people" / "Add projects" (`picker_title_add_people`, `picker_title_add_projects`) | create row; entities created in this visit | "Done" (`action_done`) |
 | `BatchAssociate` | Selection bar "Associate" (section 5.3) | multi-select, both kinds on two tabs; `kind` is the first tab (always `Person`) | "Associate" (`picker_title_associate`) | per tab: create row; entities created in this visit | "Associate" (`action_associate`) |
-| `PerspectivePrimary` | Individual/Project title button (section 4.2) | single-select | "Choose a person" / "Choose a project" (`picker_title_choose_person`, `picker_title_choose_project`) | — | a tap |
+| `PerspectivePrimary` | Individual/Project title button (section 4.2) | single-select | "Choose a person" / "Choose a project" (`picker_title_choose_person`, `picker_title_choose_project`) | "All people" / "All projects" (`picker_all_people`, `picker_all_projects`; DEC-112) | a tap |
 | `SecondaryFilter` | Person/Project chip (section 3.4) | single-select | "Filter by person" / "Filter by project" (`picker_title_filter_person`, `picker_title_filter_project`) | "Any person" / "Any project" (`picker_any_person`, `picker_any_project`) | a tap |
 | `DeleteEntity` | Editor "Delete person…" / "Delete project…" (section 6.11) | single-select | "Delete person" / "Delete project" (`picker_title_delete_person`, `picker_title_delete_project`) | — | a tap |
 | (embedded body) | Individual/Project with nothing chosen (section 4.2) | single-select | the perspective's title | — | a tap |
@@ -785,7 +836,7 @@ Full-screen form, top to bottom:
 1. `TopAppBar`. Multi-select: navigation icon `ic_close` "Cancel" (`action_cancel`), title, and the confirm `TextButton` as the action. Single-select: navigation icon `ic_arrow_back` "Back" (`action_back`) and the title.
 2. `BatchAssociate` only: a `PrimaryTabRow` with the tabs "People" and "Projects" (`tab_people`, `tab_projects`); while a tab has chosen entities its label reads "People (2)" (`pluralStringResource(R.plurals.tab_with_count, n, label, n)`).
 3. The name search field: a single-line `TextField` with leading `ic_search`, placeholder "Search people" / "Search projects" (`picker_search_people`, `picker_search_projects`), trailing `ic_close` "Clear search text" (`action_clear_search`) while not empty, `ImeAction.Done`, no autofocus (the keyboard would hide the list). Input longer than `MAX_NAME_CHARS` (200) characters is cut without a message, surrogate pairs kept whole, so the create row never produces a name that `EntityRepository` rejects (data-layer.md INV-9; names that arrive longer through a restore are not cut and are shown with ellipsis). The field is always wrapped in `NoPersonalizedLearning`, which always asks the keyboard not to learn (DEC-71, Q11), as in section 3.3 ([security.md § 11](security.md#11-keyboard-and-autofill-dec-71-q11)).
-4. A `LazyColumn` with the rows of sections 7.3 and 7.4, keyed by `"any"`, `"create"`, `"new:<key>"`, `"header:<n>"` and the entity id. The two `BatchAssociate` tabs share one `LazyListState`, so a tab does not keep its own scroll position.
+4. A `LazyColumn` with the rows of sections 7.3 and 7.4, keyed by `"any"`, `"all"`, `"create"`, `"new:<key>"`, `"header:<n>"` and the entity id. The two `BatchAssociate` tabs share one `LazyListState`, so a tab does not keep its own scroll position.
 
 The embedded form has no app bar and no tabs: the search field and the list fill the perspective body under the perspective's own app bar.
 
@@ -800,6 +851,7 @@ Name search is a case-insensitive substring match on the name, done in memory wi
 | Created in this visit | Like a multi-select entity row, checked, with the supporting text "New" (`picker_entity_new`) instead of the counts | Unchecking it discards it; it is never inserted (DEC-33) |
 | Create row | Leading `ic_add`; `Create "X"` (`picker_create`), or `Create another "X"` (`picker_create_another`) when a case-insensitive exact match exists (DEC-32) | Section 7.6 |
 | "Any person" / "Any project" | The text; trailing `ic_check` while no filter is set | `SecondaryFilter` only; returns "no filter" |
+| "All people" / "All projects" | The text; never a check mark | `PerspectivePrimary` only (DEC-112): `Modifier.clickable(role = Role.Button)`, test tag `picker_all`, min height 56 dp; returns no entity, so the list forgets its entity and shows its picker body (section 4.2) |
 | Section header | Text (section 7.4), `titleSmall`, `primary`, 16 dp side padding | `Modifier.semantics { heading() }` |
 
 - The supporting text is the duplicate display of DEC-32: `note_count` and the entity's `created_at` as a date (`AppTime.dateOf(createdAt)`, `FormatStyle.MEDIUM`), for example "3 notes · added 12 Nov 2026" or "0 notes · added 12 Nov 2026". Two entities with the same name stay two rows; nothing is merged (§1).
@@ -807,32 +859,41 @@ Name search is a case-insensitive substring match on the name, done in memory wi
 
 ### 7.4 Ordering and sections
 
-`EntityRepository` delivers the options sorted by `Collator` on the name, then id (DEC-32), with co-linked entities first when requested ([data-layer.md § Editor loads, pickers and existence probes](data-layer.md#editor-loads-pickers-and-existence-probes)). The picker arranges them per purpose:
+`EntityRepository` delivers the options sorted by `Collator` on the name, then id (DEC-32), each with its `coLinked` flag when the picker asks for co-links ([data-layer.md § Editor loads, pickers and existence probes](data-layer.md#editor-loads-pickers-and-existence-probes)). The picker forms the groups itself, so each group keeps that order (DEC-111). The picker arranges them per purpose:
 
 | Purpose | Arrangement, top to bottom |
 |---|---|
-| `EditorLinks`, `BatchAssociate` (per tab) | Create row; entities created in this visit (creation order); all entities in repository order. Checked and unchecked rows are not regrouped, so a row never jumps when it is ticked |
-| `PerspectivePrimary`, embedded body | All entities in repository order |
+| `EditorLinks` of people with `projectCount` above 0 (Add person on a note with a project) | Create row; entities created in this visit (creation order); header "People on this note's project" (`picker_section_note_project`, `projectCount` 1) or "People on this note's projects" (`picker_section_note_projects`, more) with the first group; header "Other people" (`picker_section_other_people`) with the rest. Checked and unchecked rows are not regrouped, so a row never jumps when it is ticked |
+| `BatchAssociate` with `coLinkedTo` set (Project), People tab | Create row; entities created in this visit (creation order); header "People on this project's notes" (`picker_section_co_people`) with the first group; header "Other people" with the rest; not regrouped when ticked |
+| `EditorLinks` and `BatchAssociate` otherwise (Add project, Q20; Add person on a note without any project; the Projects tab of `BatchAssociate`, Q20; `BatchAssociate` outside Project) | Create row; entities created in this visit (creation order); all entities in repository order. Checked and unchecked rows are not regrouped, so a row never jumps when it is ticked |
+| `PerspectivePrimary` | "All people" / "All projects" (`picker_all_people`, `picker_all_projects`; DEC-112), shown whatever the name search holds; then all entities in repository order, the current one checked. No groups (DEC-111) |
+| Embedded body | All entities in repository order |
 | `SecondaryFilter` with `coLinkedTo = null` (All, Date) | "Any …"; all entities in repository order |
-| `SecondaryFilter` with `coLinkedTo` set | "Any …"; header "People on this project's notes" (`picker_section_co_people`) or "Projects on this person's notes" (`picker_section_co_projects`) with the co-linked entities; header "Other people" / "Other projects" (`picker_section_other_people`, `picker_section_other_projects`) with the rest |
+| `SecondaryFilter` with `coLinkedTo` set | "Any …"; header "People on this project's notes" (`picker_section_co_people`) or "Projects on this person's notes" (`picker_section_co_projects`) with the first group (the co-linked entities); header "Other people" / "Other projects" (`picker_section_other_people`, `picker_section_other_projects`) with the rest |
 | `DeleteEntity` | Header "Linked to this note" (`picker_section_linked`) with the entities in `linkedIds`; header "Other people" / "Other projects" with the rest (DEC-34) |
 
 Headers appear only when both of their groups are non-empty; otherwise the single group is listed without a header.
+
+The first group (DEC-28, DEC-111):
+- What it holds. `SecondaryFilter`: the entities that share a note with `coLinkedTo`. `BatchAssociate`, People tab: the people who share a note with the chosen project. `EditorLinks` of people with `projectCount` above 0: the people linked to a note other than `exceptNoteId` that links any project of `coLinkedTo`, plus the people in `selectedIds`, that is, the people on the note's projects counted with this note as the editor holds it when the picker opens (a project created in this edit has no other note, so it adds only this note's people; with no stored project the group is `selectedIds` alone). The save that opening the picker may start (section 6.4, section 6.8) therefore cannot move anybody between the groups, whenever it lands. The picker forms no group on a project tab (Q20), whatever an `EditorLinks` key holds.
+- Fixed while the picker is open. `EntityPickerViewModel` fixes each id's group when the id is first listed in this visit: the first group when the entity is flagged in that list or, for `EditorLinks`, is in `selectedIds`; the second otherwise. Later lists update the rows (counts, names, entities that appear or vanish) but move nobody, so a write that runs while the picker is open (an earlier editor's save on leave, section 5.4) moves nobody. An entity that first appears while the picker is open joins the group its flag gives it then. A person created in an earlier visit of the same edit is saved before the picker opens (section 6.4, DEC-111 (7)) and is in `selectedIds`, so it is in the first group from its first listing, by name among its people (it is a stored entity by then; only the people created in this visit stay above the header); the save of this draft that opening the picker starts inserts no person. A person that another write inserts while the picker is open (an earlier editor's save on leave) is grouped by its flag when first listed, as above. The groups live in the ViewModel, not in the shared flow: a rotation, a lock or a pause longer than the 5 s sharing timeout keeps them. They are not saved, so a picker rebuilt after Android closed the app forms them again from the data then, and a person whose links another write changed in between can be in the other group (DEC-111 (5)).
+- Nothing is hidden: the two groups together list every entity of the kind, zero-note ones included (DEC-33), and the name search filters both.
 
 ### 7.5 Single-select variant
 
 - A tap on an entity returns it and closes the picker (`PerspectivePrimary`, `SecondaryFilter`, `DeleteEntity`). In the embedded body, a tap stores the remembered id (section 4.2).
 - `SecondaryFilter`: "Any person" / "Any project" returns "no filter" and clears that dimension.
+- `PerspectivePrimary`: "All people" / "All projects" returns no entity (`PickerResult.Primary(kind, null)`); the list forgets its entity and shows its picker body (section 4.2, DEC-112).
 - `DeleteEntity`: the editor receives the id and continues with the impact dialog (section 6.11).
 - Back returns nothing; the opener keeps its current state.
 
 ### 7.6 Multi-select variant and the create row
 
-- `EditorLinks` starts with the draft's saved links of that kind checked (`selectedIds`). Unchecking one and confirming removes it from the draft. Entities created earlier in the same edit are not passed (keys carry no names) and are not listed; they stay as chips in the editor (section 6.4).
+- `EditorLinks` starts with the draft's saved links of that kind checked (`selectedIds`). Unchecking one and confirming removes it from the draft. Entities of that kind created in an earlier visit of the same edit are saved before the picker opens (section 6.4, DEC-111 (7), Q31), so they are among the draft's saved links in `selectedIds`: listed, checked, by name, in the first group where the picker has groups (section 7.4); unchecking one and confirming removes it from the draft, and Cancel or Back keeps it. Keys carry no names, so an entity is never passed before a save has inserted it.
 - `BatchAssociate` starts with nothing checked: associating is additive and existing links are ignored (DEC-36). The confirm button is enabled once at least one entity is checked or created on either tab, and the result carries both kinds, so the list makes one `associate` call and one transaction (§7 step 2 "and/or", DEC-36).
 - Create row (DEC-32, DEC-33):
   - Shown while the trimmed search text is not blank (blank names are rejected).
-  - It reads `Create another "X"` when the folded trimmed text equals the folded name of any listed entity or of an entity created in this visit (`SearchText.fold`), else `Create "X"`. X is the trimmed text. Entities created in an earlier visit of the same edit are not known to the picker (keys carry no names, DEC-70), so they do not trigger "Create another" in a later visit; duplicates stay allowed (§1).
+  - It reads `Create another "X"` when the folded trimmed text equals the folded name of any listed entity or of an entity created in this visit (`SearchText.fold`), else `Create "X"`. X is the trimmed text. Entities created in an earlier visit of the same edit are saved before a later visit of their kind opens (section 6.4, DEC-111 (7)), so they are listed and trigger "Create another" like any stored entity; duplicates stay allowed (§1).
   - A tap adds `NewEntity(key = <random UUID>, name = <trimmed text>)` to this visit's created list, checked, clears the search field and keeps focus in it. Nothing is written to the database (DEC-33).
   - Duplicates are allowed: the create row is offered even on an exact match (§1).
 - `EditorLinks`: "Done" is enabled once the options have loaded, also with nothing checked (unchecking every link is a valid result). In every multi-select form the confirm button is disabled until the options have loaded.
@@ -847,7 +908,7 @@ sealed interface PickerResult {
     data class Links(val kind: EntityKind, val ids: Set<Long>, val created: List<NewEntity>) : PickerResult        // EditorLinks
     data class Associate(val personIds: Set<Long>, val projectIds: Set<Long>,
         val newPersons: List<NewEntity>, val newProjects: List<NewEntity>) : PickerResult                        // BatchAssociate
-    data class Primary(val kind: EntityKind, val id: Long) : PickerResult                                         // PerspectivePrimary
+    data class Primary(val kind: EntityKind, val id: Long?) : PickerResult                                        // PerspectivePrimary, null = "All people" / "All projects" (DEC-112)
     data class Filter(val kind: EntityKind, val id: Long?) : PickerResult                                         // SecondaryFilter, null = any
     data class Delete(val kind: EntityKind, val id: Long) : PickerResult                                          // DeleteEntity
 }
@@ -856,7 +917,7 @@ sealed interface PickerResult {
 - Every result class overrides `toString()` to print kinds and counts only (DEC-70). `NewEntity` is the data-layer type (key plus name, [data-layer.md § Note save](data-layer.md#note-save)).
 - The editor applies `Links` by replacing the ids it opened the picker with by `ids` and appending `created` to its created entities (section 6.4). The list screen applies `Associate` (section 5.3), `Primary` (section 4.2) and `Filter` (section 3.4). Results only ever reach the entry that opened the picker.
 - Checked ids that no longer exist when the result is built are dropped; the repositories drop vanished ids again inside their transactions (data-layer.md § Note save, § Batch operations).
-- `EntityPickerViewModel(kind, savedStateHandle, entityRepository, appTime, purpose: PickerPurpose? = null)`; a null `purpose` is the embedded body of Individual and Project (DEC-52). It saves in its `SavedStateHandle`: the search text (`search`), the checked ids (`checked`, `LongArray`), the created entities (`newKeys` / `newNames`, `ArrayList<String>`) and the current tab (`tab`); the second tab of `BatchAssociate` uses the same keys with the suffix `_Person` or `_Project`, so the embedded body saves only `search`. A `BatchAssociate(selectionSaved = false)` also writes the key `opened` (`KEY_OPENED`) when it is created; a ViewModel that finds it at creation was rebuilt after Android closed the app, the list's selection is gone, and `selectionLost` is true: `EntityPickerScreen` then calls `onBack()` at once, without a message and without a result (DEC-57). Initial values from the purpose (`selectedIds`) are applied only when the entry is first created, so rotation and process death keep the user's changes. The search text is the snapshot state `EntityPickerViewModel.search` of the current tab, written inside the field's `onValueChange` (DEC-99).
+- `EntityPickerViewModel(kind, savedStateHandle, entityRepository, appTime, purpose: PickerPurpose? = null)`; a null `purpose` is the embedded body of Individual and Project (DEC-52). It saves in its `SavedStateHandle`: the search text (`search`), the checked ids (`checked`, `LongArray`), the created entities (`newKeys` / `newNames`, `ArrayList<String>`) and the current tab (`tab`); the second tab of `BatchAssociate` uses the same keys with the suffix `_Person` or `_Project`, so the embedded body saves only `search`. A `BatchAssociate(selectionSaved = false)` also writes the key `opened` (`KEY_OPENED`) when it is created; a ViewModel that finds it at creation was rebuilt after Android closed the app, the list's selection is gone, and `selectionLost` is true: `EntityPickerScreen` then calls `onBack()` at once, without a message and without a result (DEC-57). Initial values from the purpose (`selectedIds`) are applied only when the entry is first created, so rotation and process death keep the user's changes. The search text is the snapshot state `EntityPickerViewModel.search` of the current tab, written inside the field's `onValueChange` (DEC-99). Per kind it also holds the groups of section 7.4, each id's group fixed when the id is first listed, in memory only (a field of the ViewModel, so a restart of the shared flow keeps them): they are no saved key, so they cost nothing in the saved-state budget (DEC-57), and a picker rebuilt after Android closed the app forms them again (DEC-111 (5)).
 - Its `uiState` is `EntityPickerUiState(loading, anyEntity, items: List<PickerItem>, tab: EntityKind, chosen: Map<EntityKind, Int>, canConfirm)`. `items` is the arrangement of section 7.4, built by the pure function `pickerItems(...)` as the sealed `PickerItem` (`AnyEntity`, `Create`, `New`, `Header`, `Entity`; `ui/common/PickerItems.kt`), whose `key` is the `LazyColumn` key of section 7.2. `chosen` counts the checked and created entities per kind for the tab labels; `canConfirm` enables the confirm button (section 7.6). The options flow restarts from the last list it had, so `loading` is true only before the first emission (section 7.8).
 - The full-screen destination is `EntityPickerScreen(key, onResult, onBack)` (`ui/common`), which builds the ViewModel with the key's purpose and renders `EntityPicker`; `EntityPicker` takes its callbacks as one `PickerActions` holder.
 
@@ -865,9 +926,9 @@ sealed interface PickerResult {
 | Situation | Shows |
 |---|---|
 | No entity of this kind exists, purpose with a create row | "(No data)" (`no_data`) and "Type a name to create a person." / "Type a name to create a project." (`picker_create_hint_person`, `picker_create_hint_project`) |
-| No entity exists, `PerspectivePrimary`, `SecondaryFilter` or the embedded body (no create row; reached from a list screen that has the + button) | "(No data)" and "People are created in a note: tap + and use Add person." / "Projects are created in a note: tap + and use Add project." (`picker_empty_people_hint`, `picker_empty_projects_hint`). `SecondaryFilter` still shows its "Any …" row above |
+| No entity exists, `PerspectivePrimary`, `SecondaryFilter` or the embedded body (no create row; reached from a list screen that has the + button) | "(No data)" and "People are created in a note: tap + and use Add person." / "Projects are created in a note: tap + and use Add project." (`picker_empty_people_hint`, `picker_empty_projects_hint`). `SecondaryFilter` still shows its "Any …" row above, and `PerspectivePrimary` its "All …" row (DEC-112) |
 | No entity exists, `DeleteEntity` (opened from the editor, which has no + button and where Add person is right behind the picker) | "(No data)" alone; the user can only go Back |
-| Entities exist but the name search matches none | "(No data)"; the create row stays above it where offered |
+| Entities exist but the name search matches none | "(No data)"; the create row, "Any …" and "All …" stay above it where offered |
 | Options not loaded yet (no first emission) | Nothing for 500 ms, then the centered progress indicator (`DelayedProgress`, section 3.6) |
 
 ## 8. Dialogs
@@ -906,7 +967,7 @@ Outcome: section 5.3.
 
 ### 8.4 Delete person or project: impact (DEC-34)
 
-Shown by the editor after the delete picker (section 6.11), with N = notes linked to the entity and M = those of them that would be left with no person and no project (M ⊆ N, [data-layer.md § Deletes](data-layer.md#deletes)).
+Shown by the editor after the delete picker (section 6.11), and by "Delete…" in the overflow menu of People and Projects for the entity the tab shows (section 4.2, DEC-113), both through one composable, `EntityDeleteDialog` (`ui/common`): the editor from its `EditorDialog.DeleteImpact` (section 6.14), the list from its `ListDialog.DeleteEntity` (section 3.10), whose title takes the name of the entity the tab shows. N = notes linked to the entity and M = those of them that would be left with no person and no project (M ⊆ N, [data-layer.md § Deletes](data-layer.md#deletes)).
 
 | Part | Text |
 |---|---|
@@ -1247,6 +1308,22 @@ Outcomes of `confirmWithPassword` (`AppResult<ToggleOutcome>`):
 | Any other `Err` (`AuthFailed`, `StorageFull`, `KeyUnavailable`, `DatabaseUnavailable`) | The dialog closes and the `AppError` text (section 11.13) shows in a Long snackbar. The switch stays off (EnableLock); the lock setting is unchanged (SetUpSlot). `KeyUnavailable` here is a message only: it never changes the gate (DEC-86) |
 
 Test tag: `lock_password_dialog` (section 12.8).
+
+### 8.17 Rename person or project (DEC-113)
+
+Shown by "Rename…" in the overflow menu of People and Projects for the entity the tab shows (section 4.2, Q21). Rename only: role, remarks, description and status stay hidden and empty (DEC-31, Q22).
+
+| Part | Text |
+|---|---|
+| Title | "Rename person" (`dialog_rename_person_title`) / "Rename project" (`dialog_rename_project_title`) |
+| Field | `OutlinedTextField` labelled "Name" (`rename_name_label`), one line, holding the entity's name with the caret at its end; test tag `rename_field` |
+| Buttons | "Cancel" (`action_cancel`) · "Rename" (`action_rename`), enabled while the field is not blank; not destructive |
+
+- The field takes focus and shows the keyboard once, when "Rename…" opens the dialog (section 12.7), as the search bar does (section 3.3): the request is UI-local, not saved and used once (`RenameEntityDialog(focusOnStart, onFocusedOnStart)`: the screen drops it when the dialog reports that the field took focus), so a dialog that returns after a rotation, a process death or an unlock shows its text without focus or keyboard. A `LaunchedEffect` inside the dialog's `text` slot makes the request. It is a `TextFieldValue` field, because the `String` overload of foundation 1.12.1 starts its caret at 0, before the name. It keeps at most `MAX_NAME_CHARS` (200) UTF-16 units, its first value too (a longer stored name, possible only from a restored backup, starts cut there): longer input is cut there without a message, a surrogate pair is kept whole and the selection moves into the text (the rule of the picker's field, section 7.2). `KeyboardOptions(imeAction = ImeAction.Done)`, as the picker's field; Done acts as "Rename" while it is enabled, and so does Enter on a hardware keyboard (a single-line field runs its IME action on Enter).
+- The field sits inside `NoPersonalizedLearning` (DEC-71) and the `text` slot inside `SecureDialogWindow`, without `hideOverlays` (DEC-102); `securePolicy` stays `Inherit` (DEC-67). The dialog keeps the default `DialogProperties`, as the Erase dialog's typed confirmation does: only password dialogs set `dismissOnClickOutside = false` (section 8.1).
+- "Rename" is enabled while the field is not blank by `TextWhitespace` (DEC-24). There is no hint and no block when the name equals another person's or project's name, in any case (Q23, DEC-32).
+- "Rename" closes the dialog at once and calls `EntityRepository.rename(kind, id, text)`, which trims (DEC-113); a second confirm that arrives before the dialog is gone (two taps in one frame, Done and a tap) does nothing. The outcome shows on the list: "Person renamed" / "Project renamed" (Short); nothing when the name did not change or the entity is gone; the `AppError` text in a Long snackbar on a failure, with the old name kept. "Cancel", a tap outside and Back close it and drop the text; while the keyboard is up, the first Back only hides it (section 2.5).
+- State: `ListDialog.Rename(id)` and the field's text, `NoteListViewModel.renameText`, saved under `listDialog` and `renameText` (section 3.10), so the dialog and the typed text survive rotation and process death; the caret returns to the end, without focus. The dialog shows only while the tab shows that entity.
 
 ## 9. Settings screen
 
@@ -1694,6 +1771,14 @@ Every user-visible text of the app. Rules (DEC-55):
 |---|---|---|---|
 | `a11y_change_person` | Change person | Individual title button | DEC-52 |
 | `a11y_change_project` | Change project | Project title button | DEC-52 |
+| `menu_rename_entity` | Rename… | Individual and Project overflow menu (section 4.2) | DEC-113 |
+| `menu_delete_entity` | Delete… | Individual and Project overflow menu | DEC-113 |
+| `dialog_rename_person_title` | Rename person | Rename dialog title (section 8.17) | DEC-113 |
+| `dialog_rename_project_title` | Rename project | Rename dialog title | DEC-113 |
+| `rename_name_label` | Name | Rename field label | DEC-113 |
+| `action_rename` | Rename | Rename dialog confirm button | DEC-113 |
+| `person_renamed` | Person renamed | Snackbar after a person was renamed | DEC-113 |
+| `project_renamed` | Project renamed | Snackbar after a project was renamed | DEC-113 |
 | `action_today` | Today | MonthGrid header | design |
 | `label_today` | Today | Calendar selection header | design |
 | `a11y_previous_month` | Previous month | MonthGrid arrow | design |
@@ -1706,7 +1791,7 @@ Every user-visible text of the app. Rules (DEC-55):
 | `a11y_day_range_start` | start of range | Day cell description part | design |
 | `a11y_day_range_end` | end of range | Day cell description part | design |
 | `a11y_day_in_range` | in range | Day cell description part | design |
-| `primary_not_remembered` | Not enough free storage to remember this choice for next time. | Individual and Project: error-styled snackbar when the chosen person or project could not be saved; its notes open anyway (section 4.2) | DEC-99 |
+| `primary_not_remembered` | Not enough free storage to remember this choice for next time. | Individual and Project: error-styled snackbar when the chosen person or project could not be saved, whose notes open anyway, or when "All people" / "All projects" could not be saved, whose picker body shows anyway (section 4.2) | DEC-99, DEC-112 |
 
 ### 11.5 Selection mode and batch actions
 
@@ -1776,13 +1861,17 @@ Every user-visible text of the app. Rules (DEC-55):
 | `picker_search_projects` | Search projects | Picker search placeholder | design |
 | `picker_any_person` | Any person | `SecondaryFilter` first row | DEC-28 |
 | `picker_any_project` | Any project | `SecondaryFilter` first row | DEC-28 |
+| `picker_all_people` | All people | `PerspectivePrimary` first row (Individual) | DEC-112 |
+| `picker_all_projects` | All projects | `PerspectivePrimary` first row (Project) | DEC-112 |
 | `picker_create` | Create "%1$s" | Create row without an exact match | DEC-32 |
 | `picker_create_another` | Create another "%1$s" | Create row with a case-insensitive exact match | verbatim DEC-32 |
 | `picker_entity_meta` (plurals, on the count) | one: %1$d note · added %2$s · other: %1$d notes · added %2$s | Entity row supporting text | verbatim DEC-32 pattern "N notes · added <date>" |
 | `picker_entity_new` | New | Supporting text of an entity created in this visit | design |
-| `picker_section_co_people` | People on this project's notes | `SecondaryFilter` header (Project perspective) | design |
+| `picker_section_co_people` | People on this project's notes | `SecondaryFilter` header (Project perspective); `BatchAssociate` People tab header in Project (DEC-111) | design |
+| `picker_section_note_project` | People on this note's project | `EditorLinks` header, Add person on a note with one stored project (DEC-111) | design |
+| `picker_section_note_projects` | People on this note's projects | `EditorLinks` header, Add person on a note with several stored projects (DEC-111) | design |
 | `picker_section_co_projects` | Projects on this person's notes | `SecondaryFilter` header (Individual perspective) | design |
-| `picker_section_other_people` | Other people | `SecondaryFilter` and `DeleteEntity` header | design |
+| `picker_section_other_people` | Other people | `SecondaryFilter`, `DeleteEntity`, `EditorLinks` and `BatchAssociate` header | design |
 | `picker_section_other_projects` | Other projects | `SecondaryFilter` and `DeleteEntity` header | design |
 | `picker_section_linked` | Linked to this note | `DeleteEntity` header | DEC-34 |
 | `picker_create_hint_person` | Type a name to create a person. | Empty picker with a create row | design |
@@ -2089,12 +2178,14 @@ TalkBack visits the row node first and then its checkbox, so the checkbox is alw
 | Navigation items | Label text; selected state from `NavigationSuiteScaffold` |
 | App bar actions, icon buttons | `contentDescription` from section 11; decorative icons have `contentDescription = null` |
 | Individual/Project title | `Role.Button`, click label "Change person" / "Change project" |
+| Individual/Project overflow (DEC-113) | `IconButton` with `contentDescription` "More options", after Search and Settings; the menu items "Rename…" and "Delete…" are named by their visible text |
+| Rename field (section 8.17) | The label "Name" names the field; "Rename" exposes the disabled state while the field is blank |
 | Filter chips | Section 3.4: `Role.DropdownList`, "Person filter: Alice", click label "Change filter" |
 | Association area | Group with `contentDescription` "Associate persons and projects" (verbatim §4) and `isTraversalGroup = true`; each link chip is a button "Remove Alice" |
 | Date field | `Role.Button`, `contentDescription` "Set or change date" (verbatim §4), `stateDescription` = the date or "No date", plus ", Overdue" |
 | Editor checkbox row | As the row checkbox (section 6.6) |
 | Day cells | Section 4.4.1: full date plus "today", "has notes" and range parts; `selected`; collection item info |
-| Picker rows | `Role.Checkbox` (multi-select) or `selectable` (single-select); section headers are headings |
+| Picker rows | `Role.Checkbox` (multi-select) or `selectable` (single-select); the "All people" / "All projects" row is a `clickable` with `Role.Button` (DEC-112); section headers are headings |
 | Settings switches | `Role.Switch` on the whole row; the headline is the name |
 | Backup and restore rows | Accessible names "Backup all data" and "Restore from backup" (verbatim §4) |
 | Password fields | `OutlinedSecureTextField` exposes `SemanticsProperties.Password` (testing.md L-25); the show/hide button has its own description |
@@ -2113,6 +2204,7 @@ TalkBack visits the row node first and then its checkbox, so the checkbox is alw
 | Event | Mechanism |
 |---|---|
 | Done toggled in a list or the editor | `Announcer`: "Marked as done" / "Marked as not done" (section 3.9) |
+| A list stays at its top, keeps its position, moves to a note just created, or starts a newly chosen primary at its top (section 3.11) | None (DEC-110, Q17: no message): the move is silent, like the tab re-tap scroll; the row is read when focus reaches it |
 | Selection count changes | Contextual bar title with `liveRegion = Polite` |
 | Displayed month changes | `MonthGrid` title with `liveRegion = Polite` |
 | Field errors (passwords, wrong password) | Supporting text with `liveRegion = Polite` |
@@ -2158,7 +2250,7 @@ Layouts hold at 200 % font scale, including Android 14+ non-linear scaling (DEC-
 ### 12.7 Focus and keyboard
 
 - Default Compose focus order (reading order). With a hardware keyboard, Tab and arrow keys reach every control; Enter activates rows and buttons; Space toggles checkboxes and switches.
-- Automatic focus only in three places: the content field of a new note (section 6.3), the password field (section 10.2, every variant, also when the screen is reached through "Use password") and the search field when the search bar opens (section 3.3).
+- Automatic focus only in four places: the content field of a new note (section 6.3), the password field (section 10.2, every variant, also when the screen is reached through "Use password"), the search field when the search bar opens (section 3.3) and the rename field when "Rename…" opens its dialog, once: not again after a rotation, a process death or an unlock (section 8.17).
 
 ### 12.8 Test tags
 
@@ -2174,7 +2266,7 @@ UI tests find nodes by these `Modifier.testTag` values; texts are asserted as li
 | `chip_Person`, `chip_Project`, `chip_Date` | Filter chips, by `FilterDimension` name |
 | `month_grid`, `day_<epochDay>` | `MonthGrid` and a day cell |
 | `editor_content`, `editor_people`, `editor_projects`, `editor_date`, `editor_done` | Editor parts |
-| `picker_search`, `picker_create`, `picker_row_<id>`, `picker_new_<key>` | `EntityPicker` parts |
+| `picker_search`, `picker_create`, `picker_all`, `picker_row_<id>`, `picker_new_<key>` | `EntityPicker` parts (`picker_all`: "All people" / "All projects", DEC-112) |
 | `gate_password_field`, `gate_unlock`, `gate_forgot` | Password and lock screens |
 | `gate_use_password`, `gate_use_fingerprint`, `gate_password_reason` | "Use password" on the lock screen, "Use fingerprint" and the reason line on the password screen |
 | `forgot_reset_fingerprint`, `forgot_erase` | The two actions of the Forgot password screen |
@@ -2186,6 +2278,7 @@ UI tests find nodes by these `Modifier.testTag` values; texts are asserted as li
 | `lock_off_password_dialog` | The turn-off-with-password dialog (section 8.14) |
 | `slot_offer` | The fingerprint set-up offer dialog (section 8.13) |
 | `action_settings` | The Settings action of a perspective's top app bar (section 2.2) |
+| `entity_menu`, `rename_field` | The overflow button of Individual and Project while an entity is shown (section 4.2), and the field of the rename dialog (section 8.17) |
 | `settings_list` | The scrolling column of the Settings screen |
 | `settings_backup`, `settings_share`, `settings_restore`, `settings_encryption`, `settings_password_set`, `settings_password_change`, `settings_password_remove`, `settings_biometric`, `settings_screenshot`, `settings_encrypt_backups`, `settings_notices` | Settings rows 1–3, 5–9 and 11 (section 9.1) |
 | `settings_enroll`, `settings_no_screen_lock` | "Set up" of the enroll hint (section 9.4); the no-screen-lock card (section 9.3) |
@@ -2278,7 +2371,7 @@ fun DoroTheme(content: @Composable () -> Unit) {          // ui/theme
 ### 13.7 Motion
 
 - Navigation uses the default `NavDisplay` transitions and predictive back (DEC-01, DEC-13).
-- List rows move with `Modifier.animateItem()` (section 3.9). Sheets, dialogs, menus and the snackbar use their M3 defaults.
+- List rows move with `Modifier.animateItem()` (section 3.9). A list that moves to a note just created jumps there without animation, and a newly chosen primary's list starts at its top without one (section 3.11); the tab re-tap scroll animates (section 2.1). Sheets, dialogs, menus and the snackbar use their M3 defaults.
 - No custom animation is longer than 300 ms. The system "Remove animations" setting is honored automatically (animator duration scale 0).
 
 ### 13.8 Optional background image (later)
