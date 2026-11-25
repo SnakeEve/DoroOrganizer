@@ -5,7 +5,9 @@ import com.doro.organizer.data.DatabaseHolder
 import com.doro.organizer.data.EntityRepository
 import com.doro.organizer.data.NoteRepository
 import com.doro.organizer.data.db.AppDatabase
+import com.doro.organizer.data.db.EntityOptionRow
 import com.doro.organizer.model.DateFilter
+import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.EntityRef
 import com.doro.organizer.model.NoteFilter
 import com.doro.organizer.model.NoteQuery
@@ -48,7 +50,8 @@ import org.junit.runner.RunWith
  * testing.md P-1: every perspective query on the 10,000-note seed, from subscribing to the first Flow emission, within
  * 100 ms p90 (architecture.md § Performance budgets). The All list through `NoteRepository.observeRows` (the rows
  * named from the name maps, DEC-106: what the list screen waits for), the calendar month marks, the Select-all ids and
- * the delete-impact counts of the 2,000-note person are recorded without a budget.
+ * the delete-impact counts of the 2,000-note person are recorded without a budget. P-8: the co-linked picker options
+ * of Add person (DEC-111) within the same budget, the other picker reads recorded only.
  */
 @PerfTest
 @RunWith(AndroidJUnit4::class)
@@ -115,6 +118,48 @@ class PerspectiveQueryPerfTest {
         recordTheRest()
     }
 
+    @Test
+    fun pickerOptions_emitFirstWithinBudget() = runTest(timeout = 300.seconds) {
+        // Each method gets a fresh database: an observer of the picker statements' tables for the whole method keeps
+        // Room's table triggers, so each run times the query and its first emission (testing.md § 8, P-8).
+        val watching = listOf(db.noteDao().rowUpdates(), db.personDao().observeNames()).map { updates ->
+            CompletableDeferred<Unit>().also { watched ->
+                backgroundScope.launch { updates.collect { watched.complete(Unit) } }
+            }
+        }
+        watching.forEach { it.await() }
+
+        val heavy = listOf(SeedGenerator.HEAVY_PROJECT)
+        val budgeted = listOf(
+            "Picker options: the 1,500-note project" to heavy,
+            "Picker options: the 1,500-note project and three more" to heavy + OTHER_PROJECTS,
+        )
+        budgeted.forEach { (label, projects) ->
+            val flagged = db.personDao().observeCoLinkedOptions(projects, null).first().flaggedIds()
+            assertEquals(label, peopleOf(projects), flagged)
+            perf.measure(label, LIST_QUERY_BUDGET) { db.personDao().observeCoLinkedOptions(projects, null).first() }
+        }
+
+        perf.measure("Picker options: no co-links", budget = null) { db.personDao().observeOptions().first() }
+        val ids900 = model.projects.map { it.id } + (1L..800L).map { MISSING_ID + it }
+        assertEquals(900, ids900.toSet().size)
+        assertEquals(peopleOf(ids900), db.personDao().observeCoLinkedOptions(ids900, null).first().flaggedIds())
+        perf.measure("Picker options: 900 ids", budget = null) { db.personDao().observeCoLinkedOptions(ids900, null).first() }
+        val options = entities.observeOptions(EntityKind.Person, heavy, null).first()
+        assertEquals(peopleOf(heavy), options.filter { it.coLinked }.mapTo(HashSet()) { it.id })
+        perf.measure("Repository options: the 1,500-note project", budget = null) {
+            entities.observeOptions(EntityKind.Person, heavy, null).first()
+        }
+    }
+
+    /** The oracle of P-8: the people linked to a seeded note that links any of [projectIds]. */
+    private fun peopleOf(projectIds: List<Long>): Set<Long> {
+        val projects = projectIds.toSet()
+        return model.notes.filter { note -> note.projectIds.any { it in projects } }.flatMapTo(HashSet()) { it.personIds }
+    }
+
+    private fun List<EntityOptionRow>.flaggedIds(): Set<Long> = filter { it.coLinked }.mapTo(HashSet()) { it.id }
+
     private suspend fun recordTheRest() {
         // The list screen's wait: the rows named from the name maps (DEC-106). Never vacuous: the reference ids, and
         // every chip under its seed name.
@@ -156,5 +201,11 @@ class PerspectiveQueryPerfTest {
         const val COMMON_TERM = "get"
         const val MISSING_TERM = "qxz"
         val LIST_QUERY_BUDGET = PerfBudget(100, PerfStatistic.P90)
+
+        /** Three more seeded projects for P-8's four-project case, the most projects one of the owner's notes has. */
+        val OTHER_PROJECTS = listOf(2L, 3L, 4L)
+
+        /** Ids above every seeded project: they fill the 900 ids of P-8 and match nothing. */
+        const val MISSING_ID = 1_000_000L
     }
 }

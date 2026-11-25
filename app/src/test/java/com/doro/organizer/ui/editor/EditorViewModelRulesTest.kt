@@ -154,26 +154,297 @@ class EditorViewModelRulesTest {
         val key = vm.linksPicker(EntityKind.Project, visit = 2)
         vm.onPickerResult(PickerResult.Links(EntityKind.Project, setOf(4), emptyList()))
 
-        assertEquals(PickerPurpose.EditorLinks(listOf(3)), key.purpose)
+        assertEquals(PickerPurpose.EditorLinks(listOf(3), emptyList(), null, 0), key.purpose)
         assertEquals(listOf(LinkChip(4, null, "Beta")), vm.uiState.value.projects)
     }
 
     @Test
-    fun anEntityCreatedEarlier_andInsertedByTheSaveWhenThePickerCoveredTheEditor_staysAChip() = runTest(dispatcher) {
+    fun anIdThatJoinedTheDraftAfterThePickerOpened_staysLinked() = runTest(dispatcher) {
         entities.put(EntityKind.Person, 2, "Bob")
         val vm = editor(EditorKey(null, visit = 1))
         collect(vm)
         vm.content.setTextAndPlaceCursorAtEnd("Call Alice")
         vm.onPickerResult(PickerResult.Links(EntityKind.Person, emptySet(), listOf(NewEntity("k1", "Alice"))))
 
-        val key = vm.linksPicker(EntityKind.Person, visit = 2) // "Add person" again: the picker covers the editor,
-        vm.saveOnLeave() // which saves and inserts Alice (architecture.md § Threading)
+        // The safety net of ui.md § 6.4: an id that joins the draft while the picker is open is no answer of the picker.
+        val key = vm.linksPicker(EntityKind.Person, visit = 2)
+        vm.saveOnLeave() // inserts Alice, who joins the draft's ids
         vm.onPickerResult(PickerResult.Links(EntityKind.Person, setOf(2), emptyList()))
 
-        assertEquals(PickerPurpose.EditorLinks(emptyList()), key.purpose)
+        assertEquals(PickerPurpose.EditorLinks(emptyList(), emptyList(), null, 0), key.purpose)
         assertEquals(listOf("Alice", "Bob"), vm.uiState.value.people.map { it.name })
         vm.saveOnLeave()
         assertEquals(setOf(500L, 2L), notes.notes.values.single().persons)
+    }
+
+    @Test
+    fun linksPicker_addPersonNamesTheStoredProjectsTheNoteAndTheProjectCount_andAddProjectNone() = runTest(dispatcher) {
+        entities.put(EntityKind.Person, 1, "Ann")
+        entities.put(EntityKind.Project, 3, "Alpha")
+        entities.put(EntityKind.Project, 9, "Zeta")
+        notes.notes[7] = StoredNote("x", persons = setOf(1), projects = setOf(9, 3))
+        val stored = editor(EditorKey(7, visit = 1))
+        collect(stored)
+        stored.onPickerResult(PickerResult.Links(EntityKind.Project, setOf(3, 9), listOf(NewEntity("k1", "Nova"))))
+
+        // DEC-111 (1): the stored projects sorted, not Nova; every project counted, Nova included.
+        assertEquals(PickerPurpose.EditorLinks(listOf(1), listOf(3, 9), 7, 3), stored.linksPicker(EntityKind.Person, 2).purpose)
+        assertEquals(PickerPurpose.EditorLinks(listOf(3, 9), emptyList(), null, 0), stored.linksPicker(EntityKind.Project, 3).purpose)
+
+        val neverInserted = editor(EditorKey(null, visit = 4, prefill = NotePrefill(projectId = 3)))
+        collect(neverInserted)
+        assertEquals(PickerPurpose.EditorLinks(emptyList(), listOf(3), null, 1), neverInserted.linksPicker(EntityKind.Person, 5).purpose)
+
+        notes.notes[8] = StoredNote("y", persons = setOf(1))
+        val withoutStoredProject = editor(EditorKey(8, visit = 6))
+        collect(withoutStoredProject)
+        withoutStoredProject.onPickerResult(PickerResult.Links(EntityKind.Project, emptySet(), listOf(NewEntity("k2", "Vega"))))
+        assertEquals(
+            "a stored note without a stored project names no note",
+            PickerPurpose.EditorLinks(listOf(1), emptyList(), null, 1),
+            withoutStoredProject.linksPicker(EntityKind.Person, 7).purpose,
+        )
+    }
+
+    // An entity created in an earlier visit of the same edit (testing.md I-62 (c), DEC-111 (7)).
+
+    @Test
+    fun anAddPersonTapOverAPersonCreatedEarlier_savesFirst_thenAsksForThePicker_withHerNewIdChecked() = runTest(dispatcher) {
+        val vm = createdEarlier(EditorKey(null, visit = 1), EntityKind.Person, "Dora")
+        val gate = CompletableDeferred<Unit>()
+        notes.saveGate = gate
+
+        assertFalse(vm.requestLinks(EntityKind.Person))
+        assertEquals("the save before the picker runs", listOf("Dora"), notes.saves.single().newPersons.map { it.name })
+        assertNull("no picker while the save runs", vm.uiState.value.openLinks)
+        gate.complete(Unit)
+
+        assertEquals(EntityKind.Person, vm.uiState.value.openLinks)
+        assertEquals(EntityKind.Person, vm.takeLinksRequest { true })
+        assertNull(vm.uiState.value.openLinks)
+        assertEquals(PickerPurpose.EditorLinks(listOf(500), emptyList(), null, 0), vm.linksPicker(EntityKind.Person, 2).purpose)
+        assertEquals(listOf(LinkChip(500, null, "Dora")), vm.uiState.value.people)
+    }
+
+    @Test
+    fun anAddProjectTapOverAProjectCreatedEarlier_onAStoredNote_savesFirst_thenAsksForThePicker() = runTest(dispatcher) {
+        notes.notes[7] = StoredNote("x")
+        val vm = createdEarlier(EditorKey(7, visit = 1), EntityKind.Project, "Nova")
+
+        assertFalse(vm.requestLinks(EntityKind.Project))
+
+        assertEquals(setOf(500L), notes.notes.getValue(7).projects)
+        assertEquals(EntityKind.Project, vm.takeLinksRequest { true })
+        assertEquals(PickerPurpose.EditorLinks(listOf(500), emptyList(), null, 0), vm.linksPicker(EntityKind.Project, 2).purpose)
+    }
+
+    @Test
+    fun withoutAnEntityOfThatKindCreatedEarlier_theTapOpensAtOnce_andSavesNothing() = runTest(dispatcher) {
+        val vm = createdEarlier(EditorKey(null, visit = 1), EntityKind.Project, "Nova")
+
+        assertTrue(vm.requestLinks(EntityKind.Person))
+        assertTrue(vm.requestLinks(EntityKind.Person))
+
+        assertEquals(0, notes.saves.size)
+        assertNull(vm.uiState.value.openLinks)
+        assertNull(vm.takeLinksRequest { true })
+    }
+
+    @Test
+    fun aFailedSaveBeforeThePicker_showsItsError_asksForNoPicker_andANewTapTriesAgain() = runTest(dispatcher) {
+        val vm = createdEarlier(EditorKey(null, visit = 1), EntityKind.Person, "Dora")
+        notes.saveError = AppError.StorageFull
+
+        assertFalse(vm.requestLinks(EntityKind.Person))
+
+        assertEquals(UiText.Error(AppError.StorageFull), vm.uiState.value.message?.text)
+        assertTrue(vm.uiState.value.message?.isError == true)
+        assertNull(vm.uiState.value.openLinks)
+        assertNull(vm.takeLinksRequest { true })
+        assertFalse(vm.uiState.value.closed)
+
+        notes.saveError = null
+        assertFalse(vm.requestLinks(EntityKind.Person))
+        assertEquals(EntityKind.Person, vm.uiState.value.openLinks)
+    }
+
+    @Test
+    fun aNoteGoneBeforeThePicker_closesTheEditorWithNoteGone() = runTest(dispatcher) {
+        notes.notes[7] = StoredNote("x")
+        val vm = createdEarlier(EditorKey(7, visit = 1), EntityKind.Person, "Dora")
+        notes.notes.remove(7)
+
+        assertFalse(vm.requestLinks(EntityKind.Person))
+
+        assertTrue(vm.uiState.value.closed)
+        assertEquals(UiText.Res(R.string.note_gone), messages.pending.value.single().text)
+        assertNull(vm.uiState.value.openLinks)
+    }
+
+    @Test
+    fun addTaps_areIgnoredFromTheTapUntilTheRequestIsTaken() = runTest(dispatcher) {
+        val vm = createdEarlier(EditorKey(null, visit = 1), EntityKind.Person, "Dora")
+        val gate = CompletableDeferred<Unit>()
+        notes.saveGate = gate
+
+        assertFalse(vm.requestLinks(EntityKind.Person))
+        assertFalse("ignored while the save runs", vm.requestLinks(EntityKind.Project))
+        assertFalse(vm.requestLinks(EntityKind.Person))
+        gate.complete(Unit)
+        assertFalse("ignored until the request is taken", vm.requestLinks(EntityKind.Project))
+
+        assertEquals(1, notes.saves.size)
+        assertEquals(EntityKind.Person, vm.takeLinksRequest { true })
+        assertTrue("counts again", vm.requestLinks(EntityKind.Project))
+    }
+
+    @Test
+    fun anAddTapWhileSaveOrDeleteNoteRuns_isIgnored() = runTest(dispatcher) {
+        val saving = createdEarlier(EditorKey(null, visit = 1), EntityKind.Person, "Dora")
+        val saveGate = CompletableDeferred<Unit>()
+        notes.saveGate = saveGate
+        saving.save()
+        assertFalse(saving.requestLinks(EntityKind.Person))
+        saveGate.complete(Unit)
+        assertEquals("the Save action's only", 1, notes.saves.size)
+        assertNull(saving.uiState.value.openLinks)
+
+        notes.notes[7] = StoredNote("x")
+        val deleting = createdEarlier(EditorKey(7, visit = 2), EntityKind.Person, "Eve")
+        val deleteGate = CompletableDeferred<Unit>()
+        notes.deleteGate = deleteGate
+        deleting.deleteNote()
+        assertFalse(deleting.requestLinks(EntityKind.Person))
+        deleteGate.complete(Unit)
+        assertEquals(1, notes.saves.size)
+        assertNull(deleting.uiState.value.openLinks)
+    }
+
+    @Test
+    fun anEditorActionStartedAfterTheTap_duringTheSaveOrAfterIt_leavesNoRequest_andAddTapsCountAgain() =
+        runTest(dispatcher) {
+            val actions = mapOf<String, (EditorViewModel) -> Unit>(
+                "Save" to { it.save() },
+                "Delete note" to { it.deleteNote() },
+                "a dialog" to { it.openDialog(EditorDialog.DatePicker) },
+                "the Unlink sheet" to { it.openDialog(EditorDialog.Unlink) },
+                "the delete picker" to { it.openDeletePicker(EntityKind.Project, visit = 9) },
+            )
+            actions.forEach { (name, action) ->
+                val during = createdEarlier(EditorKey(null, visit = 1), EntityKind.Person, "Dora")
+                val gate = CompletableDeferred<Unit>()
+                notes.saveGate = gate
+                assertFalse(during.requestLinks(EntityKind.Person))
+                action(during)
+                gate.complete(Unit)
+                assertNull("$name during the save", during.uiState.value.openLinks)
+                assertTrue("$name during the save: counts again", during.requestLinks(EntityKind.Project))
+
+                notes.saveGate = null
+                val after = createdEarlier(EditorKey(null, visit = 1), EntityKind.Person, "Dora")
+                assertFalse(after.requestLinks(EntityKind.Person))
+                assertEquals(EntityKind.Person, after.uiState.value.openLinks)
+                // Save and Delete note are held, so the editor is still open: the count is what makes the request lapse.
+                after.setDate(20_000)
+                val held = CompletableDeferred<Unit>()
+                notes.saveGate = held
+                notes.deleteGate = held
+                action(after)
+                assertFalse("$name after the save: the editor is open", after.uiState.value.closed)
+                assertNull("$name after the save", after.takeLinksRequest { true })
+                assertNull(after.uiState.value.openLinks)
+                assertTrue("$name after the save: counts again", after.requestLinks(EntityKind.Project))
+                held.complete(Unit)
+                notes.saveGate = null
+                notes.deleteGate = null
+            }
+        }
+
+    @Test
+    fun theImpactDialogOfADeletePickMadeBeforeTheTap_opensAfterIt_andTheRequestLapses() = runTest(dispatcher) {
+        entities.put(EntityKind.Person, 1, "Bob")
+        notes.notes[7] = StoredNote("x", persons = setOf(1))
+        entities.impact = DeleteImpact(n = 1, m = 0)
+        val vm = createdEarlier(EditorKey(7, visit = 1), EntityKind.Person, "Dora")
+        vm.openDeletePicker(EntityKind.Person, visit = 2)
+        val gate = CompletableDeferred<Unit>()
+        notes.saveGate = gate
+        vm.onPickerResult(PickerResult.Delete(EntityKind.Person, 1)) // its save, before the impact dialog, is held
+
+        assertFalse("the tap queues its save behind the held one", vm.requestLinks(EntityKind.Person))
+        gate.complete(Unit)
+
+        assertEquals(EditorDialog.DeleteImpact(EntityKind.Person, 1, "Bob", 1, 0), vm.uiState.value.dialog)
+        assertNull(vm.takeLinksRequest { true })
+        assertNull(vm.uiState.value.openLinks)
+        assertEquals("the delete pick's save alone wrote", 1, notes.saves.size)
+        assertTrue("counts again", vm.requestLinks(EntityKind.Project))
+    }
+
+    @Test
+    fun aRequestTakenWhileTheEditorIsNotTheTopEntry_opensNoPicker_andAddTapsCountAgain() = runTest(dispatcher) {
+        val vm = createdEarlier(EditorKey(null, visit = 1), EntityKind.Person, "Dora")
+        assertFalse(vm.requestLinks(EntityKind.Person))
+        assertEquals(EntityKind.Person, vm.uiState.value.openLinks)
+
+        assertNull(vm.takeLinksRequest { false })
+
+        assertNull(vm.uiState.value.openLinks)
+        assertNull("taken once", vm.takeLinksRequest { true })
+        assertTrue("Dora is stored now: the picker opens at once", vm.requestLinks(EntityKind.Person))
+    }
+
+    @Test
+    fun anEditorClearedDuringTheSave_letsItFinish_andAsksForNothing() = runTest(dispatcher) {
+        val entry = entry(EditorKey(null, visit = 1))
+        collect(entry.vm)
+        entry.vm.onPickerResult(PickerResult.Links(EntityKind.Person, emptySet(), listOf(NewEntity("k1", "Dora"))))
+        val gate = CompletableDeferred<Unit>()
+        notes.saveGate = gate
+        assertFalse(entry.vm.requestLinks(EntityKind.Person))
+
+        entry.store.clear() // Back pops the editor
+        gate.complete(Unit)
+
+        assertEquals(setOf(500L), notes.notes.values.single().persons)
+        assertNull(entry.vm.takeLinksRequest { true })
+    }
+
+    @Test
+    fun aChipRemovedDuringTheSave_staysOutOfTheDraft_whileThePickerStillOpens() = runTest(dispatcher) {
+        val vm = createdEarlier(EditorKey(null, visit = 1), EntityKind.Person, "Dora")
+        val gate = CompletableDeferred<Unit>()
+        notes.saveGate = gate
+        assertFalse(vm.requestLinks(EntityKind.Person))
+
+        vm.removeLink(EntityKind.Person, vm.uiState.value.people.single())
+        gate.complete(Unit)
+
+        assertEquals(EntityKind.Person, vm.takeLinksRequest { true })
+        assertEquals(PickerPurpose.EditorLinks(emptyList(), emptyList(), null, 0), vm.linksPicker(EntityKind.Person, 2).purpose)
+        assertEquals(emptyList<LinkChip>(), vm.uiState.value.people)
+        assertTrue("the save stored her", entities.exists(EntityKind.Person, 500))
+        vm.saveOnLeave()
+        assertEquals("the next save unlinks her", emptySet<Long>(), notes.notes.values.single().persons)
+    }
+
+    @Test
+    fun theNextResultRemovesAnUntickedEntity_andCancelKeepsIt() = runTest(dispatcher) {
+        val vm = createdEarlier(EditorKey(null, visit = 1), EntityKind.Person, "Dora")
+        assertFalse(vm.requestLinks(EntityKind.Person))
+        assertEquals(EntityKind.Person, vm.takeLinksRequest { true })
+        vm.linksPicker(EntityKind.Person, visit = 2) // Cancel: no result
+
+        assertEquals(listOf(LinkChip(500, null, "Dora")), vm.uiState.value.people)
+
+        assertTrue(vm.requestLinks(EntityKind.Person)) // Dora is stored now: the picker opens at once
+        vm.linksPicker(EntityKind.Person, visit = 3)
+        vm.onPickerResult(PickerResult.Links(EntityKind.Person, emptySet(), emptyList()))
+
+        assertEquals(emptyList<LinkChip>(), vm.uiState.value.people)
+        vm.saveOnLeave()
+        assertEquals(emptySet<Long>(), notes.notes.values.single().persons)
+        assertTrue("an entity stays stored", entities.exists(EntityKind.Person, 500))
     }
 
     @Test
@@ -576,6 +847,14 @@ class EditorViewModelRulesTest {
         vm.content.setTextAndPlaceCursorAtEnd("x")
         vm.saveOnLeave()
         settings.onDataReplaced()
+    }
+
+    /** A collected editor of [key] whose draft holds an entity of [kind] named [name], created in a picker visit. */
+    private fun TestScope.createdEarlier(key: EditorKey, kind: EntityKind, name: String): EditorViewModel {
+        val vm = editor(key)
+        collect(vm)
+        vm.onPickerResult(PickerResult.Links(kind, emptySet(), listOf(NewEntity("k-$name", name))))
+        return vm
     }
 
     /** An editor of [key] whose [change] leaves no mark once its entry is cleared, with its `visit` expected. */

@@ -12,9 +12,12 @@ import kotlinx.coroutines.flow.Flow
  */
 @Dao
 interface ProjectDao : EntityDao {
-    /** [coLinkedTo] is a person id or null ([PROJECT_OPTIONS_SQL]). */
     @Query(PROJECT_OPTIONS_SQL)
-    override fun observeOptions(coLinkedTo: Long?): Flow<List<EntityOptionRow>>
+    override fun observeOptions(): Flow<List<EntityOptionRow>>
+
+    /** [coLinkedTo] are person ids ([PROJECT_CO_LINKED_OPTIONS_SQL]). */
+    @Query(PROJECT_CO_LINKED_OPTIONS_SQL)
+    override fun observeCoLinkedOptions(coLinkedTo: List<Long>, exceptNoteId: Long?): Flow<List<EntityOptionRow>>
 
     @Query(PROJECT_REF_SQL)
     override fun observe(id: Long): Flow<EntityRef?>

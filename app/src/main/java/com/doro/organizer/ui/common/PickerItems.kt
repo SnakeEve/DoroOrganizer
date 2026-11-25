@@ -60,9 +60,10 @@ val PickerPurpose?.isMultiSelect: Boolean
 /**
  * The list of a picker tab of [kind] for [purpose] (null: the embedded body of Individual and Project), top to bottom
  * (ui.md § 7.4): the "Any …" row or the create row, the entities [created] in this visit, then the [options] in
- * repository order, split into two headed sections where the purpose has them. Every section is filtered by a
- * case-insensitive substring of the trimmed [search] (`SearchText.fold`, ui.md § 7.2); a header shows only when both
- * of its groups have rows after that filter.
+ * repository order. Where the picker forms groups, [firstGroup] holds the ids of the first one (DEC-28, DEC-111): the
+ * options split by id into that group and the rest, each in repository order and under its header; a tick moves
+ * nobody. Every section is filtered by a case-insensitive substring of the trimmed [search] (`SearchText.fold`, ui.md
+ * § 7.2); a header shows only when both of its groups have rows after that filter.
  */
 internal fun pickerItems(
     purpose: PickerPurpose?,
@@ -72,6 +73,7 @@ internal fun pickerItems(
     checked: Set<Long>,
     created: List<NewEntity>,
     dateOf: (epochMillis: Long) -> LocalDate,
+    firstGroup: Set<Long>?,
 ): List<PickerItem> {
     val term = SearchText.fold(TextWhitespace.trim(search))
     val matches = { name: String -> term.isEmpty() || SearchText.fold(name).contains(term) }
@@ -84,12 +86,15 @@ internal fun pickerItems(
             is PickerPurpose.EditorLinks, is PickerPurpose.BatchAssociate -> {
                 createItem(search, options, created)?.let(::add)
                 created.filter { matches(it.name) }.forEach { add(PickerItem.New(it)) }
-                shown.forEach { add(entity(it, it.id in checked)) }
+                val header = when (purpose) {
+                    is PickerPurpose.EditorLinks -> noteHeader(purpose.projectCount)
+                    else -> coLinkedHeader(kind)
+                }
+                addGroups(firstGroup, shown, header, otherHeader(kind)) { entity(it, it.id in checked) }
             }
             is PickerPurpose.SecondaryFilter -> {
                 add(PickerItem.AnyEntity(selected = purpose.selectedId == null))
-                val (coLinked, others) = shown.partition { it.coLinked }
-                addSections(coLinkedHeader(kind), coLinked, otherHeader(kind), others) {
+                addGroups(firstGroup, shown, coLinkedHeader(kind), otherHeader(kind)) {
                     entity(it, it.id == purpose.selectedId)
                 }
             }
@@ -100,6 +105,22 @@ internal fun pickerItems(
             is PickerPurpose.PerspectivePrimary -> shown.forEach { add(entity(it, it.id == purpose.selectedId)) }
             null -> shown.forEach { add(entity(it, false)) }
         }
+    }
+}
+
+/** [shown] in two headed groups split by the ids of [firstGroup], or in one list without a header when it is null. */
+private fun MutableList<PickerItem>.addGroups(
+    firstGroup: Set<Long>?,
+    shown: List<EntityOption>,
+    @StringRes firstHeader: Int,
+    @StringRes secondHeader: Int,
+    item: (EntityOption) -> PickerItem,
+) {
+    if (firstGroup == null) {
+        shown.forEach { add(item(it)) }
+    } else {
+        val (first, others) = shown.partition { it.id in firstGroup }
+        addSections(firstHeader, first, secondHeader, others, item)
     }
 }
 
@@ -129,6 +150,11 @@ private fun MutableList<PickerItem>.addSections(
     if (headed) add(PickerItem.Header(secondHeader, 1))
     second.forEach { add(item(it)) }
 }
+
+/** The header of Add person's first group: it follows the number of project chips the editor shows (DEC-111 (4)). */
+@StringRes
+private fun noteHeader(projectCount: Int): Int =
+    if (projectCount == 1) R.string.picker_section_note_project else R.string.picker_section_note_projects
 
 @StringRes
 private fun coLinkedHeader(kind: EntityKind): Int = when (kind) {

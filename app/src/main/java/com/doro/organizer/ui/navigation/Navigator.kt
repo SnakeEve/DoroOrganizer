@@ -55,6 +55,12 @@ class Navigator(private val state: NavigationState, private val newNoteMarker: N
         }
     }
 
+    /**
+     * Whether [key] is the top entry of the current stack at this moment: a live read for an effect that opens a
+     * screen after a wait (DEC-111 (7)), where a value captured at composition could be stale.
+     */
+    fun isTop(key: NavKey): Boolean = state.topKey == key
+
     private fun NavKey.withoutVisit(): NavKey = when (this) {
         is EditorKey -> copy(visit = 0)
         is PickerKey -> copy(visit = 0)

@@ -503,9 +503,13 @@ class NoteListViewModel(
 
     /**
      * The purpose of the Associate picker over the current selection, which a process death keeps exactly when its
-     * saved key is present (DEC-57, [setSelection]).
+     * saved key is present (DEC-57, [setSelection]). In the Project perspective it names the chosen project, whose
+     * people the People tab lists first (DEC-111).
      */
-    fun associatePurpose() = PickerPurpose.BatchAssociate(selectionSaved = savedStateHandle.contains(KEY_SELECTION))
+    fun associatePurpose() = PickerPurpose.BatchAssociate(
+        selectionSaved = savedStateHandle.contains(KEY_SELECTION),
+        coLinkedTo = (uiState.value.primary as? Primary.Entity)?.id?.takeIf { spec.primaryKind == EntityKind.Project },
+    )
 
     /**
      * The result of the batch associate picker (ui.md § 5.3, § 7.7): links the selection to the chosen and the new

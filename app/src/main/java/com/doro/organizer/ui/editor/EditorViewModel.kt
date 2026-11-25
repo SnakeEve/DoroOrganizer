@@ -96,6 +96,18 @@ class EditorViewModel(
     private var saveRunning = false
     private var deleteRunning = false
 
+    /**
+     * Save, Delete note, every dialog or sheet the editor shows (the impact dialog too) and the delete picker started
+     * so far: one that starts after an Add tap makes that tap's links request lapse (DEC-111 (7)).
+     */
+    private var editorActions = 0
+
+    /** From an Add tap that saves first until the screen takes its request: further Add taps are ignored. */
+    private var linksBusy = false
+
+    /** [editorActions] at the Add tap of the pending links request. */
+    private var linksRequestActions = 0
+
     init {
         if (!saved.restored) {
             val prefill = key.prefill
@@ -137,6 +149,7 @@ class EditorViewModel(
                 dialog = screen.dialog,
                 message = screen.message,
                 closed = screen.closed,
+                openLinks = screen.openLinks,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), initialState())
 
@@ -189,18 +202,83 @@ class EditorViewModel(
     }
 
     /**
-     * The "Add person" / "Add project" picker (ui.md § 6.4): the draft's ids of [kind] start checked, and they are
-     * what its `Links` result replaces. [visit] comes from `Navigator.nextVisit()` (DEC-100).
+     * An "Add person" / "Add project" tap (ui.md § 6.4, DEC-111 (7)). True: the screen opens the picker of [kind] now.
+     * False: the tap is ignored, or the draft holds an entity of [kind] that a picker of an earlier visit created and
+     * no save has inserted yet. Then the draft is saved first, as leaving would, so the picker lists that entity as a
+     * stored, checked link; once the save is done [EditorUiState.openLinks] asks for the picker, unless an editor
+     * action started since the tap, the editor closed or the draft was discarded. A failed save shows its error and
+     * asks for nothing.
      */
-    fun linksPicker(kind: EntityKind, visit: Int): PickerKey {
-        val ids = fields.value.ids(kind)
-        saved.setPickerBase(kind, ids)
-        return PickerKey(kind, PickerPurpose.EditorLinks(ids.sorted()), visit)
+    fun requestLinks(kind: EntityKind): Boolean {
+        if (linksBusy) return false
+        if (fields.value.created(kind).isEmpty()) return true
+        if (saveRunning || deleteRunning) return false
+        linksBusy = true
+        linksRequestActions = editorActions
+        viewModelScope.launch {
+            val outcome = applicationScope.runDetached { withContext(dispatchers.main) { saveDraft(explicit = false) } }
+            if (outcome == Outcome.Done && linksRequestHolds()) {
+                screen.update { it.copy(openLinks = kind) }
+            } else {
+                linksBusy = false
+            }
+            when (outcome) {
+                is Outcome.Failed -> showError(outcome.error)
+                Outcome.Gone -> close(UiText.Res(R.string.note_gone), isError = false)
+                Outcome.Done -> Unit
+            }
+        }
+        return false
     }
 
-    /** The "Delete person…" / "Delete project…" picker (ui.md § 6.11): this note's links of [kind] first. */
-    fun deletePicker(kind: EntityKind, visit: Int) =
-        PickerKey(kind, PickerPurpose.DeleteEntity(fields.value.ids(kind).sorted()), visit)
+    /**
+     * Takes the request of [EditorUiState.openLinks] (DEC-111 (7)): its kind, or null when an editor action started
+     * since the tap, the editor closed or its draft was discarded meanwhile, or [isTop] says the editor is not the top
+     * entry now. [isTop] is read only here, when the screen takes the request. Add taps count again from here.
+     */
+    fun takeLinksRequest(isTop: () -> Boolean): EntityKind? {
+        val kind = screen.value.openLinks ?: return null
+        screen.update { it.copy(openLinks = null) }
+        linksBusy = false
+        return kind.takeIf { linksRequestHolds() && isTop() }
+    }
+
+    /** No editor action started since the Add tap, and the editor neither closed nor discarded its draft. */
+    private fun linksRequestHolds() = editorActions == linksRequestActions && !screen.value.closed && !saved.discarded
+
+    /**
+     * The "Add person" / "Add project" picker (ui.md § 6.4): the draft's ids of [kind] start checked, and they are
+     * what its `Links` result replaces. Add person also names the draft's stored projects, its note and its number of
+     * projects, stored and created in this edit, so the picker lists the people of the note's projects first; Add
+     * project passes none (DEC-111 (1), Q20). [visit] comes from `Navigator.nextVisit()` (DEC-100).
+     */
+    fun linksPicker(kind: EntityKind, visit: Int): PickerKey {
+        val draft = fields.value
+        val ids = draft.ids(kind)
+        saved.setPickerBase(kind, ids)
+        val purpose = when (kind) {
+            EntityKind.Person -> {
+                val coLinkedTo = draft.projectIds.sorted()
+                PickerPurpose.EditorLinks(
+                    selectedIds = ids.sorted(),
+                    coLinkedTo = coLinkedTo,
+                    exceptNoteId = draft.noteId.takeIf { coLinkedTo.isNotEmpty() },
+                    projectCount = draft.projectIds.size + draft.newProjects.size,
+                )
+            }
+            EntityKind.Project -> PickerPurpose.EditorLinks(ids.sorted(), emptyList(), null, 0)
+        }
+        return PickerKey(kind, purpose, visit)
+    }
+
+    /**
+     * Opens the "Delete person…" / "Delete project…" picker (ui.md § 6.11): its key, with this note's links of [kind]
+     * first. Opening it is an editor action (DEC-111 (7)), so the screen calls this only when it opens that picker.
+     */
+    fun openDeletePicker(kind: EntityKind, visit: Int): PickerKey {
+        editorActions++
+        return PickerKey(kind, PickerPurpose.DeleteEntity(fields.value.ids(kind).sorted()), visit)
+    }
 
     /** The result of a picker opened from this editor (ui.md § 6.4, § 6.11, § 7.7). */
     fun onPickerResult(result: PickerResult) {
@@ -209,8 +287,8 @@ class EditorViewModel(
                 val base = saved.pickerBase(result.kind)
                 saved.setPickerBase(result.kind, null)
                 updateFields { draft ->
-                    // Opening the picker covered the editor, and that save may have inserted entities created earlier
-                    // in this edit: they joined the ids after the picker opened, so they stay chips (ui.md § 7.6).
+                    // An id that joined the draft after the picker opened is no answer of the picker: it stays a
+                    // chip (ui.md § 6.4, the safety net).
                     val kept = draft.ids(result.kind) - (base ?: draft.ids(result.kind))
                     draft.withLinks(result.kind, kept + result.ids, draft.created(result.kind) + result.created)
                 }
@@ -231,6 +309,7 @@ class EditorViewModel(
 
     /** The Save action: saves now, a new note even when blank, and closes; a failure keeps the editor open. */
     fun save() {
+        editorActions++
         if (saveRunning) return
         saveRunning = true
         viewModelScope.launch {
@@ -271,6 +350,7 @@ class EditorViewModel(
      * § 8.1).
      */
     fun deleteNote() {
+        editorActions++
         closeDialog()
         if (deleteRunning) return
         deleteRunning = true
@@ -576,7 +656,9 @@ class EditorViewModel(
         fields.value = next
     }
 
+    /** Every dialog or sheet shown, the impact dialog of a delete pick too, is an editor action (DEC-111 (7)). */
     private fun setDialog(dialog: EditorDialog?) {
+        if (dialog != null) editorActions++
         saved.dialog = dialog?.toKey()
         screen.update { it.copy(dialog = dialog) }
     }
@@ -610,6 +692,7 @@ class EditorViewModel(
         dialog = null,
         message = null,
         closed = false,
+        openLinks = null,
     )
 
     /**
@@ -640,6 +723,7 @@ class EditorViewModel(
         val dialog: EditorDialog?,
         val message: UserMessage? = null,
         val closed: Boolean = false,
+        val openLinks: EntityKind? = null,
     ) {
         override fun toString() = "Screen(loaded=$loaded, closed=$closed)"
     }

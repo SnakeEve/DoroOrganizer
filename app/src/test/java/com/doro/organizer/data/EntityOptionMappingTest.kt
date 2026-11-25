@@ -1,16 +1,21 @@
 package com.doro.organizer.data
 
+import com.doro.organizer.data.db.EntityDao
 import com.doro.organizer.data.db.EntityOptionRow
 import com.doro.organizer.model.EntityOption
+import com.doro.organizer.testing.unused
 import java.util.Locale
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 
 /**
- * testing.md I-23, repository part: [toEntityOptions] orders picker options co-linked first (DEC-28), then by
- * `Collator` on the name, then by id (DEC-32), and keeps every field and every duplicate.
+ * testing.md I-23 and I-61 (b), repository part: [toEntityOptions] orders picker options by `Collator` on the name,
+ * then by id (DEC-32), whatever their `coLinked` flag (the picker forms the groups, DEC-111), and keeps every field
+ * and every duplicate; [observeOptionRows] chooses the statement and cuts the ids it binds.
  */
 class EntityOptionMappingTest {
     private lateinit var defaultLocale: Locale
@@ -25,10 +30,10 @@ class EntityOptionMappingTest {
     fun restoreLocale() = Locale.setDefault(defaultLocale)
 
     @Test
-    fun coLinkedEntitiesComeFirst() {
+    fun theCoLinkedFlag_reordersNothing() {
         val options = listOf(row(1, "Anna"), row(2, "Zed", coLinked = true)).toEntityOptions()
 
-        assertEquals("a co-linked Zed precedes a non-co-linked Anna", listOf(2L, 1L), options.map { it.id })
+        assertEquals("a co-linked Zed follows Anna", listOf(1L, 2L), options.map { it.id })
     }
 
     @Test
@@ -43,18 +48,9 @@ class EntityOptionMappingTest {
 
     @Test
     fun equalNamesSortById_andStayTwoOptions() {
-        val options = listOf(row(9, "Twin"), row(3, "Twin"), row(5, "Twin")).toEntityOptions()
+        val options = listOf(row(9, "Twin"), row(3, "Twin", coLinked = true), row(5, "Twin")).toEntityOptions()
 
         assertEquals("duplicates are never merged (§1)", listOf(3L, 5L, 9L), options.map { it.id })
-    }
-
-    @Test
-    fun groupsSortIndependently() {
-        val rows = listOf(
-            row(1, "b"), row(2, "a", coLinked = true), row(3, "a"), row(4, "c", coLinked = true), row(5, "b"),
-        )
-
-        assertEquals(listOf(2L, 4L, 3L, 1L, 5L), rows.toEntityOptions().map { it.id })
     }
 
     @Test
@@ -71,6 +67,53 @@ class EntityOptionMappingTest {
         assertEquals(emptyList<EntityOption>(), emptyList<EntityOptionRow>().toEntityOptions())
     }
 
+    // The statement of observeOptionRows (data-layer.md § Editor loads, pickers and existence probes).
+
+    @Test
+    fun noIds_readTheOptionsWithoutCoLinks_andNeverTheCoLinkedStatement() {
+        val dao = RecordingEntityDao()
+
+        dao.observeOptionRows(emptyList(), exceptNoteId = 4)
+
+        assertEquals(listOf("observeOptions()"), dao.calls)
+    }
+
+    @Test
+    fun theIds_areBoundDistinctAndSorted_withTheGivenNote() {
+        val dao = RecordingEntityDao()
+
+        dao.observeOptionRows(listOf(5, 3, 5), exceptNoteId = 4)
+        dao.observeOptionRows(listOf(8), exceptNoteId = null)
+
+        assertEquals(listOf("observeCoLinkedOptions([3, 5], 4)", "observeCoLinkedOptions([8], null)"), dao.calls)
+    }
+
+    @Test
+    fun moreThan900Ids_bindThe900Smallest() {
+        val dao = RecordingEntityDao()
+
+        dao.observeOptionRows((901L downTo 1L).toList(), exceptNoteId = 4)
+
+        assertEquals(listOf((1L..900L).toList()), dao.bound)
+    }
+
     private fun row(id: Long, name: String, coLinked: Boolean = false) =
         EntityOptionRow(id, name, createdAt = 0, noteCount = 0, coLinked = coLinked)
+
+    /** An [EntityDao] that records which picker statement is asked for, with its bindings. */
+    private class RecordingEntityDao : EntityDao by unused() {
+        val calls = mutableListOf<String>()
+        val bound = mutableListOf<List<Long>>()
+
+        override fun observeOptions(): Flow<List<EntityOptionRow>> {
+            calls += "observeOptions()"
+            return flowOf(emptyList())
+        }
+
+        override fun observeCoLinkedOptions(coLinkedTo: List<Long>, exceptNoteId: Long?): Flow<List<EntityOptionRow>> {
+            bound += coLinkedTo
+            calls += "observeCoLinkedOptions($coLinkedTo, $exceptNoteId)"
+            return flowOf(emptyList())
+        }
+    }
 }

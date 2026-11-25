@@ -376,7 +376,7 @@ class NoteListSelectionTest {
         list.vm.selectAll()
         runCurrent()
         assertEquals(1_000, list.state.selection?.size)
-        assertEquals(PickerPurpose.BatchAssociate(selectionSaved = true), list.vm.associatePurpose())
+        assertEquals(PickerPurpose.BatchAssociate(selectionSaved = true, coLinkedTo = null), list.vm.associatePurpose())
 
         list.vm.toggleSelection(1_001)
         runCurrent()
@@ -384,7 +384,31 @@ class NoteListSelectionTest {
         // DEC-57: a picker over this selection closes when restored, because its selection is not saved.
         assertEquals(1_001, list.state.selection?.size)
         assertFalse(list.handle.contains(NoteListViewModel.KEY_SELECTION))
-        assertEquals(PickerPurpose.BatchAssociate(selectionSaved = false), list.vm.associatePurpose())
+        assertEquals(PickerPurpose.BatchAssociate(selectionSaved = false, coLinkedTo = null), list.vm.associatePurpose())
+    }
+
+    @Test
+    fun theAssociatePicker_namesTheChosenProject_inProjectOnly() = runTest {
+        entities.put(EntityKind.Project, ALPHA, "Alpha")
+        entities.put(EntityKind.Person, ALICE, "Alice")
+        settings.setRemembered(EntityKind.Project, ALPHA)
+        settings.setRemembered(EntityKind.Person, ALICE)
+
+        val project = open(Perspective.Project)
+        project.vm.enterSelection(1)
+        assertEquals(Primary.Entity(ALPHA, "Alpha"), project.state.primary)
+        assertEquals(PickerPurpose.BatchAssociate(selectionSaved = true, coLinkedTo = ALPHA), project.vm.associatePurpose())
+
+        // DEC-111 (3): the person of Individual is no project, and the other perspectives have no primary entity.
+        val individual = open(Perspective.Individual)
+        individual.vm.enterSelection(1)
+        assertEquals(Primary.Entity(ALICE, "Alice"), individual.state.primary)
+        assertEquals(PickerPurpose.BatchAssociate(selectionSaved = true, coLinkedTo = null), individual.vm.associatePurpose())
+        listOf(Perspective.All, Perspective.Date, Perspective.Orphan).forEach { p ->
+            val list = open(p)
+            list.vm.enterSelection(1)
+            assertEquals("$p", PickerPurpose.BatchAssociate(selectionSaved = true, coLinkedTo = null), list.vm.associatePurpose())
+        }
     }
 
     // Select all (ui.md § 5.3).

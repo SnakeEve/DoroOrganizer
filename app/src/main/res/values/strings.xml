@@ -171,6 +171,8 @@
     <string name="picker_create_another">Create another \"%1$s\"</string>
     <string name="picker_entity_new">New</string>
     <string name="picker_section_co_people">People on this project\'s notes</string>
+    <string name="picker_section_note_project">People on this note\'s project</string>
+    <string name="picker_section_note_projects">People on this note\'s projects</string>
     <string name="picker_section_co_projects">Projects on this person\'s notes</string>
     <string name="picker_section_other_people">Other people</string>
     <string name="picker_section_other_projects">Other projects</string>

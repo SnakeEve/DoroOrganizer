@@ -197,7 +197,7 @@ class DatabaseHolderTest {
         TestRows(sql).person("Ann", 1)
         assertTrue("the write sits in the WAL", walOf(file).length() > 0)
         val emissions = Channel<List<EntityOptionRow>>(Channel.UNLIMITED)
-        val collector = launch { holder.observe { it.personDao().observeOptions(null) }.collect(emissions::send) }
+        val collector = launch { holder.observe { it.personDao().observeOptions() }.collect(emissions::send) }
         receive(emissions)
         val open = holder.state.value as HolderState.Open
 
@@ -404,7 +404,7 @@ class DatabaseHolderTest {
         TestRows(holder.openDatabase().openHelper.writableDatabase).person("Ann", 1)
         val emissions = Channel<List<EntityOptionRow>>(Channel.UNLIMITED)
         // A failure in the collection (such as Room's IllegalStateException after close) fails this test's scope.
-        val collector = launch { holder.observe { it.personDao().observeOptions(null) }.collect(emissions::send) }
+        val collector = launch { holder.observe { it.personDao().observeOptions() }.collect(emissions::send) }
         receive(emissions)
 
         repeat(20) { swap ->

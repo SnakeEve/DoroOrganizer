@@ -25,8 +25,12 @@ class DefaultEntityRepository(
     private val applicationScope: CoroutineScope,
     private val dispatchers: AppDispatchers,
 ) : EntityRepository {
-    override fun observeOptions(kind: EntityKind, coLinkedTo: Long?): Flow<List<EntityOption>> =
-        databaseHolder.observe { db -> db.entities(kind).observeOptions(coLinkedTo) }
+    override fun observeOptions(
+        kind: EntityKind,
+        coLinkedTo: List<Long>,
+        exceptNoteId: Long?,
+    ): Flow<List<EntityOption>> =
+        databaseHolder.observe { db -> db.entities(kind).observeOptionRows(coLinkedTo, exceptNoteId) }
             .distinctUntilChanged()
             .map { it.toEntityOptions() }
             .flowOn(dispatchers.default)

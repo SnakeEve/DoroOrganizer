@@ -8,8 +8,15 @@ import kotlinx.coroutines.flow.Flow
  * path. Each DAO supplies its own SQL; this interface carries no Room annotation.
  */
 interface EntityDao {
-    /** Every entity for a picker, unsorted; `coLinkedTo` is an id of the other kind or null. */
-    fun observeOptions(coLinkedTo: Long?): Flow<List<EntityOptionRow>>
+    /** Every entity for a picker that forms no first group, unsorted, none `coLinked` (DEC-111). */
+    fun observeOptions(): Flow<List<EntityOptionRow>>
+
+    /**
+     * Every entity for a picker, unsorted; `coLinked`: linked to a note, other than [exceptNoteId], that links any id
+     * of [coLinkedTo], ids of the other kind (DEC-28, DEC-111). [coLinkedTo] holds 1 to `SQL_CHUNK` ids, never none:
+     * callers go through `observeOptionRows`.
+     */
+    fun observeCoLinkedOptions(coLinkedTo: List<Long>, exceptNoteId: Long?): Flow<List<EntityOptionRow>>
 
     /** The entity [id], or null once it is gone: the existence probe of data-layer.md § Reactivity. */
     fun observe(id: Long): Flow<EntityRef?>

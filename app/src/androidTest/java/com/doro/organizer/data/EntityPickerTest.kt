@@ -32,10 +32,12 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * testing.md I-23, repository part: `EntityRepository.observeOptions` lists every entity, zero-note ones included
- * (DEC-33), with its note count and creation time, ordered co-linked first (DEC-28), then by `Collator` on the name,
- * then by id (DEC-32); names created on confirm are trimmed, never deduplicated, and a blank one writes nothing.
- * The JVM `EntityOptionMappingTest` pins the order itself; the Compose half of I-23 joins this class with the picker.
+ * testing.md I-23 and I-61 (b), repository part: `EntityRepository.observeOptions` lists every entity, zero-note ones
+ * included (DEC-33), with its note count and creation time, by `Collator` on the name, then by id (DEC-32), with the
+ * `coLinked` flag, which reorders nothing (the picker forms the groups, DEC-111); it binds at most the 900 smallest
+ * distinct ids, and an empty list flags nothing. Names created on confirm are trimmed, never deduplicated, and a blank
+ * one writes nothing. The JVM `EntityOptionMappingTest` pins the order and the statement choice; the Compose half of
+ * I-23 joins this class with the picker.
  */
 @RunWith(AndroidJUnit4::class)
 class EntityPickerTest {
@@ -84,7 +86,7 @@ class EntityPickerTest {
         rows.linkPerson(note, twinA)
         rows.linkPerson(rows.note("m", createdAt = now), anna)
 
-        val options = entities.observeOptions(EntityKind.Person, coLinkedTo = null).first()
+        val options = entities.observeOptions(EntityKind.Person, emptyList(), null).first()
 
         assertEquals(
             listOf(
@@ -99,7 +101,7 @@ class EntityPickerTest {
     }
 
     @Test
-    fun personFilterOfAProject_listsCoLinkedPersonsFirst() = runTest(timeout = 10.seconds) {
+    fun theCoLinkedFlag_marksThePeopleOfTheProjects_andReordersNothing() = runTest(timeout = 10.seconds) {
         val anna = rows.person("Anna", now)
         val zed = rows.person("Zed", now)
         val project = rows.project("X", now)
@@ -107,12 +109,16 @@ class EntityPickerTest {
         rows.linkProject(note, project)
         rows.linkPerson(note, zed)
 
-        assertEquals(listOf(zed, anna), ids(entities.observeOptions(EntityKind.Person, coLinkedTo = project).first()))
-        assertEquals(listOf(anna, zed), ids(entities.observeOptions(EntityKind.Person, coLinkedTo = null).first()))
+        val options = entities.observeOptions(EntityKind.Person, listOf(project), null).first()
+
+        assertEquals(listOf(anna, zed), ids(options))
+        assertEquals(listOf(false, true), options.map { it.coLinked })
+        val exceptTheNote = entities.observeOptions(EntityKind.Person, listOf(project), note).first()
+        assertEquals("the note's own links do not count", listOf(false, false), exceptTheNote.map { it.coLinked })
     }
 
     @Test
-    fun projectFilterOfAPerson_listsCoLinkedProjectsFirst() = runTest(timeout = 10.seconds) {
+    fun theProjectMirror_marksTheProjectsOfThePeople_andReordersNothing() = runTest(timeout = 10.seconds) {
         val apollo = rows.project("Apollo", now)
         val zeus = rows.project("Zeus", now)
         val person = rows.person("P", now)
@@ -120,17 +126,44 @@ class EntityPickerTest {
         rows.linkPerson(note, person)
         rows.linkProject(note, zeus)
 
-        val options = entities.observeOptions(EntityKind.Project, coLinkedTo = person).first()
+        val options = entities.observeOptions(EntityKind.Project, listOf(person), null).first()
 
-        assertEquals(listOf(zeus, apollo), ids(options))
-        assertEquals(listOf(true, false), options.map { it.coLinked })
+        assertEquals(listOf(apollo, zeus), ids(options))
+        assertEquals(listOf(false, true), options.map { it.coLinked })
+    }
+
+    @Test
+    fun theIds_bindAtMostThe900SmallestDistinct_andNoneFlagsNothing() = runTest(timeout = 10.seconds) {
+        val inside = rows.project("Inside", now)
+        val outside = rows.project("Outside", now)
+        val anna = rows.person("Anna", now)
+        val bob = rows.person("Bob", now)
+        val a = rows.note("a", createdAt = now)
+        rows.linkProject(a, inside)
+        rows.linkPerson(a, anna)
+        val b = rows.note("b", createdAt = now)
+        rows.linkProject(b, outside)
+        rows.linkPerson(b, bob)
+        // Ids that are no project and smaller than every row id: they fill the 900 places in front.
+        val padding = (-899L..-1L).toList()
+
+        val cut = entities.observeOptions(EntityKind.Person, padding + listOf(outside, inside), null).first()
+        assertEquals("Inside in 900th place, Outside in 901st", listOf(true, false), cut.map { it.coLinked })
+
+        val twice = padding.drop(1) + listOf(inside, outside, inside)
+        val duplicates = entities.observeOptions(EntityKind.Person, twice, null).first()
+        assertEquals("duplicates count once", listOf(true, true), duplicates.map { it.coLinked })
+
+        val none = entities.observeOptions(EntityKind.Person, emptyList(), b).first()
+        assertEquals(listOf(anna, bob), ids(none))
+        assertEquals(listOf(false, false), none.map { it.coLinked })
     }
 
     @Test
     fun createdOnConfirm_trimmedAndNeverMerged_thenListed() = runTest(timeout = 10.seconds) {
         val note = rows.note("n", createdAt = now)
 
-        entities.observeOptions(EntityKind.Person, coLinkedTo = null).test {
+        entities.observeOptions(EntityKind.Person, emptyList(), null).test {
             assertEquals(emptyList<EntityOption>(), awaitItem())
 
             val created = listOf(NewEntity("a", "  Twin\t"), NewEntity("b", "Twin"))
@@ -160,7 +193,7 @@ class EntityPickerTest {
         val keep = rows.project("Keep", now)
         val gone = rows.project("Gone", now)
 
-        entities.observeOptions(EntityKind.Project, coLinkedTo = null).test {
+        entities.observeOptions(EntityKind.Project, emptyList(), null).test {
             assertEquals(listOf(gone, keep), ids(awaitItem()))
 
             entities.deleteProject(gone).ok()

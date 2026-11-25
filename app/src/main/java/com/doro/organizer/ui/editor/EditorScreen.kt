@@ -112,6 +112,12 @@ fun EditorScreen(key: EditorKey, navigator: Navigator) {
         dismissKeyboard()
         vm.openDialog(dialog)
     }
+    // An Add tap over an entity created in an earlier visit saves first; the picker opens once that save is done, and
+    // only while this editor is the top entry at that moment (DEC-111 (7)).
+    LaunchedEffect(state.openLinks) {
+        val kind = vm.takeLinksRequest { navigator.isTop(key) } ?: return@LaunchedEffect
+        open(vm.linksPicker(kind, navigator.nextVisit()))
+    }
     val title = stringResource(if (state.isNew) R.string.editor_title_new else R.string.editor_title_edit)
     Scaffold(
         modifier = Modifier.semantics { paneTitle = title },
@@ -131,7 +137,7 @@ fun EditorScreen(key: EditorKey, navigator: Navigator) {
                         enabled = !state.loading,
                         canUnlink = state.people.isNotEmpty() || state.projects.isNotEmpty(),
                         onUnlink = { openDialog(EditorDialog.Unlink) },
-                        onDeleteEntity = { kind -> open(vm.deletePicker(kind, navigator.nextVisit())) },
+                        onDeleteEntity = { kind -> open(vm.openDeletePicker(kind, navigator.nextVisit())) },
                         onDeleteNote = { openDialog(EditorDialog.DeleteNote) },
                     )
                 },
@@ -147,7 +153,7 @@ fun EditorScreen(key: EditorKey, navigator: Navigator) {
                 vm = vm,
                 padding = padding,
                 contentFocus = contentFocus,
-                onAddLinks = { kind -> open(vm.linksPicker(kind, navigator.nextVisit())) },
+                onAddLinks = { kind -> if (vm.requestLinks(kind)) open(vm.linksPicker(kind, navigator.nextVisit())) },
                 onOpenDate = { openDialog(EditorDialog.DatePicker) },
             )
         }

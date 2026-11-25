@@ -49,7 +49,9 @@ data class EntityPickerUiState(
  * Individual and Project (DEC-52), whose only saved key is `search`. Every entity of a kind is listed, zero-note ones
  * included (DEC-33). `BatchAssociate` holds both kinds on two tabs with [kind] first; every other purpose holds [kind]
  * only. Per kind the search text, the checked ids and the entities created in this visit are saved, and so is the
- * current tab (ui.md § 7.7); the initial checks of `EditorLinks` apply only when the entry is first created.
+ * current tab (ui.md § 7.7); the initial checks of `EditorLinks` apply only when the entry is first created. Where a
+ * tab forms two groups (ui.md § 7.4; DEC-28, DEC-111), each id's group is fixed when the id is first listed in this
+ * visit and lives in memory only, so a restart of the shared flow keeps it and a rebuilt picker forms it again.
  */
 class EntityPickerViewModel(
     private val kind: EntityKind,
@@ -84,23 +86,29 @@ class EntityPickerViewModel(
     /** The latest options per kind, null until loaded: the confirm result drops ids that vanished (ui.md § 7.7). */
     private val latestOptions = kinds.associateWith { MutableStateFlow<List<EntityOption>?>(null) }
 
+    /** What each tab asks the repository to flag, null for a tab without groups. */
+    private val coLinks: Map<EntityKind, CoLinks?> = kinds.associateWith(::coLinksOf)
+
+    /** Each tab's groups, null for a tab without groups; read and written on the main thread only. */
+    private val groups: Map<EntityKind, Groups?> = coLinks.mapValues { (_, asked) -> asked?.alwaysFirst?.let(::Groups) }
+
     /** The current tab's search field text. */
     val search: String get() = searches.getValue(tab.value).value
 
     val uiState: StateFlow<EntityPickerUiState> = run {
-        val coLinkedTo = (purpose as? PickerPurpose.SecondaryFilter)?.coLinkedTo
         val perKind = kinds.map { k ->
+            val asked = coLinks.getValue(k)
             combine(
                 // Null until the first emission, so the field follows typing while the options are still loading; an
                 // upstream restarted after a pause starts from the list it had, so the loading state never returns.
-                entityRepository.observeOptions(k, coLinkedTo)
+                entityRepository.observeOptions(k, asked?.ids.orEmpty(), asked?.exceptNoteId)
                     .onStart<List<EntityOption>?> { emit(latestOptions.getValue(k).value) },
                 searchFlows.getValue(k),
                 checked.getValue(k),
                 created.getValue(k),
             ) { options, text, ids, new ->
                 latestOptions.getValue(k).value = options
-                TabState(k, options, text, ids, new)
+                TabState(k, options, options?.let { groups.getValue(k)?.place(it) }, text, ids, new)
             }
         }
         combine(combine(perKind) { it.toList() }, tab) { tabs, current -> stateOf(tabs, current) }
@@ -181,7 +189,9 @@ class EntityPickerViewModel(
             loading = shown.options == null,
             anyEntity = !shown.options.isNullOrEmpty(),
             items = shown.options?.let {
-                pickerItems(purpose, current, it, shown.search, shown.checked, shown.created, appTime::dateOf)
+                pickerItems(
+                    purpose, current, it, shown.search, shown.checked, shown.created, appTime::dateOf, shown.firstGroup,
+                )
             }.orEmpty(),
             tab = current,
             chosen = chosen,
@@ -225,12 +235,62 @@ class EntityPickerViewModel(
         return keys.zip(names, ::NewEntity)
     }
 
+    /**
+     * The first group of a tab of [k] (ui.md § 7.4): the secondary filters flag the entities that share a note with
+     * the primary (DEC-28); Add person on a note with a project flags the people of the note's projects, the note
+     * itself left out, and puts the draft's people in it too; the People tab of Associate in Project flags the chosen
+     * project's people (DEC-111). Add project and the Projects tab of Associate never form groups (Q20), whatever the
+     * key holds.
+     */
+    private fun coLinksOf(k: EntityKind): CoLinks? = when (purpose) {
+        is PickerPurpose.EditorLinks -> if (k == EntityKind.Person && purpose.projectCount > 0) {
+            CoLinks(purpose.coLinkedTo, purpose.exceptNoteId, purpose.selectedIds.toSet())
+        } else {
+            null
+        }
+        is PickerPurpose.BatchAssociate ->
+            purpose.coLinkedTo?.takeIf { k == EntityKind.Person }?.let { CoLinks(listOf(it)) }
+        is PickerPurpose.SecondaryFilter -> purpose.coLinkedTo?.let { CoLinks(listOf(it)) }
+        is PickerPurpose.PerspectivePrimary, is PickerPurpose.DeleteEntity, null -> null
+    }
+
     /** The first tab's keys are the plain names, so the embedded body keeps its one key `search` (ui.md § 7.7). */
     private fun savedKey(base: String, k: EntityKind) = if (k == kind) base else "${base}_${k.name}"
+
+    /**
+     * The co-link question of one tab: the entities of the other kind in [ids], the note [exceptNoteId] whose links do
+     * not count, and the ids that join the first group whatever their flag ([alwaysFirst], Add person's `selectedIds`).
+     */
+    private class CoLinks(
+        val ids: List<Long>,
+        val exceptNoteId: Long? = null,
+        val alwaysFirst: Set<Long> = emptySet(),
+    )
+
+    /**
+     * The groups of one tab (DEC-111 (5)): an id joins the first group when it is first listed flagged or in
+     * [alwaysFirst], the second otherwise, and later lists move nobody, so neither a tick nor a write while the picker
+     * is open moves a row between the groups.
+     */
+    private class Groups(private val alwaysFirst: Set<Long>) {
+        private val listed = HashSet<Long>()
+
+        /** The ids of the first group; a new set whenever it grows. */
+        private var first: Set<Long> = emptySet()
+
+        /** Fixes the group of every id of [options] not listed before, and returns the first group. */
+        fun place(options: List<EntityOption>): Set<Long> {
+            val joined = options.filter { listed.add(it.id) && (it.coLinked || it.id in alwaysFirst) }
+            if (joined.isNotEmpty()) first = first + joined.map { it.id }
+            return first
+        }
+    }
 
     private class TabState(
         val kind: EntityKind,
         val options: List<EntityOption>?,
+        /** The ids of the first group, null for a tab without groups. */
+        val firstGroup: Set<Long>?,
         val search: String,
         val checked: Set<Long>,
         val created: List<NewEntity>,

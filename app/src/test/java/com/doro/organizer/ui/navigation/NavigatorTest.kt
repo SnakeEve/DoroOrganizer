@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -121,9 +122,9 @@ class NavigatorTest {
 
     @Test
     fun aPickerKeyEqualToTheTopApartFromItsVisit_isNotPushed() {
-        val first = PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate(selectionSaved = true), navigator.nextVisit())
+        val first = PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate(selectionSaved = true, coLinkedTo = null), navigator.nextVisit())
         navigator.open(first)
-        navigator.open(PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate(selectionSaved = true), navigator.nextVisit()))
+        navigator.open(PickerKey(EntityKind.Person, PickerPurpose.BatchAssociate(selectionSaved = true, coLinkedTo = null), navigator.nextVisit()))
 
         assertEquals(listOf(TabKey(Perspective.All, 0), first), state.stacks.getValue(Perspective.All))
     }
@@ -145,7 +146,7 @@ class NavigatorTest {
     @Test
     fun aPickerOverTheEditor_isPushed() {
         navigator.open(EditorKey(7, navigator.nextVisit()))
-        val picker = PickerKey(EntityKind.Person, PickerPurpose.EditorLinks(emptyList()), navigator.nextVisit())
+        val picker = PickerKey(EntityKind.Person, PickerPurpose.EditorLinks(emptyList(), emptyList(), null, 0), navigator.nextVisit())
 
         navigator.open(picker)
 
@@ -170,6 +171,26 @@ class NavigatorTest {
         assertEquals(43, restored.visits.intValue)
     }
 
+    @Test
+    fun isTop_readsTheCurrentStacksTopEntry_atOnce() {
+        val editor = EditorKey(7, navigator.nextVisit())
+        navigator.open(editor)
+        assertTrue(navigator.isTop(editor))
+        assertFalse("the same screen of another visit", navigator.isTop(editor.copy(visit = editor.visit + 1)))
+
+        navigator.open(Covering)
+        assertFalse("covered", navigator.isTop(editor))
+        navigator.back()
+        assertTrue(navigator.isTop(editor))
+
+        navigator.selectTab(Perspective.Orphan)
+        assertFalse("another tab is current", navigator.isTop(editor))
+        assertTrue(navigator.isTop(TabKey(Perspective.Orphan, 0)))
+        navigator.selectTab(Perspective.All)
+        navigator.back()
+        assertFalse("popped", navigator.isTop(editor))
+    }
+
     // The new note's mark (DEC-110).
 
     @Test
@@ -186,7 +207,7 @@ class NavigatorTest {
     @Test
     fun back_poppingAnotherKey_expectsNothing() {
         navigator.open(EditorKey(7, navigator.nextVisit()))
-        navigator.open(PickerKey(EntityKind.Person, PickerPurpose.EditorLinks(emptyList()), navigator.nextVisit()))
+        navigator.open(PickerKey(EntityKind.Person, PickerPurpose.EditorLinks(emptyList(), emptyList(), null, 0), navigator.nextVisit()))
         navigator.open(Covering)
         marker.calls.clear()
 

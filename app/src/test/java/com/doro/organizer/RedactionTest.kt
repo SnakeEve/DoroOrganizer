@@ -520,6 +520,7 @@ class RedactionTest {
             dialog = impact,
             message = null,
             closed = false,
+            openLinks = EntityKind.Person,
         )
 
         assertEquals(

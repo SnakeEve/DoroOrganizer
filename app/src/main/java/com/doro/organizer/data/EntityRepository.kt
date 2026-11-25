@@ -15,10 +15,12 @@ import kotlinx.coroutines.flow.Flow
  */
 interface EntityRepository {
     /**
-     * Every entity of [kind], zero-note ones included (DEC-33): co-linked ones first, then by `Collator` on the name,
-     * then by id (DEC-32). [coLinkedTo] is an id of the other kind, set only for the secondary filters of DEC-28.
+     * Every entity of [kind], zero-note ones included (DEC-33), by `Collator` on the name, then by id (DEC-32).
+     * `coLinked` marks an entity linked to a note, other than [exceptNoteId], that links any id of [coLinkedTo], ids of
+     * the other kind, for a picker that forms a first group (DEC-28, DEC-111); it changes nothing in the order. An
+     * empty [coLinkedTo] marks nothing.
      */
-    fun observeOptions(kind: EntityKind, coLinkedTo: Long?): Flow<List<EntityOption>>
+    fun observeOptions(kind: EntityKind, coLinkedTo: List<Long>, exceptNoteId: Long?): Flow<List<EntityOption>>
 
     /** The entity, or null once it is gone, which resets every reference to it (data-layer.md § Reactivity). */
     fun observe(kind: EntityKind, id: Long): Flow<EntityRef?>

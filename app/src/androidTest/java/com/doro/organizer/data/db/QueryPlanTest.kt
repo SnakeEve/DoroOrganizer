@@ -73,14 +73,34 @@ class QueryPlanTest {
 
     @Test
     fun pickers_countThroughTheEntityIndexes() {
-        listOf(null, 1L).forEach { coLinkedTo ->
-            val persons = plan(PERSON_OPTIONS_SQL, mapOf("coLinkedTo" to coLinkedTo))
-            assertUses(persons, "c", "idx_note_persons_person", "persons")
-            assertTrue("persons: $persons", persons.any { ENTITY_INDEX.containsMatchIn(it) && it.matches(COLINKED) })
+        assertUses(plan(PERSON_OPTIONS_SQL, emptyMap()), "c", PERSON_INDEX, "persons")
+        assertUses(plan(PROJECT_OPTIONS_SQL, emptyMap()), "c", PROJECT_INDEX, "projects")
+    }
 
-            val projects = plan(PROJECT_OPTIONS_SQL, mapOf("coLinkedTo" to coLinkedTo))
-            assertUses(projects, "c", "idx_note_projects_project", "projects")
-            assertTrue("projects: $projects", projects.any { ENTITY_INDEX.containsMatchIn(it) && it.matches(COLINKED) })
+    /**
+     * DEC-111: the `coLinked` subquery of the co-linked picker statements is one uncorrelated list subquery that searches
+     * the junction table of the given ids by its entity index, then the other one by its primary key, for 1, 3 and 900
+     * ids, with and without `exceptNoteId`.
+     */
+    @Test
+    fun coLinkedPickers_searchTheJunctionsInOneListSubquery() {
+        listOf(1, 3, 900).forEach { count ->
+            listOf(null, 1L).forEach { exceptNoteId ->
+                val args = mapOf("coLinkedTo" to (1L..count).toList(), "exceptNoteId" to exceptNoteId)
+                val label = "$count ids, exceptNoteId $exceptNoteId"
+
+                val persons = plan(PERSON_CO_LINKED_OPTIONS_SQL, args)
+                assertUses(persons, "c", PERSON_INDEX, "persons, $label")
+                assertUses(persons, "y", PROJECT_INDEX, "persons, $label")
+                assertUses(persons, "x", AUTOINDEX_PERSONS, "persons, $label")
+                assertOneListSubquery(persons, "persons, $label")
+
+                val projects = plan(PROJECT_CO_LINKED_OPTIONS_SQL, args)
+                assertUses(projects, "c", PROJECT_INDEX, "projects, $label")
+                assertUses(projects, "x", PERSON_INDEX, "projects, $label")
+                assertUses(projects, "y", AUTOINDEX_PROJECTS, "projects, $label")
+                assertOneListSubquery(projects, "projects, $label")
+            }
         }
     }
 
@@ -165,6 +185,12 @@ class QueryPlanTest {
 
     private fun searchByKey(table: String) = "SEARCH $table USING INTEGER PRIMARY KEY (rowid=?)"
 
+    /** The plan runs exactly one list subquery, and it is not correlated, so SQLite runs it once per query. */
+    private fun assertOneListSubquery(plan: List<String>, label: String) {
+        assertEquals("$label: $plan", 1, plan.count { it.startsWith("LIST SUBQUERY") })
+        assertFalse("$label: $plan", plan.any { it.startsWith("CORRELATED LIST SUBQUERY") })
+    }
+
     /** The EXISTS subqueries of `PERSPECTIVE_WHERE` probe the junction primary keys by `note_id`. */
     private fun assertPerspectiveSubqueriesSearchKeys(plan: List<String>, label: String) {
         assertUses(plan, "x", AUTOINDEX_PERSONS, label)
@@ -241,8 +267,6 @@ class QueryPlanTest {
         val JUNCTION_ALIAS = Regex("""\bnote_(?:persons|projects)\s+(?:AS\s+)?(\w+)""")
         val SCAN_NOTES = Regex("""^SCAN n\b.*""")
         val DATE_INDEX = Regex("""^SEARCH n USING (?:COVERING )?INDEX idx_notes_date\b""")
-        val ENTITY_INDEX = Regex("""idx_note_persons_person|idx_note_projects_project""")
-        val COLINKED = Regex("""^SEARCH [xy] USING .*""")
 
         /** A plan row that reads `persons` or `projects`, by name or by the aliases the statements give them. */
         val ENTITY_READ = Regex("""^(?:SCAN|SEARCH) (?:TABLE )?(?:persons|projects|p|j)\b""")

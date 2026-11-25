@@ -69,7 +69,7 @@ class CorruptionTest {
         val holder = databases.holder(TestKey.Plain, events)
         damageEveryPageButTheFirst(holder, TestKey.Plain)
 
-        val collector = launch { holder.observe { it.personDao().observeOptions(null) }.collect {} }
+        val collector = launch { holder.observe { it.personDao().observeOptions() }.collect {} }
         withTimeout(10.seconds) { events.corruptions.first { it > 0 } }
 
         assertTrue("the outer flow keeps waiting for the next Open", collector.isActive)

@@ -8,7 +8,8 @@ import java.time.LocalDate
  * The one state of the editor (ui.md § 6.14). The content text is not here: it lives in
  * `EditorViewModel.content`, the field's `TextFieldState` (ui.md § 6.3). While [loading] nothing of the draft is
  * shown and Save and the menu are disabled. [closed] asks the screen to leave: the note is gone, was deleted, or a
- * Save finished (ui.md § 6.8, § 6.12).
+ * Save finished (ui.md § 6.8, § 6.12). [openLinks] asks the screen for the "Add person" / "Add project" picker of
+ * that kind after the save that its tap started (DEC-111 (7)); it is not saved.
  */
 data class EditorUiState(
     val loading: Boolean,
@@ -22,6 +23,7 @@ data class EditorUiState(
     val dialog: EditorDialog?,
     val message: UserMessage?,
     val closed: Boolean,
+    val openLinks: EntityKind?,
 ) {
     override fun toString() = "EditorUiState(noteId=$noteId)" // DEC-70
 }

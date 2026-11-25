@@ -10,9 +10,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * The arrangement of the entity picker per purpose (ui.md § 7.3, § 7.4, § 7.6; DEC-28, DEC-32–DEC-34): the "Any"
- * and create rows, the entities created in this visit, the headed sections and the name search over all of them.
- * The options arrive in repository order, which the picker never changes.
+ * The arrangement of the entity picker per purpose (ui.md § 7.3, § 7.4, § 7.6; DEC-28, DEC-32–DEC-34, DEC-111;
+ * testing.md I-61 (d)): the "Any" and create rows, the entities created in this visit, the headed groups split by the
+ * given first group, and the name search over all of them. The options arrive in repository order, which the picker
+ * never changes.
  */
 class PickerItemsTest {
     private val anna = option(1, "Anna")
@@ -24,12 +25,92 @@ class PickerItemsTest {
     fun editorLinks_listsTheCreateRow_thenCreated_thenEveryEntityChecked() {
         val zed = NewEntity("k1", "Zed")
 
-        val items = items(PickerPurpose.EditorLinks(listOf(1)), search = " ", checked = setOf(1), created = listOf(zed))
+        val items = items(addPerson(projectCount = 0), search = " ", checked = setOf(1), created = listOf(zed))
 
         assertEquals(
             listOf(PickerItem.New(zed), entity(bob, false), entity(anna, true), entity(carla, false)),
             items,
         )
+    }
+
+    @Test
+    fun addPerson_onANoteWithOneProject_headsTheFirstGroup_belowTheCreateRowAndTheCreated() {
+        val dora = NewEntity("k1", "Dora")
+
+        val items = items(addPerson(projectCount = 1), search = "a", created = listOf(dora), firstGroup = setOf(3))
+
+        assertEquals(
+            listOf(
+                PickerItem.Create("a", another = false),
+                PickerItem.New(dora),
+                PickerItem.Header(R.string.picker_section_note_project, 0),
+                entity(carla, false),
+                PickerItem.Header(R.string.picker_section_other_people, 1),
+                entity(anna, false),
+            ),
+            items,
+        )
+    }
+
+    @Test
+    fun addPerson_onANoteWithSeveralProjects_saysProjects() {
+        val items = items(addPerson(projectCount = 2), firstGroup = setOf(1, 3))
+
+        assertEquals(
+            listOf(
+                PickerItem.Header(R.string.picker_section_note_projects, 0),
+                entity(anna, false),
+                entity(carla, false),
+                PickerItem.Header(R.string.picker_section_other_people, 1),
+                entity(bob, false),
+            ),
+            items,
+        )
+    }
+
+    @Test
+    fun theGroups_followTheGivenFirstGroup_notTheFlag_andATickMovesNobody() {
+        val unticked = items(addPerson(projectCount = 1), firstGroup = setOf(1))
+        val ticked = items(addPerson(projectCount = 1), checked = setOf(2, 3), firstGroup = setOf(1))
+
+        // Bob is flagged co-linked but not in the first group; Anna is in it without the flag.
+        assertEquals(
+            listOf(
+                PickerItem.Header(R.string.picker_section_note_project, 0),
+                entity(anna, false),
+                PickerItem.Header(R.string.picker_section_other_people, 1),
+                entity(bob, false),
+                entity(carla, false),
+            ),
+            unticked,
+        )
+        assertEquals(unticked.map { it.key }, ticked.map { it.key })
+        assertEquals(listOf(false, true, true), ticked.filterIsInstance<PickerItem.Entity>().map { it.checked })
+    }
+
+    @Test
+    fun batchAssociate_headsThePeopleOfTheChosenProject() {
+        val items = items(ASSOCIATE, checked = setOf(1), firstGroup = setOf(2))
+
+        assertEquals(
+            listOf(
+                PickerItem.Header(R.string.picker_section_co_people, 0),
+                entity(bob, false),
+                PickerItem.Header(R.string.picker_section_other_people, 1),
+                entity(anna, true),
+                entity(carla, false),
+            ),
+            items,
+        )
+    }
+
+    @Test
+    fun withoutAFirstGroup_noHeaderShows_whateverTheFlagsOrTheKeySay() {
+        val plain = listOf(entity(bob, false), entity(anna, false), entity(carla, false))
+
+        assertEquals(plain, items(PickerPurpose.EditorLinks(emptyList(), listOf(9), 4, 2), kind = EntityKind.Project))
+        assertEquals(plain, items(ASSOCIATE))
+        assertEquals(listOf(PickerItem.AnyEntity(selected = true)) + plain, items(PickerPurpose.SecondaryFilter(null, null)))
     }
 
     @Test
@@ -45,7 +126,7 @@ class PickerItemsTest {
 
     @Test
     fun theSearch_filtersEverySection_byACaseInsensitiveSubstring() {
-        val items = items(PickerPurpose.EditorLinks(emptyList()), search = "AR", created = listOf(NewEntity("k", "Marc")))
+        val items = items(addPerson(projectCount = 0), search = "AR", created = listOf(NewEntity("k", "Marc")))
 
         assertEquals(
             listOf(PickerItem.Create("AR", another = false), PickerItem.New(NewEntity("k", "Marc")), entity(carla, false)),
@@ -54,8 +135,8 @@ class PickerItemsTest {
     }
 
     @Test
-    fun secondaryFilter_putsAnyFirst_andHeadsCoLinkedAndOther_whenBothHaveRows() {
-        val items = items(PickerPurpose.SecondaryFilter(selectedId = 3, coLinkedTo = 9))
+    fun secondaryFilter_putsAnyFirst_andHeadsTheFirstGroupAndOther_whenBothHaveRows() {
+        val items = items(PickerPurpose.SecondaryFilter(selectedId = 3, coLinkedTo = 9), firstGroup = setOf(2))
 
         assertEquals(
             listOf(
@@ -72,9 +153,12 @@ class PickerItemsTest {
 
     @Test
     fun aSectionLeftEmptyByTheSearch_dropsBothHeaders() {
-        val items = items(PickerPurpose.SecondaryFilter(selectedId = null, coLinkedTo = 9), search = "car")
+        val filterPurpose = PickerPurpose.SecondaryFilter(selectedId = null, coLinkedTo = 9)
+        val filter = items(filterPurpose, search = "car", firstGroup = setOf(2))
+        val addPerson = items(addPerson(projectCount = 1), search = "bo", firstGroup = setOf(2))
 
-        assertEquals(listOf(PickerItem.AnyEntity(selected = true), entity(carla, false)), items)
+        assertEquals(listOf(PickerItem.AnyEntity(selected = true), entity(carla, false)), filter)
+        assertEquals(listOf(PickerItem.Create("bo", another = false), entity(bob, false)), addPerson)
     }
 
     @Test
@@ -108,7 +192,10 @@ class PickerItemsTest {
         search: String = "",
         checked: Set<Long> = emptySet(),
         created: List<NewEntity> = emptyList(),
-    ) = pickerItems(purpose, kind, options, search, checked, created) { DAY }
+        firstGroup: Set<Long>? = null,
+    ) = pickerItems(purpose, kind, options, search, checked, created, { DAY }, firstGroup)
+
+    private fun addPerson(projectCount: Int) = PickerPurpose.EditorLinks(emptyList(), listOf(9), null, projectCount)
 
     private fun entity(option: EntityOption, checked: Boolean) =
         PickerItem.Entity(EntityRowUi(option.id, option.name, option.noteCount, DAY), checked)
@@ -118,6 +205,6 @@ class PickerItemsTest {
 
     private companion object {
         val DAY: LocalDate = LocalDate.of(2026, 11, 17)
-        val ASSOCIATE = PickerPurpose.BatchAssociate(selectionSaved = true)
+        val ASSOCIATE = PickerPurpose.BatchAssociate(selectionSaved = true, coLinkedTo = null)
     }
 }

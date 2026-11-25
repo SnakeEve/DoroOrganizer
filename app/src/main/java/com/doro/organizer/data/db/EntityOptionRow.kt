@@ -1,8 +1,8 @@
 package com.doro.organizer.data.db
 
 /**
- * A picker row of [PERSON_OPTIONS_SQL] or [PROJECT_OPTIONS_SQL], filled through the SQL aliases `createdAt`,
- * `noteCount` and `coLinked`. Unsorted: `EntityRepository` sorts with a `Collator` (DEC-32).
+ * A picker row of [PERSON_OPTIONS_SQL], [PROJECT_OPTIONS_SQL] or their co-linked forms, filled through the SQL
+ * aliases `createdAt`, `noteCount` and `coLinked`. Unsorted: `EntityRepository` sorts with a `Collator` (DEC-32).
  */
 data class EntityOptionRow(
     val id: Long,
