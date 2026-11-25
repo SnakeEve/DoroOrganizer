@@ -28,6 +28,7 @@ import com.doro.organizer.session.Resume
 import com.doro.organizer.testing.GateComposeTest
 import com.doro.organizer.testing.GateScene
 import com.doro.organizer.testing.GateUi
+import com.doro.organizer.testing.RecordingNewNoteMarker
 import com.doro.organizer.testing.captureSavedState
 import com.doro.organizer.testing.corruptPage
 import com.doro.organizer.testing.holdsText
@@ -54,9 +55,46 @@ import org.junit.runner.RunWith
  * `NeedsPassword` and over `Locked(Ready)` with a password entry, the "Not available" variant without a usable slot and
  * over `Locked(Corrupt)`; both actions are disabled while the reset's prompt runs, and the "Set a new password" dialog
  * closes when the prompt ends without a cipher.
+ *
+ * I-59 (i) (DEC-110, architecture.md § Data reset): a mark of a note just created that no list took is cleared by the
+ * Erase's data reset, so no list of the new data reveals it.
  */
 @RunWith(AndroidJUnit4::class)
 class ForgotPasswordUiTest : GateComposeTest() {
+    init {
+        scene.wrapNewNoteMarker = ::RecordingNewNoteMarker
+    }
+
+    @Test
+    fun anEraseWhileLocked_clearsAMarkNoListTook() = runBlocking<Unit> {
+        scene.plant(KeyMode.PASSWORD, PASSWORD, lock = true) // no slot: every unlock asks the password
+        scene.coldStart()
+        scene.awaitGate { it is GateState.NeedsPassword }
+        ui.awaitPasswordScreen()
+        ui.enterPassword(PASSWORD)
+        scene.awaitGate(GateState.Ready)
+        ui.awaitShell()
+        scene.backgroundTrip()
+        scene.awaitGate { it is GateState.Locked && it.password != null }
+        ui.awaitPasswordScreen()
+        val marker = app.container.newNoteMarker as RecordingNewNoteMarker
+        GateScene.onMain {
+            marker.expect(VISIT)
+            marker.mark(MARKED_NOTE, VISIT) // an editor popped just before the lock (DEC-110)
+        }
+        assertEquals(MARKED_NOTE, marker.noteId.value)
+        scene.gateway.succeed() // the prompt without a key of the fresh Locked(Maintenance(Erase, Ready)) (T12)
+
+        openTheEraseDialog()
+        confirmTheErase()
+
+        scene.awaitGate(GateState.Ready)
+        assertTheFirstRunStateOnAll()
+        assertEquals(null, marker.noteId.value)
+        assertTrue("the reset cleared it", marker.clears > 0)
+        assertTrue(marker.takes.none { it.noteId == MARKED_NOTE })
+    }
+
     @Test
     fun erase_fromThePasswordScreen_needsTheTypedWord_thenStartsOverOnAll() = runBlocking<Unit> {
         scene.plant(KeyMode.PASSWORD, PASSWORD) // lock off: no fingerprint reset is offered
@@ -287,6 +325,8 @@ class ForgotPasswordUiTest : GateComposeTest() {
         const val CONFIRMATION = "erase_confirmation"
         const val MAINTENANCE = "maintenance_overlay"
         const val NEW_PASSWORD = "a new password"
+        const val VISIT = 7
+        const val MARKED_NOTE = 41L
 
         // Literals copied from ui.md § 11.
         const val RESET_DIALOG_TITLE = "Set a new password"

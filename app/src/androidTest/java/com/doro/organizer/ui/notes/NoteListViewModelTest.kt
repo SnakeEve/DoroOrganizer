@@ -23,6 +23,7 @@ import com.doro.organizer.testing.entityRepository
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.ok
 import com.doro.organizer.testing.openDatabase
+import com.doro.organizer.ui.DefaultNewNoteMarker
 import com.doro.organizer.ui.common.DaySelection
 import java.time.YearMonth
 import kotlin.time.Duration.Companion.seconds
@@ -161,7 +162,9 @@ class NoteListViewModelTest {
     }
 
     private fun viewModel(p: Perspective, handle: SavedStateHandle, key: String = p.name): NoteListViewModel {
-        val vm = NoteListViewModel(PerspectiveSpec.of(p), handle, notes, entities, settings, time, AppDispatchers.production())
+        val vm = NoteListViewModel(
+            PerspectiveSpec.of(p), handle, notes, entities, settings, time, AppDispatchers.production(), DefaultNewNoteMarker(),
+        )
         val factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = vm as T

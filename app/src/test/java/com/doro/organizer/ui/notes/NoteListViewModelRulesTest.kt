@@ -19,6 +19,7 @@ import com.doro.organizer.model.Perspective
 import com.doro.organizer.model.SearchText
 import com.doro.organizer.testing.FakeAppTime
 import com.doro.organizer.testing.FakeSettingsStore
+import com.doro.organizer.ui.DefaultNewNoteMarker
 import com.doro.organizer.ui.common.DaySelection
 import java.time.LocalDate
 import java.time.YearMonth
@@ -58,6 +59,7 @@ class NoteListViewModelRulesTest {
     private val settings = FakeSettingsStore().apply { load() }
     private val notes = ScriptedNotes()
     private val entities = ScriptedEntities()
+    private val marker = DefaultNewNoteMarker()
     private val store = ViewModelStore()
     private var created = 0
 
@@ -516,6 +518,72 @@ class NoteListViewModelRulesTest {
         assertEquals(UiText.Error(AppError.DatabaseUnavailable), list.state.message?.text)
     }
 
+    // The mark of a note just created and the kept row (ui.md § 3.11, DEC-110; testing.md I-59 (f)).
+
+    @Test
+    fun takeNewNote_clearsTheMark_readsTheSameQueryOnceMore_andWaitsForThatRead() = runTest {
+        var reads = 0
+        notes.rows = { flowOf(if (reads++ == 0) listOf(noteRow(1)) else listOf(noteRow(9), noteRow(1))) }
+        val list = open(Perspective.All)
+        marker.expect(3)
+        marker.mark(noteId = 9, visit = 3)
+        runCurrent()
+        assertTrue(list.state.newNoteMarked)
+        val asked = notes.rowQueries.toList()
+
+        val wait = list.vm.takeNewNote()
+        runCurrent()
+
+        assertEquals(NewNoteWait(noteId = 9, read = 1), wait)
+        assertNull(marker.noteId.value)
+        assertFalse(list.state.newNoteMarked)
+        assertEquals(asked + asked.last(), notes.rowQueries)
+        assertEquals(listOf(9L, 1L), list.state.rows.map { it.id })
+        assertEquals(1, list.state.rowsRead)
+        val earlier = list.states.filter { state -> state.rows.map { it.id } == listOf(1L) }
+        assertTrue(earlier.isNotEmpty())
+        assertTrue("rows of the earlier read carry its number", earlier.all { it.rowsRead == 0 })
+    }
+
+    @Test
+    fun takeNewNote_onThePickerBody_dropsTheMark_andReadsNothing() = runTest {
+        val list = open(Perspective.Individual)
+        assertEquals(Primary.None, list.state.primary)
+        marker.expect(3)
+        marker.mark(noteId = 9, visit = 3)
+        runCurrent()
+
+        assertNull(list.vm.takeNewNote())
+        runCurrent()
+
+        assertNull(marker.noteId.value)
+        assertEquals(emptyList<NoteQuery>(), notes.rowQueries)
+    }
+
+    @Test
+    fun takeNewNote_withoutAMark_returnsNull_andReadsNothingMore() = runTest {
+        notes.rows = { flowOf(listOf(noteRow(1))) }
+        val list = open(Perspective.All)
+        val asked = notes.rowQueries.size
+
+        assertNull(list.vm.takeNewNote())
+        runCurrent()
+
+        assertEquals(asked, notes.rowQueries.size)
+        assertEquals(0, list.state.rowsRead)
+    }
+
+    @Test
+    fun aKeptRow_isTakenOnce() = runTest {
+        val list = open(Perspective.All)
+        val row = KeptRow(4, checked = false, orderedAt = 40)
+
+        list.vm.keepRow(row)
+
+        assertEquals(row, list.vm.takeKeptRow())
+        assertNull(list.vm.takeKeptRow())
+    }
+
     /** A collected ViewModel and every state it emitted. */
     private class Watched(val vm: NoteListViewModel, val handle: SavedStateHandle, val states: List<NoteListUiState>) {
         val state: NoteListUiState get() = vm.uiState.value
@@ -535,7 +603,7 @@ class NoteListViewModelRulesTest {
         viewModelFactory {
             initializer {
                 NoteListViewModel(
-                    PerspectiveSpec.of(p), handle, notes, entities, settings, time, AppDispatchers(main, main, main),
+                    PerspectiveSpec.of(p), handle, notes, entities, settings, time, AppDispatchers(main, main, main), marker,
                 )
             }
         },

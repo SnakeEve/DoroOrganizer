@@ -7,7 +7,8 @@ import java.time.LocalDate
 
 /**
  * What a note row shows (ui.md § 3.7). [title] null means blank content, rendered as "(No data)" (DEC-25); the
- * association lists omit the perspective's primary entity and keep the row order of DEC-32.
+ * association lists omit the perspective's primary entity and keep the row order of DEC-32. [orderedAt] is the time
+ * the canonical order sorts the row by (DEC-23): whether it changed tells the list that the row moved (DEC-110).
  */
 data class NoteRowUi(
     val id: Long,
@@ -19,6 +20,7 @@ data class NoteRowUi(
     val people: List<String>,
     val projects: List<String>,
     val orphan: Boolean,
+    val orderedAt: Long,
 ) {
     override fun toString() = "NoteRowUi(id=$id)" // DEC-70
 }
@@ -40,5 +42,6 @@ fun NoteRow.toRowUi(today: LocalDate, omitPersonId: Long? = null, omitProjectId:
         people = persons.filter { it.id != omitPersonId }.map { it.name },
         projects = projects.filter { it.id != omitProjectId }.map { it.name },
         orphan = orphan,
+        orderedAt = if (checked) checkedAt ?: updatedAt else updatedAt,
     )
 }

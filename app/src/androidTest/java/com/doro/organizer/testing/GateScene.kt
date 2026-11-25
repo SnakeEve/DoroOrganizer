@@ -4,8 +4,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.MainActivity
+import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.data.HolderState
+import com.doro.organizer.data.NoteRepository
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.security.AndroidBioKeystore
 import com.doro.organizer.security.AppLockController
@@ -15,6 +17,7 @@ import com.doro.organizer.security.KeyVault
 import com.doro.organizer.security.ToggleOutcome
 import com.doro.organizer.session.GateEvent
 import com.doro.organizer.session.GateState
+import com.doro.organizer.ui.NewNoteMarker
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -62,6 +65,14 @@ class GateScene(
     /** Wraps the app's vault, for the cases that script a vault answer. */
     var wrapVault: (KeyVault) -> KeyVault = { it }
 
+    /**
+     * The list-position tests' probes (testing.md I-58): the note repository's wrapper, the marker's wrapper and the
+     * dispatchers; null keeps the production member. Set them before the rules run, in the test's constructor.
+     */
+    var wrapNoteRepository: ((NoteRepository) -> NoteRepository)? = null
+    var wrapNewNoteMarker: ((NewNoteMarker) -> NewNoteMarker)? = null
+    var dispatchers: AppDispatchers? = null
+
     private lateinit var lock: CountingLockController
 
     /** The API level the controller decides its credential branch by; null: the phone's. Set before [coldStart]. */
@@ -80,6 +91,9 @@ class GateScene(
         wrapLockController = { CountingLockController(it).also { lock = it } }
         lockSdkInt = { controllerSdkInt }
         wrapAnnouncer = announcements::wrap
+        wrapNoteRepository = this@GateScene.wrapNoteRepository
+        wrapNewNoteMarker = this@GateScene.wrapNewNoteMarker
+        dispatchers = this@GateScene.dispatchers
     }
 
     private var scenario: ActivityScenario<MainActivity>? = null

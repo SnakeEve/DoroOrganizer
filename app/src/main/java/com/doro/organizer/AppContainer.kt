@@ -39,6 +39,8 @@ import com.doro.organizer.session.SessionGate
 import com.doro.organizer.session.windowPolicyOf
 import com.doro.organizer.settings.DefaultSettingsStore
 import com.doro.organizer.settings.SettingsStore
+import com.doro.organizer.ui.DefaultNewNoteMarker
+import com.doro.organizer.ui.NewNoteMarker
 import com.doro.organizer.ui.UiGraph
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -104,6 +106,9 @@ open class AppContainer(protected val app: Application) : UiGraph {
     }
 
     override val externalActivities: ExternalActivities by lazy { DefaultExternalActivities { appLockController } }
+
+    /** In memory only: the id of the note the last popped editor created (DEC-110). */
+    override val newNoteMarker: NewNoteMarker by lazy { DefaultNewNoteMarker() }
 
     open val biometricGateway: BiometricGateway by lazy { DefaultBiometricGateway(app) }
 

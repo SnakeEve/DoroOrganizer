@@ -27,6 +27,7 @@ import com.doro.organizer.model.capChars
 import com.doro.organizer.model.toQuery
 import com.doro.organizer.settings.Settings
 import com.doro.organizer.settings.SettingsStore
+import com.doro.organizer.ui.NewNoteMarker
 import com.doro.organizer.ui.common.DaySelection
 import com.doro.organizer.ui.common.NoteRowUi
 import com.doro.organizer.ui.common.toRowUi
@@ -72,7 +73,9 @@ private const val MAX_SAVED_SELECTION = 1_000
  * database: a write never patches the state (architecture.md § Layering rule 3). Selection mode and its batch actions
  * (ui.md § 5) are a state of this ViewModel, never a navigation entry. Every input of [uiState] emits at
  * once, starting from what is shown when it restarts, so the search bar, the chips and the dialogs respond before the
- * first rows arrive and a returning tab shows its last list on the first frame (ui.md § 3.6).
+ * first rows arrive and a returning tab shows its last list on the first frame (ui.md § 3.6). The mark of a note just
+ * created ([newNoteMarker]) is taken here, and the row a list showed first is kept here across a return, both in
+ * memory only (ui.md § 3.11, DEC-110).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class NoteListViewModel(
@@ -83,6 +86,7 @@ class NoteListViewModel(
     private val settingsStore: SettingsStore,
     private val appTime: AppTime,
     private val dispatchers: AppDispatchers,
+    private val newNoteMarker: NewNoteMarker,
 ) : ViewModel() {
     private val personFilter = MutableStateFlow(savedStateHandle.get<Long>(KEY_PERSON))
     private val projectFilter = MutableStateFlow(savedStateHandle.get<Long>(KEY_PROJECT))
@@ -168,12 +172,18 @@ class NoteListViewModel(
     /** The last rows [results] produced, so a restarted collection starts from them. */
     private var lastResult: RowsResult? = null
 
+    /** The number of the current read of the list query: 0, then one more for each [takeNewNote] (DEC-110 (2)). */
+    private val reread = MutableStateFlow(0)
+
+    /** The row first on screen when the list left composition (DEC-110 (3)); in memory only. */
+    private var keptRow: KeptRow? = null
+
     /**
-     * The mapped rows and the primary they belong to; null while no list query runs (the picker body) or answered.
-     * Each emission prunes the selection to its rows (ui.md § 5.5 rule 4).
+     * The mapped rows, the primary they belong to and the read that produced them; null while no list query runs (the
+     * picker body) or answered. Each emission prunes the selection to its rows (ui.md § 5.5 rule 4).
      */
-    private val results: Flow<RowsResult?> = listQuery
-        .flatMapLatest { list -> list.query?.let { rowsOf(list, it) } ?: flowOf(null) }
+    private val results: Flow<RowsResult?> = combine(listQuery, reread, ::Pair)
+        .flatMapLatest { (list, read) -> list.query?.let { rowsOf(list, it, read) } ?: flowOf(null) }
         .onStart { emit(lastResult) }
         .onEach { result ->
             lastResult = result
@@ -190,6 +200,7 @@ class NoteListViewModel(
             },
             primary = list.primary,
             rows = current?.rows.orEmpty(),
+            rowsRead = current?.read ?: 0,
             today = today,
         )
     }
@@ -220,7 +231,14 @@ class NoteListViewModel(
         combine(month, appTime.todayFlow, daySelection, marks, ::CalendarUi)
     }
 
-    private val screenPart: Flow<ScreenPart> = combine(dialog, message, selection, batchRunning, ::ScreenPart)
+    private val screenPart: Flow<ScreenPart> = combine(
+        dialog,
+        message,
+        selection,
+        batchRunning,
+        newNoteMarker.noteId.map { it != null }.distinctUntilChanged(),
+        ::ScreenPart,
+    )
 
     val uiState: StateFlow<NoteListUiState> =
         combine(listPart, filterPart, calendar, screenPart) { list, filters, calendar, screen ->
@@ -229,6 +247,8 @@ class NoteListViewModel(
                 loading = list.loading,
                 primary = list.primary,
                 rows = list.rows,
+                rowsRead = list.rowsRead,
+                newNoteMarked = screen.newNoteMarked,
                 today = list.today,
                 chips = filters.chips,
                 filtersActive = filters.filtersActive,
@@ -496,6 +516,29 @@ class NoteListViewModel(
             UiText.Plural(R.plurals.batch_associated, it.selected)
         }
 
+    // List position (ui.md § 3.11, DEC-110).
+
+    /**
+     * Takes the mark of a note just created, once (DEC-110 (2)). On the picker body of Individual or Project there is
+     * no list: the mark is dropped and null returned. Otherwise the same query is read once more, because the rows
+     * shown can predate the note, and the wait names that read: only its rows, or a later read's, are judged.
+     */
+    internal fun takeNewNote(): NewNoteWait? {
+        val noteId = newNoteMarker.take() ?: return null
+        if (spec.primaryKind != null && uiState.value.primary == Primary.None) return null
+        val read = reread.value + 1
+        reread.value = read
+        return NewNoteWait(noteId, read)
+    }
+
+    /** The row the list showed first when it left composition, or null; the next list takes it (DEC-110 (3)). */
+    internal fun keepRow(row: KeptRow?) {
+        keptRow = row
+    }
+
+    /** The kept row, once. */
+    internal fun takeKeptRow(): KeptRow? = keptRow.also { keptRow = null }
+
     /** The snackbar of [id] was shown (architecture.md § Layering rule 7). */
     fun onMessageShown(id: Long) = message.update { if (it?.id == id) null else it }
 
@@ -547,12 +590,12 @@ class NoteListViewModel(
         }
 
     /** The rows of [query], mapped whenever they or today change, off the main thread (architecture.md § Threading). */
-    private fun rowsOf(list: ListQuery, query: NoteQuery): Flow<RowsResult> {
+    private fun rowsOf(list: ListQuery, query: NoteQuery, read: Int): Flow<RowsResult> {
         val entity = (list.primary as? Primary.Entity)?.id
         val omitPerson = entity?.takeIf { spec.primaryKind == EntityKind.Person }
         val omitProject = entity?.takeIf { spec.primaryKind == EntityKind.Project }
         return combine(noteRepository.observeRows(query), appTime.todayFlow) { rows, today ->
-            RowsResult(list.primaryKey, rows.map { it.toRowUi(today, omitPerson, omitProject) })
+            RowsResult(list.primaryKey, rows.map { it.toRowUi(today, omitPerson, omitProject) }, read)
         }.flowOn(dispatchers.default)
     }
 
@@ -625,6 +668,8 @@ class NoteListViewModel(
                 else -> Primary.None
             },
             rows = emptyList(),
+            rowsRead = 0,
+            newNoteMarked = newNoteMarker.noteId.value != null,
             today = today,
             chips = chipsOf(EntityFilters(personFilter.value, null, projectFilter.value, null), dateFilter.value),
             filtersActive = filtersActive(personFilter.value, projectFilter.value, dateFilter.value, searchText),
@@ -807,15 +852,22 @@ class NoteListViewModel(
         override fun toString() = "ListQuery($primary, $query)" // both redact the search text
     }
 
-    private class RowsResult(val primaryKey: NoteFilter, val rows: List<NoteRowUi>)
+    private class RowsResult(val primaryKey: NoteFilter, val rows: List<NoteRowUi>, val read: Int)
 
-    private class ListPart(val loading: Boolean, val primary: Primary, val rows: List<NoteRowUi>, val today: LocalDate)
+    private class ListPart(
+        val loading: Boolean,
+        val primary: Primary,
+        val rows: List<NoteRowUi>,
+        val rowsRead: Int,
+        val today: LocalDate,
+    )
 
     private class ScreenPart(
         val dialog: ListDialog?,
         val message: UserMessage?,
         val selection: Set<Long>?,
         val batchRunning: Boolean,
+        val newNoteMarked: Boolean,
     )
 
     private class FilterPart(

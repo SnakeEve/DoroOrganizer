@@ -31,6 +31,8 @@ fun DoroRoot(graph: UiGraph = LocalUiGraph.current) {
         // Results picked for the replaced data must not reach the new data (architecture.md § Result launchers).
         graph.externalActivities.take(ExternalKind.Backup)
         graph.externalActivities.take(ExternalKind.Restore)
+        // Its id names a note of the replaced data (DEC-58, DEC-110).
+        graph.newNoteMarker.clear()
     }
     if (gate.showsContent()) {
         val maintenance = gate as? GateState.Maintenance // origin Ready and not an Erase: showsContent implies it

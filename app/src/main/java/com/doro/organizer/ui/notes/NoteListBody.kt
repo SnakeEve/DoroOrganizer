@@ -16,7 +16,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -43,11 +46,23 @@ internal class RowActions(
 )
 
 /**
+ * The list's side of the position rules (ui.md § 3.11, DEC-110): the screen's [reveal] of a note just created, and the
+ * row kept across a return, which the list takes once when it starts ([takeKeptRow]) and hands back when it leaves
+ * composition ([keepRow]).
+ */
+internal class ListPositionHooks(
+    val reveal: NewNoteReveal,
+    val takeKeptRow: () -> KeptRow?,
+    val keepRow: (KeptRow?) -> Unit,
+)
+
+/**
  * The list area (ui.md § 3.6): loading, "(No data)" or the rows in the order the query gave them; the UI never sorts,
  * groups or reorders (DEC-23). With [header] (the Date perspective's grid and selection header, or nothing in its
- * end pane) the loading and empty states are list items, top-aligned under it; without, they are centered. In
- * selection mode ([NoteListUiState.selection]) every row shows whether it is selected. [bottomPadding] keeps the last
- * row clear of the create button (ui.md § 2.3).
+ * end pane) the loading and empty states are list items, top-aligned under it; without, they are centered;
+ * [headerItems] counts the items [header] adds before the rows. In selection mode ([NoteListUiState.selection]) every
+ * row shows whether it is selected. [bottomPadding] keeps the last row clear of the create button (ui.md § 2.3). The
+ * position rules of ui.md § 3.11 act through [position].
  */
 @Composable
 internal fun NoteListBody(
@@ -58,17 +73,17 @@ internal fun NoteListBody(
     rowActions: RowActions,
     onClearFilters: () -> Unit,
     bottomPadding: Dp,
+    position: ListPositionHooks,
     modifier: Modifier = Modifier,
     header: (LazyListScope.() -> Unit)? = null,
+    headerItems: Int = 0,
 ) {
     val anchor = remember { ToggleAnchor() }
-    // ui.md § 3.9 item 4: in the composition that hands the toggle's emission to the list, so the data change and
-    // the restored position land in the same frame and the viewport stays while the row animates away.
-    anchor.positionFor(state.rows)?.let { listState.requestScrollToItem(it.index, it.offset) }
+    ListPositionRules(state, listState, anchor, position, headerItems)
     val toggle = { row: NoteRowUi, checked: Boolean ->
         if (listState.layoutInfo.visibleItemsInfo.firstOrNull()?.key == row.id) {
-            val position = ScrollPosition(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
-            anchor.record(row.id, checked, position, state.rows)
+            val before = ScrollPosition(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+            anchor.record(row.id, checked, before, state.rows)
         }
         onCheckedChange(row, checked) { changed -> if (!changed) anchor.drop(row.id) }
     }
@@ -104,6 +119,38 @@ internal fun NoteListBody(
                 }
             }
         }
+    }
+}
+
+/**
+ * The position rules (ui.md § 3.9 item 4, § 3.11; DEC-110), in the composition that hands [state]'s rows to the
+ * `LazyColumn`, so the rows and the position land in the same frame: `requestScrollToItem` overrides key anchoring for
+ * that one remeasure. Every helper sees every rows value, so each ends or updates its own state; the first position
+ * wins: the reveal, then the toggle anchor, then the top anchor (at the very top) or the keep anchor (below it).
+ */
+@Composable
+private fun ListPositionRules(
+    state: NoteListUiState,
+    listState: LazyListState,
+    toggleAnchor: ToggleAnchor,
+    position: ListPositionHooks,
+    headerItems: Int,
+) {
+    val topAnchor = remember { TopAnchor() }
+    // Read before the LazyColumn's first layout of this composition: the restored position (DEC-110 (3)).
+    val keepAnchor = remember { KeepAnchor(position.takeKeptRow(), LastLayout.of(listState).scrollPosition) }
+    val rows = state.rows
+    val layout = LastLayout.of(listState)
+    val revealed = position.reveal.positionFor(rows, state.rowsRead, layout, headerItems)
+    val toggled = toggleAnchor.positionFor(rows)
+    val top = topAnchor.positionFor(rows, layout)
+    val kept = keepAnchor.positionFor(rows, layout, headerItems)
+    (revealed ?: toggled ?: top ?: kept)?.let { listState.requestScrollToItem(it.index, it.offset) }
+
+    val currentRows by rememberUpdatedState(rows)
+    val keepRow by rememberUpdatedState(position.keepRow)
+    DisposableEffect(listState) {
+        onDispose { keepRow(keepAnchor.unusedSeed() ?: KeptRow.of(LastLayout.of(listState), currentRows)) }
     }
 }
 

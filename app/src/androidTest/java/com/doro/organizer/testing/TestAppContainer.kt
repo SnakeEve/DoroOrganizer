@@ -19,6 +19,7 @@ import com.doro.organizer.security.BiometricGateway
 import com.doro.organizer.security.KeyVault
 import com.doro.organizer.session.SessionGate
 import com.doro.organizer.settings.SettingsStore
+import com.doro.organizer.ui.NewNoteMarker
 import com.doro.organizer.ui.common.Announcer
 import kotlinx.coroutines.CoroutineScope
 
@@ -50,8 +51,14 @@ class TestOverrides {
     var appLockController: AppLockController? = null
     var dbMaintenance: DbMaintenance? = null
 
-    /** Wraps the production repository: over a scripted gate no database opens, so a test answers what it needs. */
+    /**
+     * Wraps the production repository: over a scripted gate no database opens, so a test answers what it needs; the
+     * list-position tests count and hold its calls ([RowsProbe], testing.md I-58).
+     */
     var wrapNoteRepository: ((NoteRepository) -> NoteRepository)? = null
+
+    /** Wraps the production marker of a note just created, to record its calls ([RecordingNewNoteMarker], DEC-110). */
+    var wrapNewNoteMarker: ((NewNoteMarker) -> NewNoteMarker)? = null
 
     /** Wraps the production launchers, to report a launch that could not open (Espresso-Intents only answers). */
     var wrapExternalActivities: ((ExternalActivities) -> ExternalActivities)? = null
@@ -77,6 +84,9 @@ class TestAppContainer(app: Application, private val overrides: TestOverrides) :
     override val dbMaintenance: DbMaintenance by lazy { overrides.dbMaintenance ?: super.dbMaintenance }
     override val noteRepository: NoteRepository by lazy {
         super.noteRepository.let { overrides.wrapNoteRepository?.invoke(it) ?: it }
+    }
+    override val newNoteMarker: NewNoteMarker by lazy {
+        super.newNoteMarker.let { overrides.wrapNewNoteMarker?.invoke(it) ?: it }
     }
     override val externalActivities: ExternalActivities by lazy {
         super.externalActivities.let { overrides.wrapExternalActivities?.invoke(it) ?: it }

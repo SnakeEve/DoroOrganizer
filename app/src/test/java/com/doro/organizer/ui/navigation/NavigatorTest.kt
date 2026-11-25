@@ -5,6 +5,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.navigation3.runtime.NavKey
 import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.Perspective
+import com.doro.organizer.ui.NewNoteMarker
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -12,7 +15,8 @@ import org.junit.Test
 
 /**
  * The stacks, Back, the tab counters and the visits of the editor and picker keys (architecture.md § Keys and stacks,
- * § Back behavior; ui.md § 2.1; DEC-100).
+ * § Back behavior; ui.md § 2.1; DEC-100), and the binding of the new note's mark to the editor's return (testing.md
+ * I-59 (b), DEC-110).
  */
 class NavigatorTest {
     private val state = NavigationState(
@@ -22,7 +26,8 @@ class NavigatorTest {
         reselects = mutableStateOf(IntArray(Perspective.entries.size)),
         visits = mutableIntStateOf(0),
     )
-    private val navigator = Navigator(state)
+    private val marker = MarkerCalls()
+    private val navigator = Navigator(state, marker)
 
     /** A key that is not a tab root, as the editor's will be. */
     private data object Covering : NavKey
@@ -157,11 +162,77 @@ class NavigatorTest {
             reselects = state.reselects,
             visits = mutableIntStateOf(41),
         )
-        val navigator = Navigator(restored)
+        val navigator = Navigator(restored, marker)
 
         assertEquals(42, navigator.nextVisit())
         navigator.selectTab(Perspective.Orphan)
         assertEquals(43, navigator.nextVisit())
         assertEquals(43, restored.visits.intValue)
+    }
+
+    // The new note's mark (DEC-110).
+
+    @Test
+    fun back_poppingANewNotesEditor_expectsItsVisit() {
+        val editor = EditorKey(null, navigator.nextVisit())
+        navigator.open(editor)
+        marker.calls.clear()
+
+        navigator.back()
+
+        assertEquals(listOf("expect(${editor.visit})"), marker.calls)
+    }
+
+    @Test
+    fun back_poppingAnotherKey_expectsNothing() {
+        navigator.open(EditorKey(7, navigator.nextVisit()))
+        navigator.open(PickerKey(EntityKind.Person, PickerPurpose.EditorLinks(emptyList()), navigator.nextVisit()))
+        navigator.open(Covering)
+        marker.calls.clear()
+
+        repeat(3) { navigator.back() }
+
+        assertEquals(emptyList<String>(), marker.calls)
+    }
+
+    @Test
+    fun open_clearsTheMark_alsoForAKeyNotPushed() {
+        val editor = EditorKey(null, navigator.nextVisit())
+        navigator.open(editor)
+        navigator.open(EditorKey(null, navigator.nextVisit()))
+
+        assertEquals("not pushed (DEC-100)", listOf(TabKey(Perspective.All, 0), editor), state.stacks.getValue(Perspective.All))
+        assertEquals(listOf("clear", "clear"), marker.calls)
+    }
+
+    @Test
+    fun everyTabChange_clearsTheMark_andAReselectDoesNot() {
+        navigator.selectTab(Perspective.All)
+        assertEquals("a reselect", emptyList<String>(), marker.calls)
+
+        navigator.selectTab(Perspective.Orphan)
+        navigator.back() // from the root of Orphans to All
+
+        assertEquals(listOf("clear", "clear"), marker.calls)
+    }
+
+    /** Records the calls [Navigator] makes. */
+    private class MarkerCalls : NewNoteMarker {
+        val calls = mutableListOf<String>()
+        override val noteId: StateFlow<Long?> = MutableStateFlow(null)
+
+        override fun expect(visit: Int) {
+            calls += "expect($visit)"
+        }
+
+        override fun mark(noteId: Long, visit: Int) {
+            calls += "mark"
+        }
+
+        override fun take(): Long? = null.also { calls += "take" }
+
+        override fun clear() {
+            calls += "clear"
+        }
     }
 }

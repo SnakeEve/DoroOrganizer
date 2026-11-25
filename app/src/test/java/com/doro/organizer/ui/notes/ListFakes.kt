@@ -11,6 +11,7 @@ import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.NoteQuery
 import com.doro.organizer.model.NoteRow
 import com.doro.organizer.testing.unused
+import com.doro.organizer.ui.common.NoteRowUi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -116,3 +117,11 @@ fun noteRow(
     persons: List<EntityRef> = emptyList(),
     projects: List<EntityRef> = emptyList(),
 ) = NoteRow(id, "note $id", date, checked, null, 0, 0, persons, projects)
+
+/** The row note [id] shows, sorted by [orderedAt] (DEC-23). */
+fun rowUi(id: Long, checked: Boolean = false, orderedAt: Long = 0) =
+    NoteRowUi(id, "t", null, checked, null, overdue = false, emptyList(), emptyList(), orphan = true, orderedAt = orderedAt)
+
+/** A last layout of a list showing item [index] first at [offset], with row key [key]. */
+internal fun layout(index: Int, offset: Int, key: Long?, scrolling: Boolean = false, lastWholeIndex: Int = index + 5) =
+    LastLayout(index, offset, key, scrolling, lastWholeIndex)

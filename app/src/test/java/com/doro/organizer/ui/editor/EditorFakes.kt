@@ -33,7 +33,7 @@ data class StoredNote(
  * The editor's side of [NoteRepository] in memory, following data-layer.md § Note save: an insert gets the next id and
  * inserts the draft's new entities into [entities]; a save of a vanished note is `NoteGone`; an unchanged note is not
  * written. Every save draft and delete call is recorded; [saveError] makes saves fail without writing, and a set
- * [deleteGate] holds deletes until it completes.
+ * [saveGate] or [deleteGate] holds saves or deletes until it completes.
  */
 class EditorNotes(private val entities: EditorEntities) : NoteRepository by unused() {
     val notes = mutableMapOf<Long, StoredNote>()
@@ -41,6 +41,7 @@ class EditorNotes(private val entities: EditorEntities) : NoteRepository by unus
     val inserts get() = saves.count { it.noteId == null }
     val deletes = mutableListOf<Set<Long>>()
     var saveError: AppError? = null
+    var saveGate: CompletableDeferred<Unit>? = null
     var deleteGate: CompletableDeferred<Unit>? = null
     private var nextId = 100L
 
@@ -55,6 +56,7 @@ class EditorNotes(private val entities: EditorEntities) : NoteRepository by unus
 
     override suspend fun save(draft: NoteDraft): AppResult<SaveResult> {
         saves += draft
+        saveGate?.await()
         saveError?.let { return AppResult.Err(it) }
         val existing = draft.noteId?.let { notes[it] ?: return AppResult.Ok(SaveResult.NoteGone) }
         val createdPersons = draft.newPersons.associate { it.key to entities.insert(EntityKind.Person, it.name) }

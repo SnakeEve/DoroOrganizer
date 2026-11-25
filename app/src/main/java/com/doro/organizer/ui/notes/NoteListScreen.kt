@@ -2,6 +2,7 @@ package com.doro.organizer.ui.notes
 
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.ReportDrawnWhen
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -66,6 +68,7 @@ import com.doro.organizer.ui.common.PickerResult
 import com.doro.organizer.ui.common.rememberAnnouncer
 import com.doro.organizer.ui.common.rememberDateFormats
 import com.doro.organizer.ui.navigation.EditorKey
+import com.doro.organizer.ui.navigation.LocalIsTopEntry
 import com.doro.organizer.ui.navigation.Navigator
 import com.doro.organizer.ui.navigation.PickerKey
 import com.doro.organizer.ui.navigation.SettingsKey
@@ -81,6 +84,7 @@ fun noteListFactory(graph: UiGraph, spec: PerspectiveSpec) = viewModelFactory {
             graph.settingsStore,
             graph.appTime,
             graph.dispatchers,
+            graph.newNoteMarker,
         )
     }
 }
@@ -125,6 +129,9 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
     BackHandler(enabled = state.searchOpen, onBack = vm::closeSearch)
     BackHandler(enabled = state.selecting, onBack = vm::exitSelection)
     ReselectEffect(reselectCount, if (pickerShown) pickerListState else listState)
+    val reveal = remember { NewNoteReveal() }
+    NewNoteEffects(state, vm, reveal, listState, pickerShown)
+    val position = remember(vm, reveal) { ListPositionHooks(reveal, vm::takeKeptRow, vm::keepRow) }
     MessageEffect(state.message, graph, vm::onMessageShown)
     ResultEffect<PickerResult>(PICKER_RESULT, LocalResultEventBus.current) { result ->
         when (result) {
@@ -227,7 +234,7 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
                         contentPadding = PaddingValues(bottom = bottomPadding),
                     )
                 }
-                else -> ListContent(state, vm, graph, formats, listState, navigator, bottomPadding)
+                else -> ListContent(state, vm, graph, formats, listState, navigator, bottomPadding, position)
             }
         }
     }
@@ -243,6 +250,7 @@ private fun ListContent(
     listState: LazyListState,
     navigator: Navigator,
     bottomPadding: Dp,
+    position: ListPositionHooks,
 ) {
     // Selection mode disables the chips, so no filter change drops the selection (ui.md § 5.1).
     if (state.chips.isNotEmpty()) {
@@ -274,9 +282,9 @@ private fun ListContent(
     }
     val calendar = state.calendar
     if (calendar == null) {
-        NoteListBody(state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding)
+        NoteListBody(state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding, position)
     } else {
-        CalendarContent(state, calendar, vm, formats, listState, onCheckedChange, rowActions, bottomPadding)
+        CalendarContent(state, calendar, vm, formats, listState, onCheckedChange, rowActions, bottomPadding, position)
     }
 }
 
@@ -296,6 +304,7 @@ private fun CalendarContent(
     onCheckedChange: RowToggle,
     rowActions: RowActions,
     bottomPadding: Dp,
+    position: ListPositionHooks,
 ) {
     val daysEnabled = !state.selecting
     val grid = @Composable { modifier: Modifier ->
@@ -333,19 +342,25 @@ private fun CalendarContent(
                 header()
             }
             NoteListBody(
-                state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding,
+                state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding, position,
                 Modifier.weight(1f), header = {},
             )
         }
     } else {
-        NoteListBody(state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding, header = {
-            item(key = "month_grid") {
+        // The items before the rows (ui.md § 4.4); the position rules count them (ui.md § 3.11).
+        val headerItems = listOf(
+            HeaderItem("month_grid") {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                     grid(Modifier.widthIn(max = 480.dp))
                 }
-            }
-            item(key = "selection_header") { header() }
-        })
+            },
+            HeaderItem("selection_header") { header() },
+        )
+        NoteListBody(
+            state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding, position,
+            header = { headerItems.forEach { item(key = it.key, content = it.content) } },
+            headerItems = headerItems.size,
+        )
     }
 }
 
@@ -400,6 +415,29 @@ private fun ListDialogs(state: NoteListUiState, vm: NoteListViewModel, formats: 
     }
 }
 
+/**
+ * The reveal of a note just created (ui.md § 3.11 rule 2, DEC-110 (2)): the list that is the top entry takes the mark
+ * as soon as it shows one and waits in [reveal] for the rows of the re-read; the picker body and a drag on the list
+ * end the wait without a move. Leaving composition drops [reveal] with the screen.
+ */
+@Composable
+private fun NewNoteEffects(
+    state: NoteListUiState,
+    vm: NoteListViewModel,
+    reveal: NewNoteReveal,
+    listState: LazyListState,
+    pickerShown: Boolean,
+) {
+    val isTop = LocalIsTopEntry.current
+    LaunchedEffect(state.newNoteMarked, isTop) {
+        if (state.newNoteMarked && isTop) vm.takeNewNote()?.let(reveal::await)
+    }
+    if (pickerShown) reveal.drop()
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { if (it is DragInteraction.Start) reveal.drop() }
+    }
+}
+
 /** A tap on the current tab scrolls the list, or the embedded picker's list, to the top (ui.md § 2.1). */
 @Composable
 private fun ReselectEffect(reselectCount: Int, target: LazyListState) {
@@ -411,6 +449,9 @@ private fun ReselectEffect(reselectCount: Int, target: LazyListState) {
         }
     }
 }
+
+/** One item of the single-column Calendar before its rows, under [key]. */
+private class HeaderItem(val key: String, val content: @Composable LazyItemScope.() -> Unit)
 
 /** 56 dp button + 16 dp margin + 16 dp gap: the last row scrolls clear of the create button (ui.md § 2.3). */
 private val FAB_CLEARANCE = 88.dp

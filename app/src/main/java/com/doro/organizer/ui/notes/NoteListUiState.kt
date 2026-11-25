@@ -13,13 +13,17 @@ import java.time.YearMonth
  * date pickers; [dateFilter] is the date chip's value, which the date filter sheet shows. The search text is not
  * here: the field reads `NoteListViewModel.searchText`, which changes in the frame of each edit (ui.md § 3.3).
  * [selection] is null outside selection mode (ui.md § 5); [batchRunning] is true while a batch action of the
- * contextual bar runs, whose actions are then disabled (ui.md § 5.3).
+ * contextual bar runs, whose actions are then disabled (ui.md § 5.3). [rowsRead] is the read that produced [rows]: 0,
+ * then the number of each re-read after a note was created; [newNoteMarked] says that `NewNoteMarker` holds a mark,
+ * which the list that is the top entry takes (ui.md § 3.11, DEC-110).
  */
 data class NoteListUiState(
     val spec: PerspectiveSpec,
     val loading: Boolean,
     val primary: Primary,
     val rows: List<NoteRowUi>,
+    val rowsRead: Int,
+    val newNoteMarked: Boolean,
     val today: LocalDate,
     val chips: List<FilterChipUi>,
     val filtersActive: Boolean,

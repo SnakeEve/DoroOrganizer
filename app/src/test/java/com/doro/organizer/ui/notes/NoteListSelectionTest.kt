@@ -16,6 +16,7 @@ import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.Perspective
 import com.doro.organizer.testing.FakeAppTime
 import com.doro.organizer.testing.FakeSettingsStore
+import com.doro.organizer.ui.DefaultNewNoteMarker
 import com.doro.organizer.ui.navigation.PickerPurpose
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -640,6 +641,7 @@ class NoteListSelectionTest {
                 initializer {
                     NoteListViewModel(
                         PerspectiveSpec.of(p), handle, notes, entities, settings, time, AppDispatchers(main, main, main),
+                        DefaultNewNoteMarker(),
                     )
                 }
             },

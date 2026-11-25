@@ -54,7 +54,7 @@ import com.doro.organizer.ui.navigation.tabItem
 @Composable
 fun MainContent(graph: UiGraph, dataEpoch: Int) {
     val navigation = rememberNavigationState(dataEpoch)
-    val navigator = remember(navigation) { Navigator(navigation) }
+    val navigator = remember(navigation) { Navigator(navigation, graph.newNoteMarker) }
     val appSnackbar = remember { SnackbarHostState() }
     val results = remember { ResultEventBus() }
     AppMessagesEffect(graph, appSnackbar)

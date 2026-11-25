@@ -42,6 +42,9 @@ interface UiGraph : GateGraph {
 
     /** The list ViewModels map rows on `default` (architecture.md § Threading: heavy list mapping). */
     val dispatchers: AppDispatchers
+
+    /** The mark of a note just created, for the list its editor returns to (DEC-110). */
+    val newNoteMarker: NewNoteMarker
 }
 
 val LocalUiGraph = staticCompositionLocalOf<UiGraph> { error("MainActivity provides the UiGraph") }

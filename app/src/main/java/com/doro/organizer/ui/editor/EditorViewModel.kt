@@ -27,6 +27,7 @@ import com.doro.organizer.model.NoteDetail
 import com.doro.organizer.model.NoteDraft
 import com.doro.organizer.model.SaveResult
 import com.doro.organizer.settings.SettingsStore
+import com.doro.organizer.ui.NewNoteMarker
 import com.doro.organizer.ui.common.PickerResult
 import com.doro.organizer.ui.navigation.EditorKey
 import com.doro.organizer.ui.navigation.PickerKey
@@ -65,6 +66,7 @@ class EditorViewModel(
     private val entityRepository: EntityRepository,
     private val settingsStore: SettingsStore,
     private val appMessages: AppMessages,
+    private val newNoteMarker: NewNoteMarker,
     private val appTime: AppTime,
     private val applicationScope: CoroutineScope,
     private val dispatchers: AppDispatchers,
@@ -324,8 +326,25 @@ class EditorViewModel(
 
     override fun onCleared() {
         // The entry was popped (or its data epoch ended): the draft is finished once the saves before this are done.
+        // The lock resumes its waiters first in, first out, so the saves that leaving started have returned (DEC-110).
         cleared = true
-        applicationScope.launch(dispatchers.main) { saveMutex.withLock { dropDraftInsert() } }
+        applicationScope.launch(dispatchers.main) {
+            saveMutex.withLock {
+                markNewNote()
+                dropDraftInsert()
+            }
+        }
+    }
+
+    /**
+     * Marks the note this editor created for the list it returns to (DEC-110): only an editor opened for a new note
+     * whose draft was inserted, not discarded and of the current data epoch, whether its last save succeeded or not.
+     */
+    private fun markNewNote() {
+        val noteId = fields.value.noteId ?: return
+        if (key.noteId == null && !saved.discarded && saved.epoch == currentEpochOrNull()) {
+            newNoteMarker.mark(noteId, key.visit)
+        }
     }
 
     // Loading (ui.md § 6.7, § 6.8, § 6.9).

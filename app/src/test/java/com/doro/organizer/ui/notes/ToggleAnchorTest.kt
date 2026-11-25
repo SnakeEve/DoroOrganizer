@@ -55,5 +55,5 @@ class ToggleAnchorTest {
     }
 
     private fun row(id: Long, checked: Boolean) =
-        NoteRowUi(id, "t", null, checked, null, overdue = false, emptyList(), emptyList(), orphan = true)
+        NoteRowUi(id, "t", null, checked, null, overdue = false, emptyList(), emptyList(), orphan = true, orderedAt = 0)
 }

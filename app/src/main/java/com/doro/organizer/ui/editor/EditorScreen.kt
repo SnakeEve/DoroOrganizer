@@ -61,6 +61,7 @@ fun editorFactory(graph: UiGraph, key: EditorKey) = viewModelFactory {
             graph.entityRepository,
             graph.settingsStore,
             graph.appMessages,
+            graph.newNoteMarker,
             graph.appTime,
             graph.applicationScope,
             graph.dispatchers,

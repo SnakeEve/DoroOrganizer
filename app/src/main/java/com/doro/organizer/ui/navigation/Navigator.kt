@@ -3,15 +3,21 @@ package com.doro.organizer.ui.navigation
 import androidx.compose.runtime.MutableState
 import androidx.navigation3.runtime.NavKey
 import com.doro.organizer.model.Perspective
+import com.doro.organizer.ui.NewNoteMarker
 
-/** The only writer of a [NavigationState] (architecture.md § Keys and stacks, § Back behavior). Main thread only. */
-class Navigator(private val state: NavigationState) {
+/**
+ * The only writer of a [NavigationState] (architecture.md § Keys and stacks, § Back behavior). Main thread only. It
+ * binds [newNoteMarker] to the editor's return (DEC-110): popping a new note's editor expects that editor's mark, and
+ * every other navigation clears it, so a reveal never reaches another list or a later return.
+ */
+class Navigator(private val state: NavigationState, private val newNoteMarker: NewNoteMarker) {
     /** A tab item tap: another tab becomes current, or the current one counts a reselect (ui.md § 2.1). */
     fun selectTab(p: Perspective) {
         val current = state.current
         if (p == current) {
             state.reselects.increment(p)
         } else {
+            newNoteMarker.clear()
             state.leaves.increment(current)
             state.currentTab.value = p
         }
@@ -25,6 +31,7 @@ class Navigator(private val state: NavigationState) {
      * pushed: a double tap opens one screen (DEC-100).
      */
     fun open(key: NavKey) {
+        newNoteMarker.clear()
         val stack = state.stacks.getValue(state.current)
         if (stack.last().withoutVisit() != key.withoutVisit()) stack.add(key)
     }
@@ -36,8 +43,12 @@ class Navigator(private val state: NavigationState) {
     fun back() {
         val stack = state.stacks.getValue(state.current)
         when {
-            stack.size > 1 -> stack.removeAt(stack.lastIndex)
+            stack.size > 1 -> {
+                val popped = stack.removeAt(stack.lastIndex)
+                if (popped is EditorKey && popped.noteId == null) newNoteMarker.expect(popped.visit)
+            }
             state.current != Perspective.All -> {
+                newNoteMarker.clear()
                 state.leaves.increment(state.current)
                 state.currentTab.value = Perspective.All
             }

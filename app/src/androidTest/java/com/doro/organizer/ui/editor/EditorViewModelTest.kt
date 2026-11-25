@@ -24,12 +24,15 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.messages.DefaultAppMessages
+import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.data.DatabaseHolder
 import com.doro.organizer.data.EntityRepository
 import com.doro.organizer.data.NoteRepository
 import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.MAX_CONTENT_CHARS
 import com.doro.organizer.model.NewEntity
+import com.doro.organizer.model.NoteDraft
+import com.doro.organizer.model.SaveResult
 import com.doro.organizer.testing.ApplicationScopeRule
 import com.doro.organizer.testing.FakeAppTime
 import com.doro.organizer.testing.FakeSettingsStore
@@ -40,6 +43,7 @@ import com.doro.organizer.testing.entityRepository
 import com.doro.organizer.testing.marshalled
 import com.doro.organizer.testing.noteRepository
 import com.doro.organizer.testing.openDatabase
+import com.doro.organizer.ui.DefaultNewNoteMarker
 import com.doro.organizer.ui.common.PickerResult
 import com.doro.organizer.ui.navigation.EditorKey
 import com.doro.organizer.ui.navigation.NotePrefill
@@ -55,6 +59,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -69,8 +74,9 @@ import org.junit.runner.RunWith
  * changed and reverted, writes nothing; the checkbox of a saved note writes at once; undo right after opening a note
  * keeps its text, so leaving writes nothing (DEC-104). Also I-38, the editor's part: the state its entry saves, the
  * `saveable` content (ui.md § 6.3) and the `editorDialog` key included, survives a `Parcel` round trip and recreates
- * equal state, and a 200,000-unit draft is in it once, within the entry's share of the DEC-57 budget. Each editor
- * lives in an [EntryOwner], whose saved state is captured the way Android captures it.
+ * equal state, and a 200,000-unit draft is in it once, within the entry's share of the DEC-57 budget. Also I-59 (h):
+ * a note inserted when a picker opened and then unlinked is marked for the list only once its last save returned
+ * (DEC-110). Each editor lives in an [EntryOwner], whose saved state is captured the way Android captures it.
  */
 @RunWith(AndroidJUnit4::class)
 class EditorViewModelTest {
@@ -84,6 +90,7 @@ class EditorViewModelTest {
     private val now = time.nowMillis()
     private val settings = FakeSettingsStore().apply { load() }
     private val messages = DefaultAppMessages()
+    private val marker = DefaultNewNoteMarker()
     private val entries = mutableListOf<EntryOwner>()
     private lateinit var holder: DatabaseHolder
     private lateinit var rows: TestRows
@@ -276,17 +283,55 @@ class EditorViewModelTest {
         assertEquals(0, handle.get<Int>(EditorSavedState.KEY_EPOCH))
     }
 
+    @Test
+    fun aNoteInsertedWhenAPickerOpened_thenUnlinked_isMarkedOnceItsUnlinkingSaveReturned() = runBlocking<Unit> {
+        val alice = rows.person("Alice", createdAt = now)
+        val reached = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var holding = false
+        val held = object : NoteRepository by notes {
+            override suspend fun save(draft: NoteDraft): AppResult<SaveResult> {
+                if (holding) {
+                    reached.complete(Unit)
+                    release.await()
+                }
+                return notes.save(draft)
+            }
+        }
+        marker.expect(1)
+        val entry = newEntry()
+        val vm = loaded(EditorKey(null, visit = 1, prefill = NotePrefill(personId = alice)), entry, held)
+        onMain { vm.content.setTextAndPlaceCursorAtEnd("Call Alice") }
+        leave(vm) // a picker covered the editor: the first insert
+        val noteId = count("SELECT id FROM notes")
+        assertNull("no mark after the insert", marker.noteId.value)
+        val chip = vm.uiState.first { it.noteId == noteId }.people.single()
+
+        onMain { vm.removeLink(EntityKind.Person, chip) }
+        holding = true
+        onMain { vm.saveOnLeave() } // the save of the pop
+        withTimeout(TIMEOUT) { reached.await() }
+        onMain { entry.viewModelStore.clear() }
+        assertNull("none while the unlinking save is held", marker.noteId.value)
+        release.complete(Unit)
+        settle()
+
+        assertEquals(noteId, marker.noteId.value)
+        assertEquals(0L, count("SELECT COUNT(*) FROM note_persons WHERE note_id = ?", noteId))
+    }
+
     /** A new entry, or one recreated from the [restored] state of an earlier one; cleared after the test. */
     private suspend fun newEntry(restored: Bundle? = null): EntryOwner = onMain { EntryOwner(restored).also(entries::add) }
 
     /** An editor of [key] in [entry], built through `createSavedStateHandle()` as the app builds it, once loaded. */
-    private suspend fun loaded(key: EditorKey, entry: EntryOwner? = null): EditorViewModel {
+    private suspend fun loaded(key: EditorKey, entry: EntryOwner? = null, repository: NoteRepository = notes): EditorViewModel {
         val owner = entry ?: newEntry()
         val factory = viewModelFactory {
             initializer {
                 val handle = createSavedStateHandle().also { owner.handle = it }
                 EditorViewModel(
-                    key, handle, notes, entities, settings, messages, time, applicationScope.scope, AppDispatchers.production(),
+                    key, handle, repository, entities, settings, messages, marker, time, applicationScope.scope,
+                    AppDispatchers.production(),
                 )
             }
         }

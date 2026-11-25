@@ -3,6 +3,10 @@ package com.doro.organizer.ui.editor
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import com.doro.organizer.R
 import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.messages.DefaultAppMessages
@@ -17,6 +21,7 @@ import com.doro.organizer.model.NewEntity
 import com.doro.organizer.settings.SettingsStore
 import com.doro.organizer.testing.FakeAppTime
 import com.doro.organizer.testing.FakeSettingsStore
+import com.doro.organizer.ui.DefaultNewNoteMarker
 import com.doro.organizer.ui.common.PickerResult
 import com.doro.organizer.ui.navigation.EditorKey
 import com.doro.organizer.ui.navigation.NotePrefill
@@ -44,8 +49,9 @@ import org.junit.Test
  * insert of a note and of its created entities across saves and across a process death (`draftKey` record), the
  * Save action, the cut on load by either limit of the content cap and the notice of each limit, on load and on input
  * (testing.md I-08, JVM part; Q14), a load that undo never reverts (DEC-104), a vanished note, an older data epoch,
- * the deletes, the checkbox of a saved note, the chip names and the picker results. The same rules over the real
- * repositories are `EditorViewModelTest` (I-36).
+ * the deletes, the checkbox of a saved note, the chip names and the picker results, and the mark of a new note when the
+ * editor's entry is cleared (I-59 (g), DEC-110). The same rules over the real repositories are `EditorViewModelTest`
+ * (I-36).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class EditorViewModelRulesTest {
@@ -54,6 +60,7 @@ class EditorViewModelRulesTest {
     private val notes = EditorNotes(entities)
     private val settings = FakeSettingsStore().apply { load() }
     private val messages = DefaultAppMessages()
+    private val marker = DefaultNewNoteMarker()
 
     @Before
     fun setUp() = Dispatchers.setMain(dispatcher)
@@ -477,6 +484,126 @@ class EditorViewModelRulesTest {
         assertEquals(emptyList<String>(), handle.get<ArrayList<String>>(EditorSavedState.KEY_NEW_PROJECT_KEYS))
     }
 
+    // The mark of a note just created (DEC-110; testing.md I-59 (g)).
+
+    @Test
+    fun aNewNotesEditor_marksTheInsertedNote_whenCleared_afterTheRunningSave_andBeforeTheRecordIsDropped() =
+        runTest(dispatcher) {
+            val marksAtDrops = mutableListOf<Long?>()
+            val recording = object : SettingsStore by settings {
+                override suspend fun dropDraftInsert(draftKey: String) {
+                    marksAtDrops += marker.noteId.value
+                    this@EditorViewModelRulesTest.settings.dropDraftInsert(draftKey)
+                }
+            }
+            marker.expect(1)
+            val entry = entry(EditorKey(null, visit = 1), settingsStore = recording)
+            entry.vm.content.setTextAndPlaceCursorAtEnd("Call Bob")
+            entry.vm.saveOnLeave()
+            val noteId = notes.notes.keys.single()
+            assertNull("no mark while the entry lives", marker.noteId.value)
+            val gate = CompletableDeferred<Unit>().also { notes.saveGate = it }
+            entry.vm.content.setTextAndPlaceCursorAtEnd("Call Bob today")
+            entry.vm.saveOnLeave()
+
+            entry.store.clear()
+            assertNull("not before the running save returned", marker.noteId.value)
+            gate.complete(Unit)
+
+            assertEquals(noteId, marker.noteId.value)
+            assertEquals("Call Bob today", notes.notes.getValue(noteId).content)
+            assertEquals("marked before its record is dropped", noteId, marksAtDrops.last())
+        }
+
+    @Test
+    fun aRestoredDraftThatAdoptedItsInsert_isMarked() = runTest(dispatcher) {
+        val handle = SavedStateHandle()
+        val before = editor(EditorKey(null, visit = 1), handle)
+        before.setDate(20_774)
+        val captured = SavedStateHandle(handle.keys().associateWith { handle.get<Any?>(it) })
+        before.saveOnLeave()
+        marker.expect(1)
+
+        entry(EditorKey(null, visit = 1), captured).store.clear()
+
+        assertEquals(notes.notes.keys.single(), marker.noteId.value)
+    }
+
+    @Test
+    fun aFailedLastSave_stillMarksTheInsertedNote() = runTest(dispatcher) {
+        marker.expect(1)
+        val entry = entry(EditorKey(null, visit = 1))
+        entry.vm.content.setTextAndPlaceCursorAtEnd("x")
+        entry.vm.saveOnLeave()
+        notes.saveError = AppError.StorageFull
+        entry.vm.content.setTextAndPlaceCursorAtEnd("xy")
+        entry.vm.saveOnLeave()
+
+        entry.store.clear()
+
+        assertEquals(notes.notes.keys.single(), marker.noteId.value)
+    }
+
+    @Test
+    fun anExistingNote_isNeverMarked() = assertNoMark(EditorKey(7, visit = 1)) { vm ->
+        vm.content.setTextAndPlaceCursorAtEnd("edited")
+        vm.saveOnLeave()
+    }
+
+    @Test
+    fun aDraftNeverInserted_isNeverMarked() = assertNoMark(EditorKey(null, visit = 1)) { vm ->
+        vm.saveOnLeave()
+    }
+
+    @Test
+    fun aNoteDeletedInTheEditor_isNeverMarked() = assertNoMark(EditorKey(null, visit = 1)) { vm ->
+        vm.content.setTextAndPlaceCursorAtEnd("x")
+        vm.saveOnLeave()
+        vm.deleteNote()
+    }
+
+    @Test
+    fun aNoteGoneMeanwhile_isNeverMarked() = assertNoMark(EditorKey(null, visit = 1)) { vm ->
+        vm.content.setTextAndPlaceCursorAtEnd("x")
+        vm.saveOnLeave()
+        notes.notes.clear()
+        vm.content.setTextAndPlaceCursorAtEnd("xy")
+        vm.saveOnLeave()
+    }
+
+    @Test
+    fun aDraftOfAnOlderDataEpoch_isNeverMarked() = assertNoMark(EditorKey(null, visit = 1)) { vm ->
+        vm.content.setTextAndPlaceCursorAtEnd("x")
+        vm.saveOnLeave()
+        settings.onDataReplaced()
+    }
+
+    /** An editor of [key] whose [change] leaves no mark once its entry is cleared, with its `visit` expected. */
+    private fun assertNoMark(key: EditorKey, change: suspend (EditorViewModel) -> Unit) = runTest(dispatcher) {
+        notes.notes[7] = StoredNote("stored")
+        marker.expect(key.visit)
+        val entry = entry(key)
+        collect(entry.vm)
+        change(entry.vm)
+
+        entry.store.clear()
+
+        assertNull(marker.noteId.value)
+    }
+
+    /** An editor built in its own [store], as a `NavEntry` holds it; clearing the store clears the editor. */
+    private class Entry(val vm: EditorViewModel, val store: ViewModelStore)
+
+    private fun TestScope.entry(
+        key: EditorKey,
+        handle: SavedStateHandle = SavedStateHandle(),
+        settingsStore: SettingsStore = settings,
+    ): Entry {
+        val store = ViewModelStore()
+        val factory = viewModelFactory { initializer { this@entry.editor(key, handle, settingsStore) } }
+        return Entry(ViewModelProvider.create(store, factory)[EditorViewModel::class], store)
+    }
+
     private fun TestScope.collect(vm: EditorViewModel) {
         backgroundScope.launch { vm.uiState.collect {} }
     }
@@ -492,6 +619,7 @@ class EditorViewModelRulesTest {
         entities,
         settingsStore,
         messages,
+        marker,
         FakeAppTime(),
         backgroundScope,
         AppDispatchers(dispatcher, dispatcher, dispatcher),

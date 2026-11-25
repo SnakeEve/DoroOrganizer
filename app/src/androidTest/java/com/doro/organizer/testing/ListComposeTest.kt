@@ -1,5 +1,6 @@
 package com.doro.organizer.testing
 
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
@@ -9,6 +10,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import com.doro.organizer.data.HolderState
 import com.doro.organizer.model.KeyMode
@@ -58,6 +60,26 @@ abstract class ListComposeTest : GateComposeTest() {
 
     /** The ids of [ids] sorted by where their rows are on screen, top first. */
     fun onScreenOrder(vararg ids: Long): List<Long> = ids.sortedBy { ui.boundsOf(rowTag(it)).top }
+
+    /**
+     * The row at the top of the list (testing.md I-58): among the displayed rows whose bottom is below the top of
+     * `note_list`, the one with the smallest top.
+     */
+    fun topRow(): TopRow {
+        val list = ui.boundsOf(NOTE_LIST)
+        return compose.onAllNodes(isNoteRow).fetchSemanticsNodes()
+            .map { TopRow(it.rowId(), it.boundsInRoot.top) to it.boundsInRoot.bottom }
+            .filter { (row, bottom) -> bottom > list.top && row.top < list.bottom }
+            .minByOrNull { (row, _) -> row.top }
+            ?.first
+            ?: error("no row is displayed")
+    }
+
+    /** Scrolls `note_list` to the item at [index] (`performScrollToIndex`), then lets the app settle. */
+    fun scrollTo(index: Int) {
+        compose.onNodeWithTag(NOTE_LIST).performScrollToIndex(index)
+        compose.waitForIdle()
+    }
 
     /** What TalkBack reads for the row of [id] (ui.md § 12.1). */
     fun rowDescription(id: Long): String = descriptionOf(rowTag(id))
@@ -110,8 +132,24 @@ abstract class ListComposeTest : GateComposeTest() {
         compose.onNodeWithTag(tag, useUnmergedTree = unmerged).fetchSemanticsNode().config
             .getOrNull(SemanticsProperties.ContentDescription).orEmpty().joinToString()
 
+    /** The row of note [id] whose top is at [top] px in the root; equal within 1 px (testing.md I-58). */
+    class TopRow(val id: Long, val top: Float) {
+        fun samePlaceAs(other: TopRow) = id == other.id && kotlin.math.abs(top - other.top) <= 1f
+
+        override fun toString() = "TopRow(id=$id, top=$top)"
+    }
+
+    private fun SemanticsNode.rowId(): Long =
+        config.getOrNull(SemanticsProperties.TestTag).orEmpty().removePrefix(ROW_TAG_PREFIX).toLong()
+
     companion object {
-        fun rowTag(id: Long) = "note_row_$id"
+        const val NOTE_LIST = "note_list"
+        private const val ROW_TAG_PREFIX = "note_row_"
+        private val isNoteRow = SemanticsMatcher("is a note row") {
+            it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith(ROW_TAG_PREFIX) == true
+        }
+
+        fun rowTag(id: Long) = "$ROW_TAG_PREFIX$id"
 
         fun checkboxTag(id: Long) = "note_checkbox_$id"
 

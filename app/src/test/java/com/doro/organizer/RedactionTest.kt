@@ -429,6 +429,7 @@ class RedactionTest {
             people = listOf(SENTINEL),
             projects = listOf(SENTINEL),
             orphan = false,
+            orderedAt = 0,
         )
         val chip = FilterChipUi(FilterDimension.Person, ChipValue.Entity(3, SENTINEL))
         val state = NoteListUiState(
@@ -436,6 +437,8 @@ class RedactionTest {
             loading = false,
             primary = Primary.Entity(2, SENTINEL),
             rows = listOf(row),
+            rowsRead = 0,
+            newNoteMarked = false,
             today = LocalDate.of(2026, 11, 17),
             chips = listOf(chip),
             filtersActive = true,
