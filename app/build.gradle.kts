@@ -32,8 +32,10 @@ android {
         // DEC-01: explicit, AGP 9 otherwise defaults it to compileSdk. The override exists only for the optional
         // target36-canary job (testing.md § 9).
         targetSdk = providers.gradleProperty("targetSdkOverride").map(String::toInt).getOrElse(35)
-        versionCode = 1
-        versionName = "0.1.0"
+        // DEC-115: versionName by the owner's versioning rules, counted from T1; versionCode +1 for every build
+        // installed on the owner's phone.
+        versionCode = 2
+        versionName = "2.6.0"
         // qa runs black-box @ReleaseSmoke tests against R8-renamed classes, so it cannot load DoroTestRunner's app.
         testInstrumentationRunner = if (testType == "qa") {
             "androidx.test.runner.AndroidJUnitRunner"
