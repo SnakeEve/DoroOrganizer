@@ -141,7 +141,8 @@ class PerspectiveQueryPerfTest {
         }
 
         perf.measure("Picker options: no co-links", budget = null) { db.personDao().observeOptions().first() }
-        val ids900 = model.projects.map { it.id } + (1L..800L).map { MISSING_ID + it }
+        // An index loop, not a Long range: the app does not keep LongIterator.nextLong (DEC-103, BL-11).
+        val ids900 = model.projects.map { it.id } + List(800) { MISSING_ID + 1 + it }
         assertEquals(900, ids900.toSet().size)
         assertEquals(peopleOf(ids900), db.personDao().observeCoLinkedOptions(ids900, null).first().flaggedIds())
         perf.measure("Picker options: 900 ids", budget = null) { db.personDao().observeCoLinkedOptions(ids900, null).first() }
