@@ -31,6 +31,10 @@ internal val DIALOG_STRINGS: List<TableString> = listOf(
     TableString.Single(R.string.action_remove_date, "Remove date"),
     TableString.Single(R.string.dialog_delete_person_title, "Delete person \"%1\$s\"?"),
     TableString.Single(R.string.dialog_delete_project_title, "Delete project \"%1\$s\"?"),
+    TableString.Single(R.string.dialog_rename_person_title, "Rename person"),
+    TableString.Single(R.string.dialog_rename_project_title, "Rename project"),
+    TableString.Single(R.string.rename_name_label, "Name"),
+    TableString.Single(R.string.action_rename, "Rename"),
     TableString.Single(R.string.impact_person_not_linked, "This person is not linked to any note."),
     TableString.Single(R.string.impact_project_not_linked, "This project is not linked to any note."),
     TableString.Plural(

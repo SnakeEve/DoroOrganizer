@@ -115,4 +115,17 @@ sealed interface ListDialog {
 
     /** The batch delete confirmation of selection mode (ui.md § 8.3). */
     data object BatchDelete : ListDialog
+
+    /** "Rename…" of the overflow menu of Individual and Project, for the entity [id] the tab shows (ui.md § 8.17). */
+    data class Rename(val id: Long) : ListDialog {
+        override fun toString() = "Rename(id=$id)"
+    }
+
+    /**
+     * "Delete…" of the overflow menu of Individual and Project (ui.md § 8.4, DEC-113): the impact of deleting the entity
+     * [id] the tab shows, [n] linked notes, [m] of them would become orphans.
+     */
+    data class DeleteEntity(val id: Long, val n: Int, val m: Int) : ListDialog {
+        override fun toString() = "DeleteEntity(id=$id, n=$n, m=$m)"
+    }
 }

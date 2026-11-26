@@ -11,9 +11,11 @@ import com.doro.organizer.core.messages.UiText
 import com.doro.organizer.core.result.AppError
 import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.model.DateFilter
+import com.doro.organizer.model.DeleteImpact
 import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.EntityRef
 import com.doro.organizer.model.EpochDays
+import com.doro.organizer.model.MAX_NAME_CHARS
 import com.doro.organizer.model.NoteQuery
 import com.doro.organizer.model.Perspective
 import com.doro.organizer.model.SearchText
@@ -673,6 +675,471 @@ class NoteListViewModelRulesTest {
 
         assertEquals(row, list.vm.takeKeptRow())
         assertNull(list.vm.takeKeptRow())
+    }
+
+    // Rename and delete of the shown person or project (ui.md § 4.2, § 8.4, § 8.17; DEC-113; testing.md I-65).
+
+    @Test
+    fun openRename_copiesTheShownName_andOpensTheRenameDialogOfItsId() = runTest {
+        val list = showAlice()
+
+        list.vm.openRename()
+        runCurrent()
+
+        assertEquals(ListDialog.Rename(ALICE), list.state.dialog)
+        assertEquals("Alice", list.vm.renameText)
+        assertEquals("Rename:$ALICE", list.handle[NoteListViewModel.KEY_LIST_DIALOG])
+        assertEquals("Alice", list.handle[NoteListViewModel.KEY_RENAME_TEXT])
+    }
+
+    @Test
+    fun openRename_cutsALongerShownNameTo200Units_soTheRenamePassesThose200() = runTest {
+        val long = "a".repeat(MAX_NAME_CHARS + 30) // a restored backup can hold one (DEC-113 (2))
+        val list = showAlice(name = long)
+
+        list.vm.openRename()
+        list.vm.rename(ALICE)
+        runCurrent()
+
+        assertEquals(listOf(EntityCall.Rename(EntityKind.Person, ALICE, long.take(MAX_NAME_CHARS))), entities.calls)
+    }
+
+    @Test
+    fun theRenameText_isCappedAt200Units_withASurrogatePairKeptWhole() = runTest {
+        val list = showAlice()
+        list.vm.openRename()
+
+        list.vm.onRenameTextChange("b".repeat(MAX_NAME_CHARS - 1) + "😀")
+
+        assertEquals("b".repeat(MAX_NAME_CHARS - 1), list.vm.renameText)
+        assertEquals("b".repeat(MAX_NAME_CHARS - 1), list.handle[NoteListViewModel.KEY_RENAME_TEXT])
+        list.vm.onRenameTextChange("c".repeat(250))
+        assertEquals("c".repeat(MAX_NAME_CHARS), list.vm.renameText)
+    }
+
+    @Test
+    fun rename_callsTheRepositoryWithTheDialogsIdAndText_closesTheDialog_andRemovesTheText() = runTest {
+        val list = showAlice()
+        list.vm.openRename()
+        list.vm.onRenameTextChange("  Alicia ")
+
+        list.vm.rename(ALICE)
+        assertNull("closed at once, before the write returns", list.handle[NoteListViewModel.KEY_LIST_DIALOG])
+        runCurrent()
+        assertEquals(listOf(EntityCall.Rename(EntityKind.Person, ALICE, "  Alicia ")), entities.calls)
+        assertNull(list.state.dialog)
+        assertEquals("", list.vm.renameText)
+        assertFalse(list.handle.contains(NoteListViewModel.KEY_RENAME_TEXT))
+        assertNull(list.handle[NoteListViewModel.KEY_LIST_DIALOG])
+    }
+
+    @Test
+    fun aSecondConfirm_afterTheDialogClosed_writesNothing_andPostsNothing() = runTest {
+        val list = showAlice()
+        list.vm.openRename()
+        list.vm.onRenameTextChange("Alicia")
+
+        list.vm.rename(ALICE)
+        list.vm.rename(ALICE)
+        runCurrent()
+
+        assertEquals(1, entities.calls.size)
+        val shown = list.state.message
+        list.vm.onMessageShown(checkNotNull(shown).id)
+        list.vm.rename(ALICE)
+        runCurrent()
+        assertEquals(1, entities.calls.size)
+        assertNull(list.state.message)
+    }
+
+    @Test
+    fun aRenameOfABlankText_callsNothing_andKeepsTheDialog() = runTest {
+        val list = showAlice()
+        list.vm.openRename()
+        list.vm.onRenameTextChange("  	")
+
+        list.vm.rename(ALICE) // Done and Enter in the frame of the edit (DEC-113 (2))
+        runCurrent()
+
+        assertEquals(emptyList<EntityCall>(), entities.calls)
+        assertEquals(ListDialog.Rename(ALICE), list.state.dialog)
+        assertEquals("  	", list.vm.renameText)
+        assertNull(list.state.message)
+    }
+
+    @Test
+    fun aRenameOfAnotherId_thanTheOpenDialogs_doesNothing() = runTest {
+        val list = showAlice()
+        list.vm.openRename()
+
+        list.vm.rename(BOB)
+        runCurrent()
+
+        assertEquals(emptyList<EntityCall>(), entities.calls)
+        assertEquals(ListDialog.Rename(ALICE), list.state.dialog)
+    }
+
+    @Test
+    fun aWrittenName_postsPersonRenamed_anUnchangedNameNothing_andAFailureItsText() = runTest {
+        val list = showAlice()
+
+        list.vm.openRename()
+        list.vm.onRenameTextChange("Alicia")
+        list.vm.rename(ALICE)
+        runCurrent()
+        assertEquals(UiText.Res(R.string.person_renamed), list.state.message?.text)
+        assertEquals(false, list.state.message?.isError)
+        assertEquals(Primary.Entity(ALICE, "Alicia"), list.state.primary)
+        list.vm.onMessageShown(checkNotNull(list.state.message).id)
+
+        list.vm.openRename()
+        list.vm.rename(ALICE) // "Alicia" again: Ok(false)
+        runCurrent()
+        assertNull(list.state.message)
+
+        entities.renameResult = AppResult.Err(AppError.StorageFull)
+        list.vm.openRename()
+        list.vm.onRenameTextChange("Ali")
+        list.vm.rename(ALICE)
+        runCurrent()
+        assertEquals(UiText.Error(AppError.StorageFull), list.state.message?.text)
+        assertEquals(true, list.state.message?.isError)
+        assertEquals("the old name stays", Primary.Entity(ALICE, "Alicia"), list.state.primary)
+    }
+
+    @Test
+    fun aProjectRename_postsProjectRenamed() = runTest {
+        entities.put(EntityKind.Project, ALPHA, "Alpha")
+        settings.setRemembered(EntityKind.Project, ALPHA)
+        val list = open(Perspective.Project)
+
+        list.vm.openRename()
+        list.vm.onRenameTextChange("Apollo")
+        list.vm.rename(ALPHA)
+        runCurrent()
+
+        assertEquals(listOf(EntityCall.Rename(EntityKind.Project, ALPHA, "Apollo")), entities.calls)
+        assertEquals(UiText.Res(R.string.project_renamed), list.state.message?.text)
+    }
+
+    @Test
+    fun openDeleteShown_readsTheImpactIntoTheDeleteDialogOfTheShownEntity() = runTest {
+        entities.impact = DeleteImpact(n = 32, m = 30)
+        val list = showAlice()
+
+        list.vm.openDeleteShown()
+        runCurrent()
+
+        assertEquals(listOf(EntityCall.Impact(EntityKind.Person, ALICE)), entities.calls)
+        assertEquals(ListDialog.DeleteEntity(ALICE, 32, 30), list.state.dialog)
+        assertEquals("DeleteEntity:$ALICE", list.handle[NoteListViewModel.KEY_LIST_DIALOG])
+    }
+
+    @Test
+    fun openDeleteShown_opensNothing_forAnEntityAlreadyGone() = runTest {
+        val list = showAlice()
+        val gate = CompletableDeferred<Unit>()
+        entities.impactGate = gate
+        list.vm.openDeleteShown()
+        runCurrent()
+        entities.delete(EntityKind.Person, ALICE)
+        gate.complete(Unit)
+        runCurrent()
+        assertNull("gone during the read", list.state.dialog)
+
+        val again = showBob()
+        entities.impactGate = null
+        entities.delete(EntityKind.Person, BOB)
+        again.vm.openDeleteShown()
+        runCurrent()
+        assertNull("gone before the read", again.state.dialog)
+        assertFalse("no impact read for an entity already gone", EntityCall.Impact(EntityKind.Person, BOB) in entities.calls)
+    }
+
+    @Test
+    fun anImpactError_showsItsText_andOpensNothing() = runTest {
+        entities.impactError = AppError.DatabaseUnavailable
+        val list = showAlice()
+
+        list.vm.openDeleteShown()
+        runCurrent()
+
+        assertNull(list.state.dialog)
+        assertEquals(UiText.Error(AppError.DatabaseUnavailable), list.state.message?.text)
+    }
+
+    @Test
+    fun anImpactRead_thatReturnsAfterAnotherEntityIsShown_opensNothing() = runTest {
+        entities.put(EntityKind.Person, BOB, "Bob")
+        val list = showAlice()
+        val gate = CompletableDeferred<Unit>()
+        entities.impactGate = gate
+        list.vm.openDeleteShown()
+        runCurrent()
+
+        list.vm.choosePrimary(BOB)
+        runCurrent()
+        assertEquals(Primary.Entity(BOB, "Bob"), list.state.primary)
+        gate.complete(Unit)
+        runCurrent()
+
+        assertNull(list.state.dialog)
+    }
+
+    @Test
+    fun anImpactRead_thatReturnsAfterThePickerBodyIsShown_opensNothing() = runTest {
+        val list = showAlice()
+        val gate = CompletableDeferred<Unit>()
+        entities.impactGate = gate
+        list.vm.openDeleteShown()
+        runCurrent()
+
+        list.vm.clearPrimary()
+        runCurrent()
+        assertEquals(Primary.None, list.state.primary)
+        gate.complete(Unit)
+        runCurrent()
+
+        assertNull(list.state.dialog)
+    }
+
+    @Test
+    fun anImpactRead_opensNothing_whileAnotherDialogIsOpen() = runTest {
+        val list = showAlice()
+        val gate = CompletableDeferred<Unit>()
+        entities.impactGate = gate
+        list.vm.openDeleteShown()
+        runCurrent()
+
+        list.vm.openDateFilter()
+        gate.complete(Unit)
+        runCurrent()
+
+        assertEquals(ListDialog.DateFilterSheet, list.state.dialog)
+    }
+
+    @Test
+    fun aSecondDeleteTap_whileTheImpactIsRead_opensOneDialog_thatStaysClosedAfterCancel() = runTest {
+        val list = showAlice()
+        val gate = CompletableDeferred<Unit>()
+        entities.impactGate = gate
+
+        list.vm.openDeleteShown()
+        runCurrent()
+        list.vm.openDeleteShown()
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf(EntityCall.Impact(EntityKind.Person, ALICE)), entities.calls)
+        assertEquals(ListDialog.DeleteEntity(ALICE, 0, 0), list.state.dialog)
+
+        list.vm.closeDialog()
+        runCurrent()
+        assertNull(list.state.dialog)
+    }
+
+    @Test
+    fun anImpactRead_thatReturnsAfterAnotherDialogWasOpenedAndCancelled_opensNothing() = runTest {
+        val list = showAlice()
+        val gate = CompletableDeferred<Unit>()
+        entities.impactGate = gate
+        list.vm.openDeleteShown()
+        runCurrent()
+
+        list.vm.openRename()
+        list.vm.closeDialog()
+        gate.complete(Unit)
+        runCurrent()
+
+        assertNull(list.state.dialog)
+        list.vm.openDeleteShown()
+        runCurrent()
+        assertEquals("a new tap reads again", ListDialog.DeleteEntity(ALICE, 0, 0), list.state.dialog)
+    }
+
+    @Test
+    fun deleteShown_deletesTheEntity_postsPersonDeletedOnlyWhenDeleted_andThePickerBodyReturns() = runTest {
+        val list = showAlice()
+        list.vm.openDeleteShown()
+        runCurrent()
+
+        list.vm.deleteShown(ALICE)
+        assertNull("closed at once", list.handle[NoteListViewModel.KEY_LIST_DIALOG])
+        runCurrent()
+
+        assertTrue(EntityCall.Delete(EntityKind.Person, ALICE) in entities.calls)
+        assertEquals(UiText.Res(R.string.person_deleted), list.state.message?.text)
+        assertEquals(Primary.None, list.state.primary)
+        assertNull("the probe forgets the remembered id", settings.snapshot().rememberedPersonId)
+        assertNull(list.state.dialog)
+    }
+
+    @Test
+    fun deleteShown_ofAnEntityGoneMeanwhile_postsNothing_andAFailureShowsItsText() = runTest {
+        entities.put(EntityKind.Person, BOB, "Bob")
+        val list = showAlice()
+        list.vm.openDeleteShown()
+        runCurrent()
+        entities.deleteError = AppError.StorageFull
+
+        list.vm.deleteShown(ALICE)
+        runCurrent()
+        assertEquals(UiText.Error(AppError.StorageFull), list.state.message?.text)
+        assertEquals("kept", Primary.Entity(ALICE, "Alice"), list.state.primary)
+        list.vm.onMessageShown(checkNotNull(list.state.message).id)
+
+        entities.deleteError = null
+        list.vm.openDeleteShown()
+        runCurrent()
+        entities.calls.clear()
+        // Deleted elsewhere after the dialog opened, before the probe noticed: the transaction finds nothing.
+        list.vm.deleteShown(ALICE)
+        entities.delete(EntityKind.Person, ALICE)
+        runCurrent()
+        assertTrue(EntityCall.Delete(EntityKind.Person, ALICE) in entities.calls)
+        assertNull(list.state.message)
+    }
+
+    @Test
+    fun aSecondDeleteConfirm_afterTheDialogClosed_deletesNothing() = runTest {
+        entities.put(EntityKind.Person, BOB, "Bob")
+        val list = showAlice()
+        list.vm.openDeleteShown()
+        runCurrent()
+
+        list.vm.deleteShown(ALICE)
+        list.vm.deleteShown(ALICE)
+        runCurrent()
+
+        assertEquals(1, entities.calls.count { it is EntityCall.Delete })
+        assertEquals(1, list.states.mapNotNull { it.message }.distinctBy { it.id }.size)
+    }
+
+    @Test
+    fun theRenameAndDeleteDialogs_closeWhenAnotherEntityIsShown() = runTest {
+        entities.put(EntityKind.Person, BOB, "Bob")
+        val list = showAlice()
+        list.vm.openRename()
+        list.vm.onRenameTextChange("Alicia")
+
+        list.vm.choosePrimary(BOB)
+        runCurrent()
+
+        assertNull(list.state.dialog)
+        assertFalse(list.handle.contains(NoteListViewModel.KEY_RENAME_TEXT))
+        list.vm.openDeleteShown()
+        runCurrent()
+        assertEquals(ListDialog.DeleteEntity(BOB, 0, 0), list.state.dialog)
+
+        list.vm.choosePrimary(ALICE)
+        runCurrent()
+        assertNull(list.state.dialog)
+    }
+
+    @Test
+    fun theRenameDialog_closesWhenThePickerBodyIsShown() = runTest {
+        val list = showAlice()
+        list.vm.openRename()
+
+        entities.delete(EntityKind.Person, ALICE)
+        runCurrent()
+
+        assertEquals(Primary.None, list.state.primary)
+        assertNull(list.state.dialog)
+        assertEquals("", list.vm.renameText)
+    }
+
+    @Test
+    fun theDeleteDialog_closesWhenThePickerBodyIsShown() = runTest {
+        val list = showAlice()
+        list.vm.openDeleteShown()
+        runCurrent()
+        assertEquals(ListDialog.DeleteEntity(ALICE, 0, 0), list.state.dialog)
+
+        entities.delete(EntityKind.Person, ALICE) // deleted by the editor, or replaced by a restore
+        runCurrent()
+
+        assertEquals(Primary.None, list.state.primary)
+        assertNull(list.state.dialog)
+        assertNull(list.handle[NoteListViewModel.KEY_LIST_DIALOG])
+    }
+
+    @Test
+    fun aRenameKeepsItsDialogs_becauseTheIdStays() = runTest {
+        val list = showAlice()
+        list.vm.openRename()
+
+        entities.put(EntityKind.Person, ALICE, "Alicia") // renamed elsewhere: the same entity
+        runCurrent()
+
+        assertEquals(ListDialog.Rename(ALICE), list.state.dialog)
+    }
+
+    @Test
+    fun aRestoredRenameDialog_keepsItsText() = runTest {
+        val list = showAlice()
+        list.vm.openRename()
+        list.vm.onRenameTextChange("Alicia")
+
+        val restored = open(Perspective.Individual, restoredFrom(list.handle))
+
+        assertEquals(ListDialog.Rename(ALICE), restored.state.dialog)
+        assertEquals("Alicia", restored.vm.renameText)
+    }
+
+    @Test
+    fun aRestoredDeleteDialog_readsItsCountsAgain() = runTest {
+        entities.impact = DeleteImpact(n = 2, m = 1)
+        val list = showAlice()
+        list.vm.openDeleteShown()
+        runCurrent()
+        entities.impact = DeleteImpact(n = 3, m = 2)
+
+        val restored = open(Perspective.Individual, restoredFrom(list.handle))
+
+        assertEquals(ListDialog.DeleteEntity(ALICE, 3, 2), restored.state.dialog)
+        assertEquals(2, entities.calls.count { it == EntityCall.Impact(EntityKind.Person, ALICE) })
+    }
+
+    @Test
+    fun aRestoredDeleteDialog_isClearedUntilItsCountsAreRead_andOpensNothingForAnEntityThatIsNotTheDecidedPrimary() =
+        runTest {
+            entities.put(EntityKind.Person, ALICE, "Alice")
+            entities.put(EntityKind.Person, BOB, "Bob")
+            settings.setRemembered(EntityKind.Person, BOB)
+            val gate = CompletableDeferred<Unit>()
+            entities.impactGate = gate
+
+            val restored = open(Perspective.Individual, handle(NoteListViewModel.KEY_LIST_DIALOG to "DeleteEntity:$ALICE"))
+            assertNull("the key is cleared at once", restored.handle[NoteListViewModel.KEY_LIST_DIALOG])
+            assertEquals(Primary.Entity(BOB, "Bob"), restored.state.primary)
+            assertEquals("Alice exists: her impact is read", listOf(EntityCall.Impact(EntityKind.Person, ALICE)), entities.calls)
+            gate.complete(Unit)
+            runCurrent()
+
+            assertNull(restored.state.dialog)
+        }
+
+    @Test
+    fun aDialogOfAnEntity_restoredInAPerspectiveWithoutOne_isDropped() = runTest {
+        val list = open(Perspective.All, handle(NoteListViewModel.KEY_LIST_DIALOG to "Rename:$ALICE"))
+
+        assertNull(list.state.dialog)
+        assertNull(list.handle[NoteListViewModel.KEY_LIST_DIALOG])
+    }
+
+    /** Individual showing Alice (or [name]), remembered for People. */
+    private suspend fun TestScope.showAlice(name: String = "Alice"): Watched {
+        entities.put(EntityKind.Person, ALICE, name)
+        settings.setRemembered(EntityKind.Person, ALICE)
+        return open(Perspective.Individual).also { assertEquals(Primary.Entity(ALICE, name), it.state.primary) }
+    }
+
+    /** Individual showing Bob, remembered for People. */
+    private suspend fun TestScope.showBob(): Watched {
+        entities.put(EntityKind.Person, BOB, "Bob")
+        settings.setRemembered(EntityKind.Person, BOB)
+        return open(Perspective.Individual).also { assertEquals(Primary.Entity(BOB, "Bob"), it.state.primary) }
     }
 
     /** A collected ViewModel and every state it emitted. */

@@ -125,6 +125,17 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
     val pickerFocus = remember { FocusRequester() }
     // Not saveable: a bar restored after a process death reopens without focus or keyboard (ui.md § 3.3).
     var focusSearch by remember { mutableStateOf(false) }
+    // The same one-shot request for the rename field (ui.md § 8.17).
+    var focusRename by remember { mutableStateOf(false) }
+    val entityMenu = remember(vm) {
+        EntityMenuActions(
+            onRename = {
+                focusRename = true
+                vm.openRename()
+            },
+            onDelete = vm::openDeleteShown,
+        )
+    }
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val pickerShown = spec.primaryKind != null && state.primary == Primary.None
     val title = (state.primary as? Primary.Entity)?.name ?: stringResource(spec.title)
@@ -216,6 +227,7 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
                     },
                     onSettings = { navigator.open(SettingsKey()) },
                     scrollBehavior = scrollBehavior,
+                    entityMenu = entityMenu.takeIf { chosen != null },
                 )
             }
         },
@@ -250,6 +262,18 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
         }
     }
     ListDialogs(state, vm, formats)
+    ShownEntityDialog(
+        state = state,
+        vm = vm,
+        focusRename = focusRename,
+        onRenameFocused = { focusRename = false },
+        onDelete = { id ->
+            // The tab returns to its picker body whole, from its first name, as after "All …" (DEC-113 (5)).
+            checkNotNull(picker).onSearchChange("")
+            pickerListState.requestScrollToItem(0)
+            vm.deleteShown(id)
+        },
+    )
 }
 
 /**
@@ -411,7 +435,10 @@ private fun CalendarContent(
     }
 }
 
-/** The sheet or dialog that [NoteListUiState.dialog] names (ui.md § 3.10); each is composed by this screen. */
+/**
+ * The sheet or dialog that [NoteListUiState.dialog] names (ui.md § 3.10); each is composed by this screen, the rename and
+ * delete dialogs of the shown entity by [ShownEntityDialog].
+ */
 @Composable
 private fun ListDialogs(state: NoteListUiState, vm: NoteListViewModel, formats: DateFormats) {
     when (val dialog = state.dialog) {
@@ -459,6 +486,7 @@ private fun ListDialogs(state: NoteListUiState, vm: NoteListViewModel, formats: 
                 onDismiss = vm::closeDialog,
             )
         }
+        is ListDialog.Rename, is ListDialog.DeleteEntity -> Unit // ShownEntityDialog
     }
 }
 

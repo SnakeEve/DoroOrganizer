@@ -6,7 +6,9 @@ import com.doro.organizer.core.messages.UiText
 import com.doro.organizer.core.result.AppError
 import com.doro.organizer.core.time.AppTime
 import com.doro.organizer.data.maintenance.RestorePreview
+import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.KeyMode
+import com.doro.organizer.ui.common.EntityDeleteDialog
 import com.doro.organizer.ui.common.MessageDialog
 import com.doro.organizer.ui.common.RestoreBackupPasswordDialog
 import com.doro.organizer.ui.common.RestoreCheckingDialog
@@ -15,6 +17,7 @@ import com.doro.organizer.ui.common.RestoreDatabasePasswordDialog
 import com.doro.organizer.ui.gate.EraseDialog
 import com.doro.organizer.ui.gate.PasswordResetDialog
 import com.doro.organizer.ui.gate.StartFreshDialog
+import com.doro.organizer.ui.notes.RenameEntityDialog
 import com.doro.organizer.ui.settings.BackupOfferDialog
 import com.doro.organizer.ui.settings.BackupPasswordDialog
 import com.doro.organizer.ui.settings.KeyChangeDialog
@@ -29,8 +32,9 @@ class CatalogDialog(val name: String, val security: Boolean, val content: @Compo
 
 /**
  * Every dialog of ui.md § 8–§ 10 that a test can show alone, each in a typical state: the security dialogs of
- * security.md § 9.4, which hide overlays, then the others. The shell's dialogs need the shell (`visitShellDialogs`),
- * and the list's and the editor's need their screens (`visitListWindows`).
+ * security.md § 9.4, which hide overlays, then the others, the rename and the shared delete dialog of DEC-113 among
+ * them. The shell's dialogs need the shell (`visitShellDialogs`), and the list's and the editor's need their screens
+ * (`visitListWindows`).
  */
 fun dialogCatalog(appTime: AppTime, dispatchers: AppDispatchers): List<CatalogDialog> =
     KeyFlow.entries.map { flow -> CatalogDialog("key change $flow", security = true) { KeyChange(flow, appTime) } } +
@@ -79,6 +83,16 @@ fun dialogCatalog(appTime: AppTime, dispatchers: AppDispatchers): List<CatalogDi
             CatalogDialog("open-source notices", security = false) {
                 OpenSourceNoticesDialog(dispatchers, onClose = {})
             },
+            // Without the one-shot focus request, so no keyboard comes up (DEC-113).
+            CatalogDialog("rename person", security = false) {
+                RenameEntityDialog(
+                    EntityKind.Person, CATALOG_NAME, focusOnStart = false, onFocusedOnStart = {}, onTextChange = {},
+                    onConfirm = {}, onDismiss = {},
+                )
+            },
+            CatalogDialog("delete person", security = false) {
+                EntityDeleteDialog(EntityKind.Person, CATALOG_NAME, n = 12, m = 4, onConfirm = {}, onDismiss = {})
+            },
         )
 
 /** The dialog of [flow] from the mode it starts in; the current password is asked in `PASSWORD` mode. */
@@ -97,3 +111,6 @@ private fun KeyChange(flow: KeyFlow, appTime: AppTime) {
 
 /** Literal copied from ui.md § 11. */
 private const val MESSAGE_TITLE = "Encryption was not changed"
+
+/** The person the rename and delete dialogs show (ui.md § 8.4 example). */
+private const val CATALOG_NAME = "Alice"

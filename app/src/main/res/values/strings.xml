@@ -72,6 +72,14 @@
     <!-- Perspectives and calendar (ui.md § 11.4). -->
     <string name="a11y_change_person">Change person</string>
     <string name="a11y_change_project">Change project</string>
+    <string name="menu_rename_entity">Rename…</string>
+    <string name="menu_delete_entity">Delete…</string>
+    <string name="dialog_rename_person_title">Rename person</string>
+    <string name="dialog_rename_project_title">Rename project</string>
+    <string name="rename_name_label">Name</string>
+    <string name="action_rename">Rename</string>
+    <string name="person_renamed">Person renamed</string>
+    <string name="project_renamed">Project renamed</string>
     <string name="action_today">Today</string>
     <string name="label_today">Today</string>
     <string name="a11y_previous_month">Previous month</string>

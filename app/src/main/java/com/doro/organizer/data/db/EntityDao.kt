@@ -44,4 +44,10 @@ interface EntityDao {
 
     /** Deletes the entity row; returns 1, or 0 when it was gone. */
     suspend fun delete(id: Long): Int
+
+    /**
+     * Writes [name] and `updated_at` = [now] when the entity exists and its name differs (DEC-113); returns 1, or 0
+     * when it is gone or already holds [name].
+     */
+    suspend fun rename(id: Long, name: String, now: Long): Int
 }

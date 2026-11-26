@@ -3,7 +3,9 @@ package com.doro.organizer.testing
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.test.espresso.Espresso.onView
@@ -24,7 +26,7 @@ import org.junit.Assert.assertTrue
  * device runs API 31+, where the request exists. [name] names the dialog in failure messages.
  */
 fun assertFocusedDialogWindow(hidesOverlays: Boolean, name: String = "dialog") {
-    onView(isRoot()).inRoot(allOf(isDialog(), withDecorView(hasWindowFocus()))).check { root, noView ->
+    onFocusedDialog().check { root, noView ->
         if (root == null) throw noView
         val autofill = root.rootView.importantForAutofill
         assertEquals("$name: autofill", View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS, autofill)
@@ -34,6 +36,21 @@ fun assertFocusedDialogWindow(hidesOverlays: Boolean, name: String = "dialog") {
         val expected = hidesOverlays && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         val hidden = checkNotNull(provider).window.attributes.hidesOverlays()
         assertEquals("$name: overlay windows hidden", expected, hidden)
+    }
+}
+
+/**
+ * Asserts that the focused field of the dialog that has focus asks for no personalized learning (testing.md L-25,
+ * DEC-71): the `EditorInfo` that `onCreateInputConnection` fills on the focused view of that dialog's window, as a
+ * keyboard gets it, carries `IME_FLAG_NO_PERSONALIZED_LEARNING`. [name] names the field in failure messages.
+ */
+fun assertFocusedDialogFieldNeverLearns(name: String) {
+    onFocusedDialog().check { root, noView ->
+        if (root == null) throw noView
+        val info = EditorInfo()
+        val connection = root.rootView.findFocus()?.onCreateInputConnection(info)
+        assertNotNull("$name: no focused field with an input connection", connection)
+        assertTrue("$name learns", info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0)
     }
 }
 
@@ -51,6 +68,28 @@ fun assertFocusedMenuWindow(name: String) {
         assertEquals("$name: autofill", View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS, autofill)
     }
 }
+
+/** The root view of the dialog window that has focus, the topmost dialog, as [assertFocusedDialogWindow] finds it. */
+internal fun focusedDialogRoot(): View {
+    var found: View? = null
+    onFocusedDialog().check { root, noView ->
+        if (root == null) throw noView
+        found = root.rootView
+    }
+    return checkNotNull(found)
+}
+
+/**
+ * The window of the dialog whose root view is [root]: the window of the `DialogWindowProvider` that holds its Compose
+ * view, the window `SecureDialogWindow` configures.
+ */
+internal fun dialogWindowOf(root: View): Window {
+    val composeView = checkNotNull(root.findDescendant { it is ViewRootForTest }) { "the dialog has no Compose view" }
+    val provider = checkNotNull(composeView.parent as? DialogWindowProvider) { "the Compose view is not in a dialog" }
+    return provider.window
+}
+
+private fun onFocusedDialog() = onView(isRoot()).inRoot(allOf(isDialog(), withDecorView(hasWindowFocus())))
 
 /**
  * Whether `Window.setHideOverlayWindows(true)` was requested: it sets a private flag with no public getter, which

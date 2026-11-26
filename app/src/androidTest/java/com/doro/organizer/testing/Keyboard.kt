@@ -1,11 +1,14 @@
 package com.doro.organizer.testing
 
 import android.app.Activity
+import android.view.View
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.performImeAction
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.MainActivity
 
 /**
@@ -39,3 +42,38 @@ private fun imeVisibleOn(onActivity: ((MainActivity) -> Unit) -> Unit): Boolean 
 /** Whether the soft keyboard is shown over this activity's window, as its root window insets say. Main thread. */
 private fun Activity.imeVisible(): Boolean =
     ViewCompat.getRootWindowInsets(window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+
+/**
+ * Waits, advancing the Compose clock, until the IME insets of the root view of the focused dialog window
+ * ([focusedDialogRoot]) say the soft keyboard is [shown], or hidden: the dialog's own window, whose insets say
+ * whether the keyboard covers it.
+ */
+internal fun ComposeTestRule.awaitDialogIme(shown: Boolean) {
+    val root = focusedDialogRoot()
+    val condition = "the soft keyboard is ${if (shown) "shown" else "hidden"} on the dialog"
+    waitUntil(condition, GateUi.TIMEOUT_MS) { imeVisibleOn(root) == shown }
+}
+
+/**
+ * Hides the soft keyboard of the focused dialog window without the field's IME action: the rename dialog's Done
+ * confirms the rename (DEC-113), so [closeKeyboard] would rename. It waits until the keyboard is shown on the dialog,
+ * hides it through `WindowInsetsControllerCompat` on the window of the dialog's `DialogWindowProvider`, and waits until
+ * it is gone; the field keeps its focus.
+ */
+internal fun ComposeTestRule.hideDialogKeyboard() {
+    awaitDialogIme(shown = true)
+    val root = focusedDialogRoot()
+    InstrumentationRegistry.getInstrumentation().runOnMainSync {
+        WindowCompat.getInsetsController(dialogWindowOf(root), root).hide(WindowInsetsCompat.Type.ime())
+    }
+    awaitDialogIme(shown = false)
+}
+
+/** Whether the soft keyboard is shown over [view]'s window, as its root window insets say. */
+private fun imeVisibleOn(view: View): Boolean {
+    var visible = false
+    InstrumentationRegistry.getInstrumentation().runOnMainSync {
+        visible = ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+    }
+    return visible
+}

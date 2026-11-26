@@ -27,7 +27,6 @@ import com.doro.organizer.testing.TestRows
 import com.doro.organizer.testing.draft
 import com.doro.organizer.testing.pickerRowTag
 import com.doro.organizer.testing.saved
-import kotlin.math.abs
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -284,18 +283,6 @@ class AllEntitiesUiTest : ListComposeTest() {
     private fun assertPlainTitle(title: String, tab: Perspective) {
         compose.onNode(hasText(title) and !hasTestTag("tab_${tab.name}")).assertIsDisplayed()
         assertEquals("a title button", 0, compose.onAllNodes(titleButton(title)).fetchSemanticsNodes().size)
-    }
-
-    /**
-     * The row of entity [id] is the picker list's first, at its top (1 px tolerance): its top as laid out, which the
-     * list does not clip, so a row partly scrolled off does not pass.
-     */
-    private fun assertTopPickerRow(id: Long) {
-        val list = compose.onNode(hasScrollToKeyAction()).fetchSemanticsNode().boundsInRoot
-        val node = compose.onAllNodesWithTag(pickerRowTag(id)).fetchSemanticsNodes().singleOrNull()
-        assertTrue("the row of $id is not composed: the list shows other names", node != null)
-        val row = checkNotNull(node).positionInRoot.y
-        assertTrue("$row at the top of $list", abs(row - list.top) <= 1f)
     }
 
     /** Waits until the picker list holds the item of key [key] (its `IndexForKey` semantics), on screen or not. */

@@ -45,8 +45,8 @@ import org.junit.runner.RunWith
 /**
  * `NoteListViewModel` against the real repositories (architecture.md § Dependency injection, Tests): its
  * `SavedStateHandle` keys (ui.md § 3.10) survive a `Parcel` round trip and recreate equal state, a restored selection
- * pruned to the first emission (testing.md I-38); a deleted filter entity clears that dimension in every perspective
- * that used it (I-42 (d)). The rules that need no
+ * pruned to the first emission (testing.md I-38), the rename and delete dialogs of the shown entity too (I-65); a
+ * deleted filter entity clears that dimension in every perspective that used it (I-42 (d)). The rules that need no
  * database are `NoteListViewModelRulesTest` on the JVM.
  */
 @RunWith(AndroidJUnit4::class)
@@ -141,6 +141,41 @@ class NoteListViewModelTest {
         assertEquals(2, parcelled.get<Int>(NoteListViewModel.KEY_HANDLED_LEAVES))
         onMain { restoredVm.onTabLeft(2) } // the restored count is handled: the selection stays
         assertArrayEquals(longArrayOf(a, b), parcelled.get<LongArray>(NoteListViewModel.KEY_SELECTION)?.sortedArray())
+    }
+
+    /** I-65 (DEC-113 (6)): the rename dialog keeps its text; the delete dialog keeps its id and reads its counts again. */
+    @Test
+    fun entityDialogs_surviveAParcelRoundTrip_andARestoredDeleteDialogReadsItsCountsAgain() = runBlocking<Unit> {
+        val alice = rows.person("Alice", now)
+        val apollo = rows.project("Apollo", now)
+        rows.linkPerson(rows.note("one", createdAt = now), alice)
+        settings.setRemembered(EntityKind.Person, alice)
+        settings.setRemembered(EntityKind.Project, apollo)
+        val people = SavedStateHandle()
+        val projects = SavedStateHandle()
+        val peopleVm = viewModel(Perspective.Individual, people)
+        val projectsVm = viewModel(Perspective.Project, projects)
+        peopleVm.awaitState { it.primary == Primary.Entity(alice, "Alice") }
+        projectsVm.awaitState { it.primary == Primary.Entity(apollo, "Apollo") }
+        onMain {
+            peopleVm.openRename()
+            peopleVm.onRenameTextChange("Alicia")
+            projectsVm.openDeleteShown()
+        }
+        projectsVm.awaitState { it.dialog == ListDialog.DeleteEntity(apollo, 0, 0) }
+        val parcelledPeople = people.parcelled()
+        val parcelledProjects = projects.parcelled()
+        assertEquals("DeleteEntity:$apollo", parcelledProjects.get<String>(NoteListViewModel.KEY_LIST_DIALOG))
+        rows.linkProject(rows.note("two", createdAt = now), apollo)
+
+        val restoredPeopleVm = viewModel(Perspective.Individual, parcelledPeople, key = "restored-people")
+        val restoredPeople = restoredPeopleVm.awaitState { it.primary == Primary.Entity(alice, "Alice") }
+        val restoredProjects = viewModel(Perspective.Project, parcelledProjects, key = "restored-projects")
+            .awaitState { it.dialog is ListDialog.DeleteEntity }
+
+        assertEquals(ListDialog.Rename(alice), restoredPeople.dialog)
+        assertEquals("Alicia", restoredPeopleVm.renameText)
+        assertEquals("the counts read again", ListDialog.DeleteEntity(apollo, 1, 1), restoredProjects.dialog)
     }
 
     @Test

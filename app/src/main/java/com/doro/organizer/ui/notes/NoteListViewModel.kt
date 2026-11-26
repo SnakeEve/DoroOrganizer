@@ -18,6 +18,7 @@ import com.doro.organizer.data.NoteRepository
 import com.doro.organizer.model.BatchResult
 import com.doro.organizer.model.DateFilter
 import com.doro.organizer.model.EntityKind
+import com.doro.organizer.model.MAX_NAME_CHARS
 import com.doro.organizer.model.NewEntity
 import com.doro.organizer.model.NoteFilter
 import com.doro.organizer.model.NoteQuery
@@ -108,7 +109,18 @@ class NoteListViewModel(
 
     private val daySelection = MutableStateFlow(savedDaySelection())
     private val month = MutableStateFlow(savedMonth())
-    private val dialog = MutableStateFlow(listDialogOf(savedStateHandle[KEY_LIST_DIALOG]))
+    private val savedDialog = savedListDialogOf(savedStateHandle[KEY_LIST_DIALOG])
+    private val dialog = MutableStateFlow((savedDialog as? SavedListDialog.Shown)?.dialog)
+
+    /**
+     * The rename dialog's text (ui.md § 8.17, DEC-113), saved under `renameText` while [ListDialog.Rename] is open and
+     * removed with it. Snapshot state, like [searchText], so the field shows every edit in the frame it happens.
+     */
+    var renameText by mutableStateOf(savedStateHandle[KEY_RENAME_TEXT] ?: "")
+        private set
+
+    /** The impact read of "Delete…" still running: one tap opens one dialog; a dialog change ends it (DEC-113). */
+    private var deleteRead: Job? = null
     private val message = MutableStateFlow<UserMessage?>(null)
 
     /** The selected note ids; null outside selection mode (ui.md § 5.1). */
@@ -271,6 +283,13 @@ class NoteListViewModel(
         }
         // A selection too large to be saved is gone after a process death, and its dialog with it (ui.md § 3.10).
         if (selection.value == null && dialog.value.needsSelection()) setDialog(null)
+        // A restored delete dialog keeps only its id: it reads its counts again before it shows (DEC-113 (6)). Only
+        // Individual and Project show an entity, so only they keep a dialog of one.
+        if (spec.primaryKind == null && dialog.value.entityId() != null) setDialog(null)
+        (savedDialog as? SavedListDialog.DeleteEntity)?.let { restored ->
+            setDialog(null)
+            if (spec.primaryKind != null) openDelete(restored.id)
+        }
     }
 
     // Search (ui.md § 3.3).
@@ -537,6 +556,84 @@ class NoteListViewModel(
             UiText.Plural(R.plurals.batch_associated, it.selected)
         }
 
+    // Rename and delete of the shown person or project (ui.md § 4.2, § 8.4, § 8.17; DEC-113).
+
+    /**
+     * "Rename…" of the overflow menu: the dialog of the shown entity, holding its name cut at `MAX_NAME_CHARS` (a
+     * restored backup can hold a longer one, DEC-113 (2)).
+     */
+    fun openRename() {
+        val shown = uiState.value.primary as? Primary.Entity ?: return
+        storeRenameText(capChars(shown.name, MAX_NAME_CHARS))
+        setDialog(ListDialog.Rename(shown.id))
+    }
+
+    /** The rename field's text, capped at `MAX_NAME_CHARS` without a message, a surrogate pair kept whole. */
+    fun onRenameTextChange(text: String) {
+        if (dialog.value is ListDialog.Rename) storeRenameText(capChars(text, MAX_NAME_CHARS))
+    }
+
+    /**
+     * "Rename" of the dialog of entity [id]: closes it at once, then writes the text, which the repository trims. Only
+     * while that dialog is open, so a second confirm before it is gone writes nothing (DEC-113 (4)), and only while the
+     * text is not blank, as the button says (DEC-113 (2)). A written name says so; an unchanged name or a vanished
+     * entity says nothing; a failure shows its text and keeps the old name.
+     */
+    fun rename(id: Long) {
+        if (dialog.value != ListDialog.Rename(id) || TextWhitespace.isBlank(renameText)) return
+        val kind = shownKind()
+        val name = renameText
+        setDialog(null)
+        viewModelScope.launch {
+            val result = entityRepository.rename(kind, id, name)
+            postEntityDone(kind, result, R.string.person_renamed, R.string.project_renamed) { renamed -> renamed }
+        }
+    }
+
+    /** "Delete…" of the overflow menu: reads the shown entity's impact, then opens its delete dialog (DEC-113 (5)). */
+    fun openDeleteShown() {
+        val shown = uiState.value.primary as? Primary.Entity ?: return
+        openDelete(shown.id)
+    }
+
+    /**
+     * "Delete" of the delete dialog of entity [id]: closes it at once and deletes the entity in the transaction of
+     * DEC-34, which recomputes the counts. Only while that dialog is open (DEC-113 (4)). The existence probe then
+     * forgets the remembered id and the picker body returns (DEC-28, DEC-52).
+     */
+    fun deleteShown(id: Long) {
+        if ((dialog.value as? ListDialog.DeleteEntity)?.id != id) return
+        val kind = shownKind()
+        setDialog(null)
+        viewModelScope.launch {
+            val result = when (kind) {
+                EntityKind.Person -> entityRepository.deletePerson(id)
+                EntityKind.Project -> entityRepository.deleteProject(id)
+            }
+            postEntityDone(kind, result, R.string.person_deleted, R.string.project_deleted) { it.deleted }
+        }
+    }
+
+    /**
+     * The message of a rename or delete of a [kind] entity: [person] or [project] when [done] says the write happened,
+     * nothing when it found nothing to do, the error's text on a failure.
+     */
+    private fun <T> postEntityDone(
+        kind: EntityKind,
+        result: AppResult<T>,
+        person: Int,
+        project: Int,
+        done: (T) -> Boolean,
+    ) {
+        when (result) {
+            is AppResult.Ok -> if (done(result.value)) {
+                val text = if (kind == EntityKind.Person) person else project
+                message.value = UserMessage.of(UiText.Res(text), isError = false)
+            }
+            is AppResult.Err -> message.value = UserMessage.error(result.error)
+        }
+    }
+
     // List position (ui.md § 3.11, DEC-110).
 
     /**
@@ -595,6 +692,8 @@ class NoteListViewModel(
                 val id = (primary as? Primary.Entity)?.id
                 if (shownEntity != null && id != shownEntity) endSelection()
                 shownEntity = id
+                // The rename and delete dialogs belong to the entity they name (DEC-113 (6)).
+                if (dialog.value.entityId().let { it != null && it != id }) setDialog(null)
             }
         }
 
@@ -609,6 +708,35 @@ class NoteListViewModel(
                 }
             }
         }
+
+    /**
+     * Opens the delete dialog of entity [id] once its impact is read (DEC-113 (5), (6)): nothing for an entity already
+     * gone, and nothing unless, after the read, the decided primary is still that entity and no other dialog is open,
+     * so a read that returns after another entity or the picker body is shown opens nothing.
+     */
+    private fun openDelete(id: Long) {
+        if (deleteRead?.isActive == true) return
+        val kind = shownKind()
+        deleteRead = viewModelScope.launch {
+            entityRepository.observe(kind, id).first() ?: return@launch
+            val impact = when (kind) {
+                EntityKind.Person -> entityRepository.personDeleteImpact(id)
+                EntityKind.Project -> entityRepository.projectDeleteImpact(id)
+            }
+            when (impact) {
+                is AppResult.Err -> message.value = UserMessage.error(impact.error)
+                is AppResult.Ok -> {
+                    val decided = listQuery.first { it.primary != Primary.Loading }.primary
+                    if ((decided as? Primary.Entity)?.id == id && dialog.value == null) {
+                        deleteRead = null
+                        setDialog(ListDialog.DeleteEntity(id, impact.value.n, impact.value.m))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun shownKind(): EntityKind = checkNotNull(spec.primaryKind) { "only Individual and Project show an entity" }
 
     /** The rows of [query], mapped whenever they or today change, off the main thread (architecture.md § Threading). */
     private fun rowsOf(list: ListQuery, query: NoteQuery, read: Int): Flow<RowsResult> {
@@ -807,9 +935,23 @@ class NoteListViewModel(
         unsavedChoice.value = value
     }
 
+    /**
+     * Sets the open dialog and its saved key; the rename text lives only while the rename dialog is open. Any change of
+     * the dialog ends an impact read still running, so a read that returns after a Cancel opens nothing.
+     */
     private fun setDialog(value: ListDialog?) {
+        deleteRead?.cancel()
         savedStateHandle[KEY_LIST_DIALOG] = value?.toKey()
+        if (value !is ListDialog.Rename && savedStateHandle.contains(KEY_RENAME_TEXT)) {
+            savedStateHandle.remove<String>(KEY_RENAME_TEXT)
+            renameText = ""
+        }
         dialog.value = value
+    }
+
+    private fun storeRenameText(text: String) {
+        renameText = text
+        savedStateHandle[KEY_RENAME_TEXT] = text
     }
 
     private fun setDateFilter(filter: DateFilter) {
@@ -965,6 +1107,7 @@ class NoteListViewModel(
         const val KEY_SELECTION = "selection"
         const val KEY_UNSAVED_CHOICE = "unsavedChoice"
         const val KEY_HANDLED_LEAVES = "handledLeaves"
+        const val KEY_RENAME_TEXT = "renameText"
 
         private const val DATE_ANY = "Any"
         private const val DATE_UNDATED = "Undated"
@@ -975,6 +1118,13 @@ class NoteListViewModel(
 private fun Settings.rememberedId(kind: EntityKind): Long? = when (kind) {
     EntityKind.Person -> rememberedPersonId
     EntityKind.Project -> rememberedProjectId
+}
+
+/** The entity id of the rename or delete dialog of the shown entity; null for every other dialog and for none. */
+private fun ListDialog?.entityId(): Long? = when (this) {
+    is ListDialog.Rename -> id
+    is ListDialog.DeleteEntity -> id
+    else -> null
 }
 
 /** The dialogs that act on the selection; they close when selection mode ends (ui.md § 3.10). */

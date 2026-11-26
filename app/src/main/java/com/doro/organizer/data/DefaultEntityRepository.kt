@@ -1,7 +1,9 @@
 package com.doro.organizer.data
 
 import com.doro.organizer.core.coroutines.AppDispatchers
+import com.doro.organizer.core.result.AppError
 import com.doro.organizer.core.result.AppResult
+import com.doro.organizer.core.result.InputRule
 import com.doro.organizer.core.time.AppTime
 import com.doro.organizer.model.DeleteImpact
 import com.doro.organizer.model.EntityDeleteResult
@@ -15,9 +17,9 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 
 /**
- * Deletes run as one detached transaction ([writeTransaction]); the impact read runs in the caller's scope. Flows go
- * through [DatabaseHolder.observe], so they survive a database swap (DEC-81), and an equal result is neither sorted
- * nor emitted again. Stateless: the DAOs come from [databaseHolder] per call.
+ * Renames and deletes run as one detached transaction each ([writeTransaction]); the impact read runs in the caller's
+ * scope. Flows go through [DatabaseHolder.observe], so they survive a database swap (DEC-81), and an equal result is
+ * neither sorted nor emitted again. Stateless: the DAOs come from [databaseHolder] per call.
  */
 class DefaultEntityRepository(
     private val databaseHolder: DatabaseHolder,
@@ -45,6 +47,13 @@ class DefaultEntityRepository(
     override suspend fun deletePerson(id: Long): AppResult<EntityDeleteResult> = delete(EntityKind.Person, id)
 
     override suspend fun deleteProject(id: Long): AppResult<EntityDeleteResult> = delete(EntityKind.Project, id)
+
+    override suspend fun rename(kind: EntityKind, id: Long, name: String): AppResult<Boolean> {
+        val stored = storedName(name) ?: return AppResult.Err(AppError.InvalidInput(InputRule.BlankName))
+        return databaseHolder.writeTransaction(applicationScope, appTime) { db, now ->
+            db.entities(kind).rename(id, stored, now) == 1
+        }
+    }
 
     private suspend fun deleteImpact(kind: EntityKind, id: Long): AppResult<DeleteImpact> =
         databaseHolder.withDb { db ->

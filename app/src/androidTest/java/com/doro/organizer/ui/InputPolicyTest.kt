@@ -20,8 +20,10 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.data.maintenance.MaintenanceOp
@@ -35,6 +37,7 @@ import com.doro.organizer.testing.GateUi
 import com.doro.organizer.testing.ListComposeTest
 import com.doro.organizer.testing.ListWindow
 import com.doro.organizer.testing.ScriptedGateComposeTest
+import com.doro.organizer.testing.assertFocusedDialogFieldNeverLearns
 import com.doro.organizer.testing.assertFocusedDialogWindow
 import com.doro.organizer.testing.assertFocusedMenuWindow
 import com.doro.organizer.testing.show
@@ -59,8 +62,8 @@ import org.junit.runner.RunWith
 
 /**
  * testing.md L-25, input privacy (DEC-71, Q11: the keyboard must never learn; security.md § 11): every note, person,
- * project and search field asks for no personalized learning whatever the screenshot setting and the window policy,
- * and autofill stays out of the activity window in every gate state and out of every dialog window.
+ * project, search and rename field asks for no personalized learning whatever the screenshot setting and the window
+ * policy, and autofill stays out of the activity window in every gate state and out of every dialog window.
  */
 @RunWith(Enclosed::class)
 class InputPolicyTest {
@@ -205,6 +208,51 @@ class InputPolicyTest {
                 ListWindow.Menu -> assertFocusedMenuWindow(name)
             }
         }
+
+        /**
+         * The rename field of People (DEC-113) sits in a dialog window over a shown person: focused, it never learns
+         * with screenshot protection off and on, and after a toggle while it has focus, either way round.
+         */
+        @Test
+        fun renameField_neverLearns_withScreenshotProtectionOnAndOff() {
+            var alice = 0L
+            startWith(settings = { setRemembered(EntityKind.Person, alice) }) { alice = person("Alice", now) }
+            compose.onNodeWithTag(TAB_PEOPLE).performClick()
+
+            for (protection in listOf(false, true)) {
+                setProtection(protection)
+                openRenameDialog()
+                assertFocusedDialogFieldNeverLearns("rename field (protection $protection)")
+                setProtection(!protection)
+                assertFocusedDialogFieldNeverLearns("rename field after protection turned ${!protection}")
+                compose.onNode(hasText(CANCEL) and hasClickAction()).performClick()
+                compose.waitUntil(GateUi.TIMEOUT_MS) {
+                    compose.onAllNodesWithText(RENAME_PERSON).fetchSemanticsNodes().isEmpty()
+                }
+            }
+        }
+
+        /** ⋮ → "Rename…" of the shown person, then waits until its field has focus. */
+        private fun openRenameDialog() {
+            ui.awaitTag(ENTITY_MENU)
+            compose.onNodeWithTag(ENTITY_MENU).performClick()
+            ui.awaitText(RENAME_ITEM)
+            compose.onNodeWithText(RENAME_ITEM).performClick()
+            compose.waitUntil(GateUi.TIMEOUT_MS) {
+                compose.onAllNodes(hasTestTag(RENAME_FIELD) and isFocused()).fetchSemanticsNodes().isNotEmpty()
+            }
+        }
+
+        /** Sets screenshot protection and waits until the activity window shows its flag (security.md § 8). */
+        private fun setProtection(on: Boolean) {
+            runBlocking { scene.settings.setScreenshotProtection(on) }
+            compose.waitUntil(GateUi.TIMEOUT_MS) {
+                var flags = 0
+                scene.onActivity { flags = it.window.attributes.flags }
+                (flags and WindowManager.LayoutParams.FLAG_SECURE != 0) == on
+            }
+            compose.waitForIdle()
+        }
     }
 
     /** The flag depends on no `SettingsStore` read: these settings never emit, so the window policy stays closed. */
@@ -257,6 +305,9 @@ class InputPolicyTest {
         // Literals copied from ui.md § 11.
         const val SEARCH = "Search"
         const val ADD_PERSON = "Add person"
+        const val RENAME_ITEM = "Rename…"
+        const val RENAME_PERSON = "Rename person"
+        const val CANCEL = "Cancel"
 
         val isPassword = SemanticsMatcher.keyIsDefined(SemanticsProperties.Password)
 

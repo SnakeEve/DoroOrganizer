@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
@@ -23,7 +22,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -35,7 +33,9 @@ import com.doro.organizer.R
 import com.doro.organizer.model.DateRules
 import com.doro.organizer.model.EntityKind
 import com.doro.organizer.ui.LocalUiGraph
+import com.doro.organizer.ui.common.DestructiveButton
 import com.doro.organizer.ui.common.DialogContent
+import com.doro.organizer.ui.common.EntityDeleteDialog
 import com.doro.organizer.ui.common.SecureDialogWindow
 
 /** The dialog or sheet that [EditorUiState.dialog] names (ui.md § 6.14); each is composed by the editor. */
@@ -46,8 +46,11 @@ internal fun EditorDialogs(state: EditorUiState, vm: EditorViewModel) {
         EditorDialog.DeleteNote -> DeleteNoteDialog(onConfirm = vm::deleteNote, onDismiss = vm::closeDialog)
         EditorDialog.Unlink -> UnlinkSheet(state, onUnlink = vm::removeLink, onDismiss = vm::closeDialog)
         EditorDialog.DatePicker -> EditorDateDialog(state, onConfirm = vm::setDate, onDismiss = vm::closeDialog)
-        is EditorDialog.DeleteImpact -> DeleteImpactDialog(
-            dialog = dialog,
+        is EditorDialog.DeleteImpact -> EntityDeleteDialog(
+            kind = dialog.kind,
+            name = dialog.name,
+            n = dialog.n,
+            m = dialog.m,
             onConfirm = { vm.deleteEntity(dialog.kind, dialog.id) },
             onDismiss = vm::closeDialog,
         )
@@ -64,55 +67,6 @@ private fun DeleteNoteDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
         confirmButton = { DestructiveButton(onConfirm) },
     )
-}
-
-/**
- * The impact dialog of a person or project delete (ui.md § 8.4, DEC-34): the entity's name in the title; sentence A,
- * sentence B when N ≥ 1, then "This cannot be undone.", joined with single spaces.
- */
-@Composable
-private fun DeleteImpactDialog(dialog: EditorDialog.DeleteImpact, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    val person = dialog.kind == EntityKind.Person
-    val title = stringResource(
-        if (person) R.string.dialog_delete_person_title else R.string.dialog_delete_project_title,
-        dialog.name,
-    )
-    val body = listOfNotNull(impactSentenceA(dialog.kind, dialog.n), impactSentenceB(dialog.n, dialog.m))
-        .plus(stringResource(R.string.dialog_irreversible))
-        .joinToString(" ")
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { SecureDialogWindow { DialogContent { Text(body) } } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
-        confirmButton = { DestructiveButton(onConfirm) },
-    )
-}
-
-/** "This person is linked to N notes." or, for N = 0, "… is not linked to any note." */
-@Composable
-private fun impactSentenceA(kind: EntityKind, n: Int): String = when {
-    n == 0 && kind == EntityKind.Person -> stringResource(R.string.impact_person_not_linked)
-    n == 0 -> stringResource(R.string.impact_project_not_linked)
-    kind == EntityKind.Person -> pluralStringResource(R.plurals.impact_person_linked, n, n)
-    else -> pluralStringResource(R.plurals.impact_project_linked, n, n)
-}
-
-/** Which of the N linked notes move to Orphans (M of them, M ⊆ N); none for N = 0. */
-@Composable
-private fun impactSentenceB(n: Int, m: Int): String? = when {
-    n == 0 -> null
-    m == 0 -> pluralStringResource(R.plurals.impact_none_orphaned, n)
-    m == n -> pluralStringResource(R.plurals.impact_all_orphaned, n)
-    else -> pluralStringResource(R.plurals.impact_some_orphaned, m, m)
-}
-
-@Composable
-private fun DestructiveButton(onClick: () -> Unit) {
-    TextButton(
-        onClick = onClick,
-        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-    ) { Text(stringResource(R.string.action_delete)) }
 }
 
 /**

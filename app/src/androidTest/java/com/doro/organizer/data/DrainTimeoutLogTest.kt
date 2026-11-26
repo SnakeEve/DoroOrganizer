@@ -1,17 +1,14 @@
 package com.doro.organizer.data
 
-import android.os.ParcelFileDescriptor
-import android.os.Process
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.core.log.AppLog
 import com.doro.organizer.testing.TestDatabases
+import com.doro.organizer.testing.ownLogThrough
 import java.util.UUID
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -90,28 +87,12 @@ class DrainTimeoutLogTest {
      * it was written; a marker missing from the log fails the test.
      */
     private suspend fun ownLinesBetween(start: String, end: String): List<String> {
-        var lines = readOwnLog()
-        withTimeoutOrNull(LIMIT) {
-            while (lines.none { end in it }) {
-                delay(LOG_POLL_MS)
-                lines = readOwnLog()
-            }
-        }
+        val lines = ownLogThrough(end, "-s $TAG:D", LIMIT)
         val from = lines.indexOfLast { start in it }
         val to = lines.indexOfLast { end in it }
         assertTrue("the start marker is not in this process's log (${lines.size} lines read)", from >= 0)
         assertTrue("the end marker did not reach the log within $LIMIT (${lines.size} lines read)", to > from)
         return lines.subList(from + 1, to)
-    }
-
-    /**
-     * This process's log lines under the app's tag, oldest first, read through the shell, as `logcat -d -v raw` prints
-     * them: each message alone. `executeShellCommand` runs no shell, so the command holds no quotes or pipes.
-     */
-    private fun readOwnLog(): List<String> {
-        val command = "logcat -d -v raw --pid=${Process.myPid()} -s $TAG:D"
-        val output = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
-        return ParcelFileDescriptor.AutoCloseInputStream(output).bufferedReader().use { it.readLines() }
     }
 
     private fun runOnDefault(block: suspend CoroutineScope.() -> Unit) =
@@ -127,8 +108,6 @@ class DrainTimeoutLogTest {
         /** The timeout lines, copied from db-lifecycle.md; `DefaultDatabaseHolder`'s own constants are private. */
         const val EXCLUSIVE_LINE = "exclusive: flow drain timeout"
         const val CLOSE_LINE = "close: flow drain timeout"
-
-        const val LOG_POLL_MS = 100L
 
         /** Bounds the drain and the wait for the log, so that a failure reports instead of hanging. */
         val LIMIT = 10.seconds

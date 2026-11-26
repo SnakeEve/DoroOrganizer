@@ -46,4 +46,7 @@ interface PersonDao : EntityDao {
 
     @Query(DELETE_PERSON_SQL)
     override suspend fun delete(id: Long): Int
+
+    @Query(RENAME_PERSON_SQL)
+    override suspend fun rename(id: Long, name: String, now: Long): Int
 }

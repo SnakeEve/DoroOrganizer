@@ -5,6 +5,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasScrollToKeyAction
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -17,9 +18,11 @@ import androidx.compose.ui.test.performTouchInput
 import com.doro.organizer.data.HolderState
 import com.doro.organizer.model.KeyMode
 import com.doro.organizer.model.Perspective
+import kotlin.math.abs
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertTrue
 
 /**
  * A list test over the real app (ui.md § 3, § 4): plain data planted with [startWith], the gate opened by a cold
@@ -75,6 +78,30 @@ abstract class ListComposeTest : GateComposeTest() {
             .minByOrNull { (row, _) -> row.top }
             ?.first
             ?: error("no row is displayed")
+    }
+
+    /** The note rows displayed in `note_list`, top first: each shows at least one pixel of the list. */
+    fun displayedRows(): List<Long> {
+        val list = ui.boundsOf(NOTE_LIST)
+        return compose.onAllNodes(isNoteRow).fetchSemanticsNodes()
+            .filter { it.boundsInRoot.bottom > list.top && it.boundsInRoot.top < list.bottom }
+            .sortedBy { it.boundsInRoot.top }
+            .map { it.rowId() }
+    }
+
+    /** The top of the row of note [id] in the root, as laid out: a row partly scrolled off keeps its real top. */
+    fun rowTop(id: Long): Float = compose.onNodeWithTag(rowTag(id)).fetchSemanticsNode().positionInRoot.y
+
+    /**
+     * The row of entity [id] is the first of the picker list on screen, at its top (1 px tolerance): its top as laid
+     * out, which the list does not clip, so a row partly scrolled off does not pass.
+     */
+    fun assertTopPickerRow(id: Long) {
+        val list = compose.onNode(hasScrollToKeyAction()).fetchSemanticsNode().boundsInRoot
+        val node = compose.onAllNodesWithTag(pickerRowTag(id)).fetchSemanticsNodes().singleOrNull()
+        assertTrue("the row of $id is not composed: the list shows other names", node != null)
+        val row = checkNotNull(node).positionInRoot.y
+        assertTrue("$row at the top of $list", abs(row - list.top) <= 1f)
     }
 
     /** Scrolls `note_list` to the item at [index] (`performScrollToIndex`), then lets the app settle. */
@@ -162,7 +189,7 @@ abstract class ListComposeTest : GateComposeTest() {
 
     /** The row of note [id] whose top is at [top] px in the root; equal within 1 px (testing.md I-58). */
     class TopRow(val id: Long, val top: Float) {
-        fun samePlaceAs(other: TopRow) = id == other.id && kotlin.math.abs(top - other.top) <= 1f
+        fun samePlaceAs(other: TopRow) = id == other.id && abs(top - other.top) <= 1f
 
         override fun toString() = "TopRow(id=$id, top=$top)"
     }
@@ -172,6 +199,10 @@ abstract class ListComposeTest : GateComposeTest() {
 
     companion object {
         const val NOTE_LIST = "note_list"
+
+        /** The overflow button of the shown person or project and the rename dialog's field (DEC-113, ui.md § 12.8). */
+        const val ENTITY_MENU = "entity_menu"
+        const val RENAME_FIELD = "rename_field"
 
         /** The "All people" / "All projects" row of the title's picker (DEC-112, ui.md § 12.8). */
         const val PICKER_ALL = "picker_all"

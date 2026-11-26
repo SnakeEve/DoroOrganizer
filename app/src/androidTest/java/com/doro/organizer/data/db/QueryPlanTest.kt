@@ -17,9 +17,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * testing.md I-43: `EXPLAIN QUERY PLAN` of every read statement constant, the delete impact counts and the note,
- * junction and entity deletes on the 10,000-note seed, against the table of data-layer.md § Size and performance.
- * No plan ever scans a junction table; the expected indexes are named.
+ * testing.md I-43: `EXPLAIN QUERY PLAN` of every read statement constant, the delete impact counts, the note,
+ * junction and entity deletes and the two renames on the 10,000-note seed, against the table of data-layer.md § Size
+ * and performance. No plan ever scans a junction table; the expected indexes are named.
  */
 @RunWith(AndroidJUnit4::class)
 class QueryPlanTest {
@@ -158,6 +158,14 @@ class QueryPlanTest {
         assertEquals(listOf(searchByKey("projects")), plan(PROJECT_EXISTS_SQL, id))
         assertParentDelete(plan(DELETE_PERSON_SQL, id), "persons", mapOf("note_persons" to PERSON_INDEX))
         assertParentDelete(plan(DELETE_PROJECT_SQL, id), "projects", mapOf("note_projects" to PROJECT_INDEX))
+    }
+
+    /** DEC-113: a guarded update of one entity row, which writes no key, so no foreign-key lookup runs. */
+    @Test
+    fun renames_searchTheEntityByKeyAlone() {
+        val args = mapOf("name" to "Renamed", "now" to 1L, "id" to 1L)
+        assertEquals(listOf(searchByKey("persons")), plan(RENAME_PERSON_SQL, args))
+        assertEquals(listOf(searchByKey("projects")), plan(RENAME_PROJECT_SQL, args))
     }
 
     @Test

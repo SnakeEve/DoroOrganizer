@@ -18,7 +18,7 @@ import com.doro.organizer.model.TextWhitespace
  */
 internal fun newEntityError(persons: List<NewEntity>, projects: List<NewEntity>): AppError? {
     require(persons.hasDistinctKeys() && projects.hasDistinctKeys()) { "new-entity key used twice" }
-    val blank = (persons + projects).any { it.storedName() == null }
+    val blank = (persons + projects).any { storedName(it.name) == null }
     return if (blank) AppError.InvalidInput(InputRule.BlankName) else null
 }
 
@@ -47,13 +47,18 @@ internal suspend fun EntityRepository.Companion.insertNew(
     )
 }
 
-private fun List<NewEntity>.hasDistinctKeys(): Boolean = mapTo(HashSet()) { it.key }.size == size
-
-/** The trimmed name, or null when it is blank. */
-private fun NewEntity.storedName(): String? {
+/**
+ * The one name rule of INV-9, for every write of a name: creation ([newEntityError], [insertNew]) and rename
+ * (`EntityRepository.rename`, DEC-113). The name trimmed by [TextWhitespace], or null when nothing is left. A trimmed
+ * name longer than [MAX_NAME_CHARS] is a programming error, because every field that edits a name caps it there; its
+ * message is constant, so it never carries the name (DEC-70).
+ */
+internal fun storedName(name: String): String? {
     val trimmed = TextWhitespace.trim(name)
     require(trimmed.length <= MAX_NAME_CHARS) { "name longer than $MAX_NAME_CHARS chars" }
     return trimmed.ifEmpty { null }
 }
 
-private fun NewEntity.requireName(): String = requireNotNull(storedName()) { "blank name" }
+private fun List<NewEntity>.hasDistinctKeys(): Boolean = mapTo(HashSet()) { it.key }.size == size
+
+private fun NewEntity.requireName(): String = requireNotNull(storedName(name)) { "blank name" }

@@ -46,4 +46,7 @@ interface ProjectDao : EntityDao {
 
     @Query(DELETE_PROJECT_SQL)
     override suspend fun delete(id: Long): Int
+
+    @Query(RENAME_PROJECT_SQL)
+    override suspend fun rename(id: Long, name: String, now: Long): Int
 }

@@ -1,5 +1,6 @@
 package com.doro.organizer.ui
 
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -9,7 +10,9 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -19,7 +22,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.toSize
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.doro.organizer.model.EntityKind
 import com.doro.organizer.security.FingerprintAvailability
 import com.doro.organizer.security.SlotOffer
 import com.doro.organizer.session.GateState
@@ -33,6 +38,7 @@ import com.doro.organizer.testing.assertNotCutOff
 import com.doro.organizer.testing.assertTouchTarget
 import com.doro.organizer.testing.atFontScale
 import com.doro.organizer.testing.dialogCatalog
+import com.doro.organizer.testing.hideDialogKeyboard
 import com.doro.organizer.testing.showDialog
 import com.doro.organizer.testing.textLayout
 import com.doro.organizer.testing.visitListWindows
@@ -50,9 +56,10 @@ import org.junit.runner.RunWith
  * testing.md I-35 (DEC-54, DEC-55; ui.md § 12): every clickable node of the rows, the calendar, the editor, the gate
  * screens and every dialog, sheet and menu has a touch target of at least 48 × 48 dp; at 200 % font scale the spec
  * strings stay displayed, the create button and the checkboxes stay reachable, and the buttons of the fingerprint
- * set-up offer, the kekBroken notice and the recovery screens' "Restore from backup" stay whole; a row is one merged
- * node and its checkbox a separate node with `Role.Checkbox`. The font scale is set in the activity's configuration
- * (`atFontScale`), which also reaches the dialog windows.
+ * set-up offer, the kekBroken notice and the recovery screens' "Restore from backup" stay whole, and so do People's
+ * overflow menu and its rename dialog (DEC-113); a row is one merged node and its checkbox a separate node with
+ * `Role.Checkbox`. The font scale is set in the activity's configuration (`atFontScale`), which also reaches the
+ * dialog windows.
  */
 @RunWith(Enclosed::class)
 class AccessibilityTest {
@@ -131,6 +138,52 @@ class AccessibilityTest {
                 assertWhole(compose.onNodeWithText(NO_DATA, useUnmergedTree = true).assertIsDisplayed().textLayout())
             }
 
+        /**
+         * People at twice the font scale (DEC-113; ui.md § 2.2, § 8.17): Search, Settings and "More options" stay
+         * displayed with 48 dp touch targets, and so does the title button; the menu's two items stay whole; the rename
+         * dialog's title, field and buttons, measured with its keyboard hidden, stay whole and reachable.
+         */
+        @Test
+        fun atTwiceTheFontScale_theEntityMenuAndTheRenameDialog_stayWholeAndReachable() = atFontScale(2f) {
+            var alice = 0L
+            startWith(settings = { setRemembered(EntityKind.Person, alice) }) { alice = person("Alice", now) }
+            compose.onNodeWithTag(TAB_PEOPLE).performClick()
+            ui.awaitTag(ENTITY_MENU)
+
+            compose.onNodeWithContentDescription(SEARCH).assertIsDisplayed().assertTouchTarget()
+            compose.onNodeWithTag(SETTINGS_ACTION).assertIsDisplayed().assertTouchTarget()
+            compose.onNodeWithTag(ENTITY_MENU).assertIsDisplayed().assertTouchTarget()
+                .assert(hasContentDescription(MORE_OPTIONS))
+            compose.onNode(titleButton("Alice")).assertIsDisplayed().assertTouchTarget()
+
+            compose.onNodeWithTag(ENTITY_MENU).performClick()
+            ui.awaitText(RENAME_ITEM)
+            for (item in listOf(RENAME_ITEM, DELETE_ITEM)) {
+                compose.onNode(hasText(item) and hasClickAction()).assertIsDisplayed().assertTouchTarget()
+                assertWhole(compose.onNodeWithText(item, useUnmergedTree = true).textLayout())
+            }
+            compose.onNodeWithText(RENAME_ITEM).performClick()
+            ui.awaitText(RENAME_PERSON)
+            compose.hideDialogKeyboard()
+
+            assertWhole(compose.onNodeWithText(RENAME_PERSON, useUnmergedTree = true).assertIsDisplayed().textLayout())
+            val field = compose.onNodeWithTag(RENAME_FIELD).performScrollTo().assertIsDisplayed().assertTouchTarget()
+            // As laid out, not clipped: a field cut off by the dialog does not pass.
+            val dialog = compose.onNode(isDialog()).fetchSemanticsNode().boundsInRoot
+            val node = field.fetchSemanticsNode()
+            val fieldBounds = Rect(node.positionInRoot, node.size.toSize())
+            val inside = fieldBounds.left >= dialog.left && fieldBounds.top >= dialog.top &&
+                fieldBounds.right <= dialog.right && fieldBounds.bottom <= dialog.bottom
+            assertTrue("the field $fieldBounds lies inside the dialog $dialog", inside)
+            val label = hasText(NAME) and hasAnyAncestor(hasTestTag(RENAME_FIELD))
+            assertWhole(compose.onNode(label, useUnmergedTree = true).assertIsDisplayed().textLayout())
+            for (button in listOf(CANCEL, RENAME)) {
+                compose.onNode(hasText(button) and hasClickAction()).assertIsDisplayed().assertTouchTarget()
+                val text = hasText(button) and hasAnyAncestor(hasClickAction())
+                assertWhole(compose.onNode(text, useUnmergedTree = true).textLayout())
+            }
+        }
+
         private companion object {
             const val FAB = "fab_create"
             const val SEARCH_FIELD = "search_field"
@@ -138,6 +191,7 @@ class AccessibilityTest {
             const val EDITOR_DATE = "editor_date"
             const val SETTINGS_ACTION = "action_settings"
             const val SETTINGS_LIST = "settings_list"
+            const val TAB_PEOPLE = "tab_Individual"
 
             // Literals copied from ui.md § 11.
             const val UNDATED = "Undated"
@@ -145,6 +199,12 @@ class AccessibilityTest {
             const val BACK = "Back"
             const val BACKUP_ALL_DATA = "Backup all data"
             const val RESTORE_FROM_BACKUP = "Restore from backup"
+            const val RENAME_ITEM = "Rename…"
+            const val DELETE_ITEM = "Delete…"
+            const val RENAME_PERSON = "Rename person"
+            const val NAME = "Name"
+            const val RENAME = "Rename"
+            const val CANCEL = "Cancel"
         }
     }
 

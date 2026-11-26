@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.doro.organizer.model.Perspective
+import com.doro.organizer.testing.ListComposeTest.Companion.ENTITY_MENU
 
 /** What [visitListWindows] stops at: a screen of the activity window, a dialog or sheet window, or a menu popup. */
 enum class ListWindow { Screen, Dialog, Menu }
@@ -16,8 +17,10 @@ enum class ListWindow { Screen, Dialog, Menu }
  * Plants a note dated yesterday and linked to a person and a project, a done note and an empty note, then opens one
  * after another every screen, dialog, sheet and menu of the list (ui.md § 3–§ 5) and of the editor (ui.md § 6) and
  * calls [visit] in each while it is shown: All, the date filter sheet and its end picker, Calendar and its range
- * picker, the selection menu, Set date, batch delete, the editor, its date picker, its menu, the unlink sheet, and
- * the delete-note and delete-person dialogs. Each window is closed before the next opens.
+ * picker, the selection menu, Set date, batch delete, the editor, its date picker, its menu, the unlink sheet, the
+ * delete-note and delete-person dialogs, then the People tab's overflow menu with its rename and delete dialogs
+ * (DEC-113). The rename dialog's keyboard is awaited and hidden first ([hideDialogKeyboard]), so a visit measures a
+ * fixed layout. Each window is closed before the next opens.
  */
 fun ListComposeTest.visitListWindows(visit: (name: String, window: ListWindow) -> Unit) {
     var linked = 0L
@@ -97,6 +100,27 @@ fun ListComposeTest.visitListWindows(visit: (name: String, window: ListWindow) -
     ui.awaitText(DELETE_ALICE_TITLE)
     visit("delete person", ListWindow.Dialog)
     closeWith(CANCEL)
+
+    compose.onNodeWithContentDescription(BACK).performClick()
+    awaitRow(linked)
+    openTab(Perspective.Individual)
+    ui.awaitTag(pickerRowTag(alice))
+    compose.onNodeWithTag(pickerRowTag(alice)).performClick()
+    awaitRow(linked)
+    compose.onNodeWithTag(ENTITY_MENU).performClick()
+    ui.awaitText(RENAME_ITEM)
+    visit("entity menu", ListWindow.Menu)
+    compose.onNodeWithText(RENAME_ITEM).performClick()
+    ui.awaitText(RENAME_TITLE)
+    compose.hideDialogKeyboard()
+    visit("rename dialog", ListWindow.Dialog)
+    closeWith(CANCEL)
+    compose.onNodeWithTag(ENTITY_MENU).performClick()
+    ui.awaitText(DELETE_ITEM)
+    compose.onNodeWithText(DELETE_ITEM).performClick()
+    ui.awaitText(DELETE_ALICE_TITLE)
+    visit("tab delete dialog", ListWindow.Dialog)
+    closeWith(CANCEL)
 }
 
 private fun ListComposeTest.awaitButton(text: String) = compose.waitUntil(GateUi.TIMEOUT_MS) {
@@ -131,3 +155,7 @@ private const val UNLINK_ITEM = "Unlink person or project…"
 private const val UNLINK_TITLE = "Unlink person or project"
 private const val DELETE_NOTE_TITLE = "Delete this note?"
 private const val DELETE_ALICE_TITLE = "Delete person \"Alice\"?"
+private const val BACK = "Back"
+private const val RENAME_ITEM = "Rename…"
+private const val DELETE_ITEM = "Delete…"
+private const val RENAME_TITLE = "Rename person"

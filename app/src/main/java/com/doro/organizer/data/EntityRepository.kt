@@ -9,7 +9,8 @@ import com.doro.organizer.model.EntityRef
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Person and project reads and deletes (data-layer.md § Editor loads, pickers and existence probes, § Deletes).
+ * Person and project reads, renames and deletes (data-layer.md § Editor loads, pickers and existence probes, § Rename,
+ * § Deletes).
  * Entities are created only inside a note save or a batch confirm (DEC-33), by `EntityRepository.insertNew` in that
  * caller's transaction. A vanished entity is a value, never an error.
  */
@@ -39,6 +40,15 @@ interface EntityRepository {
 
     /** The mirror of [deletePerson]. */
     suspend fun deleteProject(id: Long): AppResult<EntityDeleteResult>
+
+    /**
+     * Renames the entity to [name] trimmed by the name rule of creation (DEC-113, INV-9), in one transaction with one
+     * `now`: `Ok(true)` when it wrote the name, `Ok(false)` when the entity is gone or already holds that name, and
+     * nothing was written; `Err(InvalidInput(BlankName))` for a blank name, before any database access. It writes only
+     * the entity's `name` and its own `updated_at`: no link and no note changes (DEC-21). A name longer than
+     * `MAX_NAME_CHARS` after the trim is a programming error ([IllegalArgumentException]).
+     */
+    suspend fun rename(kind: EntityKind, id: Long, name: String): AppResult<Boolean>
 
     /**
      * Holds the package-internal `insertNew` of data-layer.md § Transactions and results. It runs in the caller's

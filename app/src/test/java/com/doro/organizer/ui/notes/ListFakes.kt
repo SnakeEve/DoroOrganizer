@@ -5,6 +5,8 @@ import com.doro.organizer.core.result.AppResult
 import com.doro.organizer.data.EntityRepository
 import com.doro.organizer.data.NoteRepository
 import com.doro.organizer.model.BatchResult
+import com.doro.organizer.model.DeleteImpact
+import com.doro.organizer.model.EntityDeleteResult
 import com.doro.organizer.model.EntityKind
 import com.doro.organizer.model.EntityRef
 import com.doro.organizer.model.NewEntity
@@ -92,9 +94,20 @@ sealed interface BatchCall {
     ) : BatchCall
 }
 
-/** The existence probes of [EntityRepository]: an entity exists from [put] until [delete]. */
+/**
+ * The existence probes of [EntityRepository]: an entity exists from [put] until [delete]. Renames, impact reads and
+ * deletes (DEC-113) are recorded in [calls]: a rename answers [renameResult], or by default renames an existing entity
+ * whose name differs ([put]); an impact read answers [impact] or [impactError] after [impactGate] (when set) completes;
+ * a delete answers [deleteError] or deletes the entity.
+ */
 class ScriptedEntities : EntityRepository by unused() {
     private val refs = mutableMapOf<Pair<EntityKind, Long>, MutableStateFlow<EntityRef?>>()
+    val calls = mutableListOf<EntityCall>()
+    var renameResult: AppResult<Boolean>? = null
+    var impact = DeleteImpact(n = 0, m = 0)
+    var impactError: AppError? = null
+    var impactGate: CompletableDeferred<Unit>? = null
+    var deleteError: AppError? = null
 
     fun put(kind: EntityKind, id: Long, name: String) {
         ref(kind, id).value = EntityRef(id, name)
@@ -106,7 +119,47 @@ class ScriptedEntities : EntityRepository by unused() {
 
     override fun observe(kind: EntityKind, id: Long): Flow<EntityRef?> = ref(kind, id)
 
+    override suspend fun rename(kind: EntityKind, id: Long, name: String): AppResult<Boolean> {
+        calls += EntityCall.Rename(kind, id, name)
+        renameResult?.let { return it }
+        val old = ref(kind, id).value ?: return AppResult.Ok(false)
+        if (old.name == name) return AppResult.Ok(false)
+        put(kind, id, name)
+        return AppResult.Ok(true)
+    }
+
+    override suspend fun personDeleteImpact(id: Long) = recordImpact(EntityKind.Person, id)
+
+    override suspend fun projectDeleteImpact(id: Long) = recordImpact(EntityKind.Project, id)
+
+    override suspend fun deletePerson(id: Long) = scriptedDelete(EntityCall.Delete(EntityKind.Person, id))
+
+    override suspend fun deleteProject(id: Long) = scriptedDelete(EntityCall.Delete(EntityKind.Project, id))
+
+    private suspend fun recordImpact(kind: EntityKind, id: Long): AppResult<DeleteImpact> {
+        calls += EntityCall.Impact(kind, id)
+        impactGate?.await()
+        return impactError?.let { AppResult.Err(it) } ?: AppResult.Ok(impact)
+    }
+
+    private fun scriptedDelete(call: EntityCall.Delete): AppResult<EntityDeleteResult> {
+        calls += call
+        deleteError?.let { return AppResult.Err(it) }
+        val existed = ref(call.kind, call.id).value != null
+        delete(call.kind, call.id)
+        return AppResult.Ok(EntityDeleteResult(existed, impact.n, impact.m))
+    }
+
     private fun ref(kind: EntityKind, id: Long) = refs.getOrPut(kind to id) { MutableStateFlow(null) }
+}
+
+/** One write or impact read of [ScriptedEntities]. */
+sealed interface EntityCall {
+    data class Rename(val kind: EntityKind, val id: Long, val name: String) : EntityCall
+
+    data class Impact(val kind: EntityKind, val id: Long) : EntityCall
+
+    data class Delete(val kind: EntityKind, val id: Long) : EntityCall
 }
 
 /** A list row of note [id], linked to [persons] and [projects]. */

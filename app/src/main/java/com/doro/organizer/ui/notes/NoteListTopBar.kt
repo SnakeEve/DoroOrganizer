@@ -41,7 +41,8 @@ import com.doro.organizer.ui.common.NoPersonalizedLearning
 /**
  * The top app bar of a perspective (ui.md § 2.2, DEC-51): the title, the Search action and the Settings action.
  * Pinned: the container tints while the list is scrolled. With [onTitleClick] (Individual and Project with an entity
- * chosen, ui.md § 4.2) the title is one button with a dropdown arrow, named by [titleClickLabel].
+ * chosen, ui.md § 4.2) the title is one button with a dropdown arrow, named by [titleClickLabel]; with [entityMenu]
+ * (the same case) the overflow menu of that entity follows Settings (DEC-113).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,6 +53,7 @@ internal fun PerspectiveTopBar(
     scrollBehavior: TopAppBarScrollBehavior,
     onTitleClick: (() -> Unit)? = null,
     titleClickLabel: String? = null,
+    entityMenu: EntityMenuActions? = null,
 ) {
     TopAppBar(
         title = {
@@ -76,6 +78,7 @@ internal fun PerspectiveTopBar(
             IconButton(onClick = onSettings, modifier = Modifier.testTag("action_settings")) {
                 Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.action_settings))
             }
+            entityMenu?.let { EntityMenu(it) }
         },
         scrollBehavior = scrollBehavior,
     )
