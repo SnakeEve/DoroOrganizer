@@ -64,6 +64,7 @@ For Claude Code on any machine that continues this build, and for the owner. Rea
   - **T27** when the owner has made the release key.
   - **Held, on the owner's release:** folding the overnight pipeline changes into `workflows/doro-build-tasks.js` ("Lessons from the R builds" below).
   - **Listed for later by the owner:** R-1 F4 (dialog titles as TalkBack headings: make every dialog title a heading, or correct ui.md § 12.2), R-1 F1 (the log-privacy test the test plan names was never written), R-4b F-b1 ("Delete person…" can list a person created earlier in the same note under "Other people") and R-4b F-b2 (a person created twice if Android ends the app in the background exactly while a stored note is saved together with a newly created person).
+  - **Future features:** every deferred and dropped request, the small items listed for later and new ideas not yet discussed with the owner, each with its source, the owner's decision and a size: [docs/future-features.md](../../docs/future-features.md) (2026-11-26). The next build is picked from it with the owner and versioned by DEC-115.
 - **Lessons from T22's session** (also in section 6 where they recur):
   - A killed VS Code (exit 143 at 08:53 on 2026-11-22, cause unknown) ends `run_in_background` jobs; long phone jobs ran detached (`nohup … & disown`) and survived.
   - `dumpsys thermalservice` prints a stale "Cached temperatures" section before the live "Current temperatures from HAL"; read only the live one (`phone-cooldown.sh` does).
