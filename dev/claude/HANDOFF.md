@@ -251,6 +251,7 @@ adb="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"
 **Configure:**
 - `local.properties` holds `sdk.dir=…`. It is machine-specific and never committed.
 - adb is `<sdk>/platform-tools/adb(.exe)` and is usually not on PATH.
+- The signing key: unzip `release key.zip` (repository root), copy its `release key/debug.keystore` to `~/.android/debug.keystore` (rename the machine's own first) and check its SHA-256 is `0EB603B5…` (its `README.txt`). Every build then signs with the key of the owner's installed app, so a release build installs over it as an update (DEC-109, the owner's choice of 2026-11-27). Without it a release build fails to install over the app on the signature: stop and ask the owner, never uninstall.
 
 **If `adb devices` lists nothing:**
 - Check Windows Device Manager. A Xiaomi phone showing as USB ID `VID_2717&PID_FF40` is in file-transfer mode only, meaning USB debugging is off. `PID_FF48` means file transfer plus ADB.
