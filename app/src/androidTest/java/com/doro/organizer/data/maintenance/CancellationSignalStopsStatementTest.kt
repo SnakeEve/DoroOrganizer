@@ -35,9 +35,10 @@ class CancellationSignalStopsStatementTest {
     fun rawQuery_cancelledWhileItsStatementRuns_stopsPromptly() {
         val file = databases.file("candidate.db")
         databases.createRaw(file, TestKey.Plain).close()
-        val bound = QueryConnection.open(file, ByteArray(0), null).use { connection ->
+        val calibration = QueryConnection.open(file, ByteArray(0), null).use { connection ->
             LongQuery.boundFor(QUERY_MS) { connection.long(LongQuery.SQL, it.toString()) }
         }
+        val bound = calibration.bound
 
         val signal = CancellationSignal()
         QueryConnection.open(file, ByteArray(0), signal).use { connection ->
@@ -56,7 +57,7 @@ class CancellationSignalStopsStatementTest {
             }
             // Without a running statement the cancel would show nothing about stopping one.
             assertTrue(
-                "precondition: the statement ended before the cancel (at +${endedAt.get()} ms: ${outcome.get()})",
+                "precondition: the statement ended before the cancel (at +${endedAt.get()} ms: ${outcome.get()}); $calibration",
                 !ended.await(RUNNING_MS, TimeUnit.MILLISECONDS),
             )
 
@@ -66,7 +67,7 @@ class CancellationSignalStopsStatementTest {
             runner.join(END_LIMIT_MS)
             val seen = "observed: cancelled at +$cancelledAt ms, statement ended at " +
                 "${endedAt.get().takeIf { it >= 0 }?.let { "+$it ms" } ?: "never"} (${outcome.get() ?: "no outcome"}), " +
-                "calibrated running time about $QUERY_MS ms"
+                "calibrated running time about $QUERY_MS ms; $calibration"
 
             assertTrue("the statement did not end within $END_LIMIT_MS ms of the cancel; $seen", stopped)
             assertTrue("the statement was not stopped by the cancel; $seen", outcome.get()?.startsWith("$THREW ") == true)

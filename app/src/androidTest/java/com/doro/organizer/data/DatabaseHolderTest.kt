@@ -1,7 +1,7 @@
 package com.doro.organizer.data
 
+import android.util.Log
 import androidx.room.coroutines.createFlow
-import androidx.room.useReaderConnection
 import androidx.sqlite.SQLiteConnection
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.core.coroutines.AppDispatchers
@@ -340,6 +340,7 @@ class DatabaseHolderTest {
         var walAtBlock = true
 
         val drainStart = statement.now()
+        val inCountAtDrain = statement.inCount()
         val endAtDrain = statement.endedAt()
         val walAtDrain = statement.wal.exists()
         val result = holder.exclusive {
@@ -352,9 +353,12 @@ class DatabaseHolderTest {
         }
         statement.awaitEnd()
 
-        val timeline = statement.timeline("the drain began" to drainStart, "the exclusive block began" to blockStart) +
-            "; -wal when the drain began: $walAtDrain, in the block: $walAtBlock; " +
-            "flows counted in the block: $flowsAtBlock"
+        val timeline = statement.timeline(
+            inCountAtDrain,
+            "the drain began" to drainStart,
+            "the exclusive block began" to blockStart,
+        ) + "; -wal when the drain began: $walAtDrain, in the block: $walAtBlock; flows counted in the block: $flowsAtBlock"
+        Log.i(TIMELINE_TAG, "exclusive: $timeline")
         statement.assertPreconditions(drainStart, endAtDrain, walAtDrain, timeline)
         assertEquals(OpenResult.Opened, result)
         assertTrue("the exclusive block began while the statement was still running; $timeline", endAtBlock != null)
@@ -379,6 +383,7 @@ class DatabaseHolderTest {
         val statement = startLongStatement(holder)
 
         val drainStart = statement.now()
+        val inCountAtDrain = statement.inCount()
         val endAtDrain = statement.endedAt()
         val walAtDrain = statement.wal.exists()
         holder.close()
@@ -388,8 +393,9 @@ class DatabaseHolderTest {
         val walAtClose = statement.wal.exists()
         statement.awaitEnd()
 
-        val timeline = statement.timeline("the drain began" to drainStart, "close() returned" to closeEnd) +
+        val timeline = statement.timeline(inCountAtDrain, "the drain began" to drainStart, "close() returned" to closeEnd) +
             "; -wal when the drain began: $walAtDrain, when close() returned: $walAtClose"
+        Log.i(TIMELINE_TAG, "close: $timeline")
         statement.assertPreconditions(drainStart, endAtDrain, walAtDrain, timeline)
         assertTrue("close() returned while the statement was still running; $timeline", endAtClose != null)
         assertTrue("close() returned before the flow had ended; $timeline", flowEndAtClose != null)
@@ -587,10 +593,11 @@ class DatabaseHolderTest {
 
     /**
      * The scene of the running-statement tests (DEC-107): on a WAL database with a write in its `-wal`, a real Room
-     * flow ([roomFlow]) is collected through `observe`; its first statement is [LongQuery], calibrated on this
-     * instance to run about [STATEMENT_MS]. The Room flow's own `onCompletion` stamps the flow's end; it runs before
-     * the holder's `onCompletion`, which takes the flow off `activeFlows`. Returns [DRAIN_AFTER_MS] after that
-     * statement began, while it is running in SQLite.
+     * flow ([roomFlow]) is collected through `observe`; its first query block runs [LongQuery] as counts of
+     * [DeadlineCount.CHUNK] rows until [STATEMENT_MS] after its start (DEC-114: no row count sized in advance, which
+     * failed on both sides of the window because the statement's speed varies about 3x on the phone). The Room flow's
+     * own `onCompletion` stamps the flow's end; it runs before the holder's `onCompletion`, which takes the flow off
+     * `activeFlows`. Returns [DRAIN_AFTER_MS] after that run began, while it is running in SQLite.
      */
     private suspend fun CoroutineScope.startLongStatement(holder: DatabaseHolder): LongStatement {
         val db = holder.openDatabase()
@@ -599,7 +606,7 @@ class DatabaseHolderTest {
         TestRows(sql).person("Ann", 1)
         val wal = walOf(databases.files.live(GENERATION))
         assertTrue("the write sits in the WAL", wal.length() > 0)
-        val statement = LongStatement(wal, LongQuery.boundFor(STATEMENT_MS) { db.countTo(it) })
+        val statement = LongStatement(wal)
         statement.collector = launch {
             holder.observe { roomFlow(it, statement::countOn).onCompletion { statement.markFlowEnd() } }.collect {}
         }
@@ -619,15 +626,6 @@ class DatabaseHolderTest {
     private fun <R> roomFlow(db: AppDatabase, block: (SQLiteConnection) -> R): Flow<R> =
         createFlow(db, false, arrayOf("persons"), block)
 
-    /** [LongQuery] counting to [bound] on Room's reader connection, the connection a Room flow's query takes. */
-    private suspend fun AppDatabase.countTo(bound: Long): Long = useReaderConnection { connection ->
-        connection.usePrepared(LongQuery.SQL) { statement ->
-            statement.bindLong(1, bound)
-            check(statement.step()) { "no row" }
-            statement.getLong(0)
-        }
-    }
-
     private fun walOf(file: File) = File(file.path + "-wal")
 
     private suspend fun <T> receive(channel: Channel<T>): T = withTimeout(10.seconds) { channel.receive() }
@@ -639,11 +637,16 @@ class DatabaseHolderTest {
         runBlocking(Dispatchers.Default) { withTimeout(60.seconds) { block() } }
 
     /**
-     * The statement of [startLongStatement]'s flow. Its first run counts to [bound], stamping its start just before
-     * `step()` and its end after it; a later run (on a reopened instance) counts to 1. Times are milliseconds on one
-     * clock; [timeline] prints them from the statement's start.
+     * The statement of [startLongStatement]'s flow. Its first run counts to [DeadlineCount.CHUNK] again and again
+     * until [STATEMENT_MS] after its start ([DeadlineCount.runUntil], DEC-114), stamping its start just before the first
+     * count and its end after the last; [inCount] tells whether a count is under way. In open-helper mode each count is
+     * its own query: `reset()` closes the driver statement's cursor and the next `step()` queries again
+     * (androidx.sqlite's `RowSQLiteStatement`), so no SQLCipher connection or snapshot is held between counts, and a
+     * database closed under the run makes its next count throw. Room's flow block spans the whole run and the flow
+     * ends only after it returns. A later run (on a reopened instance) counts to 1. Times are milliseconds on one
+     * clock; [timeline] prints them from the statement's start, and the run after them.
      */
-    private class LongStatement(val wal: File, private val bound: Long) {
+    private class LongStatement(val wal: File) {
         lateinit var collector: Job
         private val origin = System.nanoTime()
         private val runs = AtomicInteger()
@@ -651,8 +654,18 @@ class DatabaseHolderTest {
         private val endMs = AtomicLong(NOT_YET)
         private val flowEndMs = AtomicLong(NOT_YET)
         private val outcome = AtomicReference<String>()
+        private val deadlineRun = AtomicReference<DeadlineCount.Run?>()
+        private val stepping = AtomicBoolean()
 
-        fun now(): Long = (System.nanoTime() - origin) / 1_000_000
+        fun now(): Long = ms(System.nanoTime())
+
+        private fun ms(nanoTime: Long): Long = (nanoTime - origin) / 1_000_000
+
+        /** Whether a count of the first run is being stepped now; printed in the timeline, never asserted. */
+        fun inCount(): Boolean = stepping.get()
+
+        /** How the first run ended ([DeadlineCount.FULL_COUNTS], another run outcome or `threw <class>`), or null. */
+        fun outcome(): String? = outcome.get()
 
         /** When the statement returned, or null while it runs. */
         fun endedAt(): Long? = endMs.get().takeIf { it != NOT_YET }
@@ -668,23 +681,38 @@ class DatabaseHolderTest {
             flowEndMs.compareAndSet(NOT_YET, now())
         }
 
-        /** The flow's query: runs on Room's query thread, inside the flow's coroutine. */
+        /**
+         * The flow's query: runs on Room's query thread, inside the flow's coroutine. The first run returns the rows
+         * counted ([DeadlineCount.CHUNK] per count) and records its [DeadlineCount.Run]; what a step throws is
+         * rethrown after the end is stamped.
+         */
         fun countOn(connection: SQLiteConnection): Long {
             val first = runs.getAndIncrement() == 0
             return connection.prepare(LongQuery.SQL).use { statement ->
-                statement.bindLong(1, if (first) bound else 1L)
-                if (first) startMs.set(now())
-                val result = runCatching {
+                if (first) {
+                    statement.bindLong(1, DeadlineCount.CHUNK)
+                    val startNs = System.nanoTime()
+                    startMs.set(ms(startNs))
+                    val result = runCatching {
+                        DeadlineCount.runUntil(startNs + STATEMENT_MS * 1_000_000L, System::nanoTime) {
+                            stepping.set(true)
+                            check(statement.step()) { "no row" }
+                            val counted = statement.getLong(0)
+                            stepping.set(false)
+                            statement.reset()
+                            counted
+                        }
+                    }
+                    stepping.set(false)
+                    endMs.set(now())
+                    result.onSuccess { deadlineRun.set(it) }
+                    outcome.set(result.fold({ it.outcome }, { "threw ${it.javaClass.name}" }))
+                    DeadlineCount.CHUNK * result.getOrThrow().counts
+                } else {
+                    statement.bindLong(1, 1L)
                     check(statement.step()) { "no row" }
                     statement.getLong(0)
                 }
-                if (first) {
-                    endMs.set(now())
-                    outcome.set(
-                        result.fold({ if (it == bound) "full count" else "another count" }, { "threw ${it.javaClass.name}" }),
-                    )
-                }
-                result.getOrThrow()
             }
         }
 
@@ -706,7 +734,10 @@ class DatabaseHolderTest {
          * [drainStart] the statement was still running ([endAtDrain] null) and a `-wal` existed; the statement ran on
          * for at least [MIN_OVERLAP_MS] after that, else the test shows nothing; and it ended at most
          * [MAX_OVERLAP_MS] after it, well inside the drain timeout, else the test would take the drain's timeout path
-         * (a calibration failure, not a pass).
+         * (a failure of the scene, not a pass). Before the minimum it checks one product property (DEC-114 (3)): the run
+         * reached its deadline with [DeadlineCount.FULL_COUNTS]. A database closed under the running flow makes the
+         * next count throw, so a drain that did not wait cuts the run short; that is reported as the product failure
+         * it is, not as a too-short scene.
          */
         fun assertPreconditions(drainStart: Long, endAtDrain: Long?, walAtDrain: Boolean, timeline: String) {
             val end = endedAt()
@@ -715,18 +746,28 @@ class DatabaseHolderTest {
             assertTrue("precondition: no -wal existed when the drain began; $timeline", walAtDrain)
             val overlap = end!! - drainStart
             assertTrue(
+                "precondition: the statement ran on more than $MAX_OVERLAP_MS ms after the drain began, too close to " +
+                    "the drain timeout of $FLOW_DRAIN_TIMEOUT_MS ms; $timeline",
+                overlap <= MAX_OVERLAP_MS,
+            )
+            assertEquals(
+                "the long run did not reach its deadline after the drain began: a database closed under the running " +
+                    "flow makes its next count throw, so a drain that did not wait for the flow ends it early; $timeline",
+                DeadlineCount.FULL_COUNTS,
+                outcome(),
+            )
+            assertTrue(
                 "precondition: the statement ran on less than $MIN_OVERLAP_MS ms after the drain began; $timeline",
                 overlap >= MIN_OVERLAP_MS,
             )
-            assertTrue(
-                "precondition: the statement ran on more than $MAX_OVERLAP_MS ms after the drain began, too close to " +
-                    "the drain timeout of $FLOW_DRAIN_TIMEOUT_MS ms (calibration); $timeline",
-                overlap <= MAX_OVERLAP_MS,
-            )
         }
 
-        /** [moments], the statement's end and the flow's end, in milliseconds from the statement's start. */
-        fun timeline(vararg moments: Pair<String, Long>): String {
+        /**
+         * [moments], the statement's end and the flow's end, in milliseconds from the statement's start, then the
+         * [DeadlineCount.Run] and whether a count was being stepped when the drain began ([inCountAtDrain], read with
+         * [inCount]).
+         */
+        fun timeline(inCountAtDrain: Boolean, vararg moments: Pair<String, Long>): String {
             fun fromStart(at: Long?): String {
                 if (at == null || at == NOT_YET) return "never"
                 return (at - startMs.get()).let { if (it < 0) "$it" else "+$it" }
@@ -736,7 +777,10 @@ class DatabaseHolderTest {
                 "the flow ended at ${fromStart(flowEndedAt())}",
             )
             return (moments.map { (what, at) -> "$what at ${fromStart(at)}" } + ends)
-                .joinToString(prefix = "timeline in ms from the statement's start: ")
+                .joinToString(
+                    prefix = "timeline in ms from the statement's start: ",
+                    postfix = "; run: ${deadlineRun.get() ?: "none"}; in a count when the drain began: $inCountAtDrain",
+                )
         }
     }
 
@@ -756,7 +800,9 @@ class DatabaseHolderTest {
         /** How long the late flow takes to end after its cancellation: far above timer noise, inside the drain timeout. */
         const val LATE_MS = 500L
 
-        /** The long statement's calibrated running time: long against [DRAIN_AFTER_MS], short against the timeout. */
+        /**
+         * The long run's deadline from its start (DEC-114): long against [DRAIN_AFTER_MS], short against the timeout.
+         */
         const val STATEMENT_MS = 800L
 
         /** How long after the long statement began the drain begins. */
@@ -769,6 +815,12 @@ class DatabaseHolderTest {
         const val MAX_OVERLAP_MS = 1_500L
 
         const val POLL_MS = 5L
+
+        /**
+         * The logcat tag of the running-statement cases' timelines (one info line per case, passing or failing; times
+         * and counts only). Not `Doro`, so `DrainTimeoutLogTest`'s filter never sees it.
+         */
+        const val TIMELINE_TAG = "DoroTimeline"
 
         /** Bounds every wait of these tests, so that a failure reports instead of hanging. */
         val LIMIT = 10.seconds

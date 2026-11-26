@@ -124,13 +124,15 @@ class RoomCloseDuringQueryTest {
         val statementOutcome: String?,
         val queryCompleted: Boolean,
         val walGoneAt: Long?,
+        /** The printed [LongQuery.Calibration], so this data class stays compared by value. */
+        val calibration: String,
     ) {
         override fun toString() = "observed: journal_mode=$journalMode, -wal before close=$walBeforeClose, " +
             "statement running when close() began=$runningAtClose, close() began at +$closeStart ms and returned at " +
             "${closeEnd?.let { "+$it ms" } ?: "never"} (error: ${closeError ?: "none"}), -wal when close() returned=" +
             "$walWhenCloseReturned, statement ended at ${statementEnd?.let { "+$it ms" } ?: "never"} " +
             "(${statementOutcome ?: "no outcome"}), query coroutine completed=$queryCompleted, -wal seen gone at " +
-            (walGoneAt?.let { "+$it ms" } ?: "never")
+            (walGoneAt?.let { "+$it ms" } ?: "never") + "; $calibration"
     }
 
     /** Plays the scene and records what it showed under `RoomCloseDuringQueryTest#`[probe] before any precondition. */
@@ -139,7 +141,8 @@ class RoomCloseDuringQueryTest {
         val support = db.openHelper.writableDatabase
         val journalMode = support.stringsOf("PRAGMA journal_mode").singleOrNull()
         val wal = File("${checkNotNull(support.path) { "no path" }}-wal")
-        val bound = LongQuery.boundFor(QUERY_MS) { runBlocking { db.count(it) } }
+        val calibration = LongQuery.boundFor(QUERY_MS) { runBlocking { db.count(it) } }
+        val bound = calibration.bound
 
         val origin = System.nanoTime()
         fun now() = (System.nanoTime() - origin) / 1_000_000
@@ -199,6 +202,7 @@ class RoomCloseDuringQueryTest {
                 statementOutcome = statementOutcome.get(),
                 queryCompleted = queryCompleted,
                 walGoneAt = walGoneAt,
+                calibration = "$calibration",
             )
             SetupProbeRecord.record("RoomCloseDuringQueryTest#$probe", "$seen")
             // Without an overlap the probe would show nothing about a running statement.
