@@ -146,11 +146,12 @@ com.doro.organizer
     ├── common/       NoteRowItem (NoteRowUi, toRowUi), EntityPicker (EntityPickerViewModel), MonthGrid (DaySelection, MonthPages),
     │                 DateFormats (ui.md § 11.14), DelayedProgress, SecureDialogWindow, NoPersonalizedLearning (security.md § 11),
     │                 Announcer, AppError to string, EntityPickerScreen, PickerItems (PickerItem, pickerItems), EntityDeleteDialog,
+    │                 DestructiveButton (the "Delete" in the error color of EntityDeleteDialog and of the editor's DeleteNoteDialog),
     │                 PickerResult (PICKER_RESULT), MessageEffect, MaintenanceStatusHost, MaintenanceHostView (HostPlace,
     │                 HostView, hostViewOf, keyChangedText), RestoreKeyViewModel (restoreKeyFactory, DEC-101), RestoreDialogs
     │                 (MessageDialog, restoreErrorText), PasswordBackoff (throttledUntil, currentPasswordMessage) (ui.md § 8.12)
     ├── gate/         gate screens (ui.md § 10), ForgotPasswordViewModel (a gate ViewModel, § SessionGate invariant 2)
-    ├── notes/        NoteListScreen, NoteListViewModel, NoteListUiState, PerspectiveSpec, ToggleAnchor, TopAnchor, KeepAnchor (KeptRow, LastLayout), NewNoteReveal (NewNoteWait), NoteListBody (ListPositionHooks), PrimaryAnchor, date filter sheet, batch mode, entity menu and rename dialog (EntityDialogs, DEC-113)
+    ├── notes/        NoteListScreen, NoteListViewModel, NoteListUiState, PerspectiveSpec, ToggleAnchor, TopAnchor, KeepAnchor (KeptRow, LastLayout), NewNoteReveal (NewNoteWait), NoteListBody (ListPositionHooks), PrimaryAnchor, date filter sheet, batch mode, ListDialogKey (SavedListDialog, savedListDialogOf), entity menu and rename dialog (EntityDialogs: EntityMenuActions, EntityMenu, ShownEntityDialog, RenameEntityDialog, renameFieldValue, capName; DEC-113)
     ├── editor/       EditorScreen (editorFactory), EditorViewModel, EditorUiState, EditorDraft (DraftFields, Baseline,
     │                 EditorSavedState), EditorBody, EditorDialogs, ContentCap
     └── settings/     SettingsScreen, SettingsRows, SettingsViewModel (settingsFactory), SettingsDialog (KeyFlow), BackupDialogs,
