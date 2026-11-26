@@ -21,6 +21,14 @@ sealed interface PickerItem {
         override fun toString() = "AnyEntity(selected=$selected)"
     }
 
+    /**
+     * "All people" / "All projects" of `PerspectivePrimary` (DEC-112): returns no entity, so the list shows its picker
+     * body. Never checked, shown whatever the name search holds.
+     */
+    data object AllEntities : PickerItem {
+        override val key: Any get() = "all"
+    }
+
     /** `Create "X"`, or `Create another "X"` when [another]: a case-insensitive exact match exists (DEC-32). */
     data class Create(val name: String, val another: Boolean) : PickerItem {
         override val key: Any get() = "create"
@@ -59,11 +67,12 @@ val PickerPurpose?.isMultiSelect: Boolean
 
 /**
  * The list of a picker tab of [kind] for [purpose] (null: the embedded body of Individual and Project), top to bottom
- * (ui.md § 7.4): the "Any …" row or the create row, the entities [created] in this visit, then the [options] in
+ * (ui.md § 7.4): the "Any …", "All …" or create row, the entities [created] in this visit, then the [options] in
  * repository order. Where the picker forms groups, [firstGroup] holds the ids of the first one (DEC-28, DEC-111): the
  * options split by id into that group and the rest, each in repository order and under its header; a tick moves
  * nobody. Every section is filtered by a case-insensitive substring of the trimmed [search] (`SearchText.fold`, ui.md
- * § 7.2); a header shows only when both of its groups have rows after that filter.
+ * § 7.2), the "Any …" and "All …" rows excepted; a header shows only when both of its groups have rows after that
+ * filter.
  */
 internal fun pickerItems(
     purpose: PickerPurpose?,
@@ -102,7 +111,10 @@ internal fun pickerItems(
                 val (linked, others) = shown.partition { it.id in purpose.linkedIds }
                 addSections(R.string.picker_section_linked, linked, otherHeader(kind), others) { entity(it, false) }
             }
-            is PickerPurpose.PerspectivePrimary -> shown.forEach { add(entity(it, it.id == purpose.selectedId)) }
+            is PickerPurpose.PerspectivePrimary -> {
+                add(PickerItem.AllEntities)
+                shown.forEach { add(entity(it, it.id == purpose.selectedId)) }
+            }
             null -> shown.forEach { add(entity(it, false)) }
         }
     }

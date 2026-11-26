@@ -408,6 +408,97 @@ class NoteListViewModelRulesTest {
         assertEquals(Primary.Entity(BOB, "Bob"), list.state.primary)
     }
 
+    // "All people" / "All projects" (DEC-112).
+
+    @Test
+    fun clearPrimary_showsTheBody_andForgetsTheRememberedIdAndAnUnsavedChoice_inOneEdit_alsoForTheNextStart() = runTest {
+        entities.put(EntityKind.Person, ALICE, "Alice")
+        entities.put(EntityKind.Person, BOB, "Bob")
+        settings.setRemembered(EntityKind.Person, ALICE)
+        settings.setRemembered(EntityKind.Project, ALPHA)
+        val list = open(Perspective.Individual)
+        settings.failEdits = true
+        list.vm.choosePrimary(BOB)
+        runCurrent()
+        settings.failEdits = false
+        val edits = settings.edits
+
+        list.vm.clearPrimary()
+        runCurrent()
+
+        assertEquals(Primary.None, list.state.primary)
+        assertEquals("one edit", edits + 1, settings.edits)
+        assertNull("Alice, behind the unsaved choice of Bob, is gone too", settings.snapshot().rememberedPersonId)
+        assertEquals("the other perspective's choice stays", ALPHA, settings.snapshot().rememberedProjectId)
+        assertNull(list.handle.get<Long>(NoteListViewModel.KEY_UNSAVED_CHOICE))
+        assertEquals("a restored screen", Primary.None, open(Perspective.Individual, restoredFrom(list.handle)).state.primary)
+        assertEquals("the next start", Primary.None, open(Perspective.Individual).state.primary)
+    }
+
+    @Test
+    fun clearPrimary_dropsTheUnsavedChoice_onlyOnceTheSettingsShowTheClear_soTheOlderIdNeverShows() = runTest {
+        entities.put(EntityKind.Person, ALICE, "Alice")
+        entities.put(EntityKind.Person, BOB, "Bob")
+        settings.setRemembered(EntityKind.Person, ALICE)
+        val list = open(Perspective.Individual)
+        settings.failEdits = true
+        list.vm.choosePrimary(BOB)
+        runCurrent()
+        settings.failEdits = false
+        settings.publishEdits = false
+        val fromClear = list.states.size
+
+        list.vm.clearPrimary()
+        runCurrent()
+        assertEquals("the unsaved choice until the settings show the clear", Primary.Entity(BOB, "Bob"), list.state.primary)
+        settings.load()
+        runCurrent()
+
+        assertEquals(Primary.None, list.state.primary)
+        val shownAfter = list.states.drop(fromClear).map { it.primary }
+        assertFalse("Alice shown: $shownAfter", shownAfter.any { it is Primary.Entity && it.id == ALICE })
+    }
+
+    @Test
+    fun clearPrimary_keepsTheSecondaryFilters_forTheNextEntity() = runTest {
+        entities.put(EntityKind.Person, ALICE, "Alice")
+        entities.put(EntityKind.Person, BOB, "Bob")
+        entities.put(EntityKind.Project, ALPHA, "Alpha")
+        settings.setRemembered(EntityKind.Person, ALICE)
+        val list = open(Perspective.Individual)
+        list.vm.setEntityFilter(EntityKind.Project, ALPHA)
+        runCurrent()
+
+        list.vm.clearPrimary()
+        runCurrent()
+        assertEquals(Primary.None, list.state.primary)
+        list.vm.choosePrimary(BOB)
+        runCurrent()
+
+        assertEquals(Primary.Entity(BOB, "Bob"), list.state.primary)
+        assertEquals(BOB, notes.rowQueries.last().personId)
+        assertEquals(ALPHA, notes.rowQueries.last().projectId)
+    }
+
+    @Test
+    fun aFailedClear_showsTheBodyAnyway_saysItIsNotRemembered_andTheNextStartShowsTheEntity() = runTest {
+        entities.put(EntityKind.Project, ALPHA, "Alpha")
+        settings.setRemembered(EntityKind.Project, ALPHA)
+        val list = open(Perspective.Project)
+        settings.failEdits = true
+
+        list.vm.clearPrimary()
+        runCurrent()
+
+        assertEquals(Primary.None, list.state.primary)
+        assertEquals(UiText.Res(R.string.primary_not_remembered), list.state.message?.text)
+        assertTrue(list.state.message?.isError == true)
+        assertEquals(ALPHA, settings.snapshot().rememberedProjectId)
+        assertEquals("a restored screen", Primary.None, open(Perspective.Project, restoredFrom(list.handle)).state.primary)
+        settings.failEdits = false
+        assertEquals("the next start", Primary.Entity(ALPHA, "Alpha"), open(Perspective.Project).state.primary)
+    }
+
     @Test
     fun thePickerBody_closesTheListSearch() = runTest {
         entities.put(EntityKind.Person, ALICE, "Alice")

@@ -39,6 +39,13 @@ class FakeSettingsStore(initial: Settings = Settings()) : SettingsStore {
     @Volatile
     var failPasswordVerified = false
 
+    /**
+     * With this off, writes change the values but [settings] keeps the earlier ones until [load]: the lag of a
+     * DataStore's shared data behind the edit that returned.
+     */
+    @Volatile
+    var publishEdits = true
+
     @Volatile
     var edits = 0
         private set
@@ -78,6 +85,8 @@ class FakeSettingsStore(initial: Settings = Settings()) : SettingsStore {
         if (current == id) it.withRemembered(kind, null) else it
     }
 
+    override suspend fun clearRemembered(kind: EntityKind) = edit { it.withRemembered(kind, null) }
+
     override suspend fun putDraftInsert(draftKey: String, record: DraftInsert) = update {
         draftInserts = DraftInserts.with(draftInserts, draftKey, record)
     }
@@ -115,7 +124,7 @@ class FakeSettingsStore(initial: Settings = Settings()) : SettingsStore {
         if (failEdits || edits + 1 >= failEditsFrom) throw IOException("injected settings write failure")
         change()
         edits++
-        if (visible.value != null) visible.value = values
+        if (publishEdits && visible.value != null) visible.value = values
     }
 }
 

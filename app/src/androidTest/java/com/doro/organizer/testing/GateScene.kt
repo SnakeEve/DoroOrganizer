@@ -6,6 +6,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.doro.organizer.MainActivity
 import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.result.AppResult
+import com.doro.organizer.data.EntityRepository
 import com.doro.organizer.data.HolderState
 import com.doro.organizer.data.NoteRepository
 import com.doro.organizer.model.KeyMode
@@ -66,10 +67,11 @@ class GateScene(
     var wrapVault: (KeyVault) -> KeyVault = { it }
 
     /**
-     * The list-position tests' probes (testing.md I-58): the note repository's wrapper, the marker's wrapper and the
-     * dispatchers; null keeps the production member. Set them before the rules run, in the test's constructor.
+     * The list-position tests' probes (testing.md I-58, I-63): the repositories' wrappers, the marker's wrapper and
+     * the dispatchers; null keeps the production member. Set them before the rules run, in the test's constructor.
      */
     var wrapNoteRepository: ((NoteRepository) -> NoteRepository)? = null
+    var wrapEntityRepository: ((EntityRepository) -> EntityRepository)? = null
     var wrapNewNoteMarker: ((NewNoteMarker) -> NewNoteMarker)? = null
     var dispatchers: AppDispatchers? = null
 
@@ -92,6 +94,7 @@ class GateScene(
         lockSdkInt = { controllerSdkInt }
         wrapAnnouncer = announcements::wrap
         wrapNoteRepository = this@GateScene.wrapNoteRepository
+        wrapEntityRepository = this@GateScene.wrapEntityRepository
         wrapNewNoteMarker = this@GateScene.wrapNewNoteMarker
         dispatchers = this@GateScene.dispatchers
     }

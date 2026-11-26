@@ -368,15 +368,32 @@ class NoteListViewModel(
      * title's picker; secondary filters and search stay. A choice that cannot be saved is shown anyway, but not
      * remembered for the next start, and a message says so (DEC-99).
      */
-    fun choosePrimary(id: Long) {
+    fun choosePrimary(id: Long) = rememberEntity(id, ifNotSaved = UnsavedChoice.Entity(id))
+
+    /**
+     * "All people" / "All projects" of the title's picker (DEC-112): forgets the remembered entity of this perspective,
+     * whatever id it holds, and an unsaved choice, so the picker body shows now and at every later start. The other
+     * perspective's choice and the secondary and date filters stay (DEC-112 (5)); `Primary.None` closes the list search
+     * as for any return of the picker body. When that cannot be saved the picker body shows anyway, for the life of this
+     * saved state, and a message says the choice is not remembered (DEC-112 (3)).
+     */
+    fun clearPrimary() = rememberEntity(null, ifNotSaved = UnsavedChoice.Cleared)
+
+    /**
+     * Writes [id] (null: none) as this perspective's remembered entity and drops an unsaved choice only once the
+     * settings show the write, so an older remembered id never shows in between (DEC-112 (2)). A failed write shows
+     * [ifNotSaved] instead, with the message of DEC-99.
+     */
+    private fun rememberEntity(id: Long?, ifNotSaved: UnsavedChoice) {
         val kind = checkNotNull(spec.primaryKind) { "only Individual and Project have an entity" }
         viewModelScope.launch {
             try {
-                settingsStore.setRemembered(kind, id)
+                if (id == null) settingsStore.clearRemembered(kind) else settingsStore.setRemembered(kind, id)
+                settingsStore.settings.first { it != null && it.rememberedId(kind) == id }
                 setUnsavedChoice(UnsavedChoice.None)
             } catch (_: IOException) {
                 // A failed DataStore write is a full disk (SettingsStore).
-                setUnsavedChoice(UnsavedChoice.Entity(id))
+                setUnsavedChoice(ifNotSaved)
                 message.value = UserMessage.of(UiText.Res(R.string.primary_not_remembered), isError = true)
             }
         }
@@ -887,9 +904,9 @@ class NoteListViewModel(
     }
 
     /**
-     * A primary choice the settings could not save (DEC-99). [Cleared]: its entity was deleted, so the picker shows
-     * rather than an older remembered entity. Saved as one nullable id: null for [None], 0 for [Cleared], which no
-     * entity has (Room's generated ids start at 1).
+     * A primary choice the settings could not save (DEC-99). [Cleared]: its entity was deleted, or "All people" / "All
+     * projects" could not be saved (DEC-112 (3)), so the picker shows rather than an older remembered entity. Saved as
+     * one nullable id: null for [None], 0 for [Cleared], which no entity has (Room's generated ids start at 1).
      */
     private sealed interface UnsavedChoice {
         val savedValue: Long?

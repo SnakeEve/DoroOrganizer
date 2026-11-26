@@ -20,6 +20,9 @@ internal class LastLayout(
     /** The first visible item is item 0 at offset 0 (DEC-110 (1)). */
     val atVeryTop: Boolean get() = index == 0 && offset == 0
 
+    /** At the very top with no drag or fling in progress: where rule (1) keeps a list at its top (DEC-110 (1)). */
+    val atRestAtTop: Boolean get() = atVeryTop && !scrollInProgress
+
     /** The first visible item's index and offset. */
     val scrollPosition: ScrollPosition get() = ScrollPosition(index, offset)
 
@@ -105,4 +108,12 @@ internal class KeepAnchor(private var seed: KeptRow?, private val restored: Scro
      * of a layout that showed none.
      */
     fun unusedSeed(): KeptRow? = seed
+
+    /**
+     * Ends a seed no rows have used yet, without a move: a new primary's list (DEC-110 (4)) never places a row kept
+     * under another one.
+     */
+    fun drop() {
+        seed = null
+    }
 }

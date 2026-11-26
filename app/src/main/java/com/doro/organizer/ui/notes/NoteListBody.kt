@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -62,7 +63,8 @@ internal class ListPositionHooks(
  * end pane) the loading and empty states are list items, top-aligned under it; without, they are centered;
  * [headerItems] counts the items [header] adds before the rows. In selection mode ([NoteListUiState.selection]) every
  * row shows whether it is selected. [bottomPadding] keeps the last row clear of the create button (ui.md § 2.3). The
- * position rules of ui.md § 3.11 act through [position].
+ * position rules of ui.md § 3.11 act through [position]; [primaryAnchor] holds the primary the list's position belongs
+ * to (rule 4).
  */
 @Composable
 internal fun NoteListBody(
@@ -74,12 +76,13 @@ internal fun NoteListBody(
     onClearFilters: () -> Unit,
     bottomPadding: Dp,
     position: ListPositionHooks,
+    primaryAnchor: PrimaryAnchor,
     modifier: Modifier = Modifier,
     header: (LazyListScope.() -> Unit)? = null,
     headerItems: Int = 0,
 ) {
     val anchor = remember { ToggleAnchor() }
-    ListPositionRules(state, listState, anchor, position, headerItems)
+    ListPositionRules(state, listState, anchor, position, primaryAnchor, headerItems)
     val toggle = { row: NoteRowUi, checked: Boolean ->
         if (listState.layoutInfo.visibleItemsInfo.firstOrNull()?.key == row.id) {
             val before = ScrollPosition(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
@@ -99,9 +102,16 @@ internal fun NoteListBody(
         ) {
             header?.invoke(this)
             when {
-                state.loading -> item(key = "loading") { DelayedProgress(Modifier.fillMaxWidth().heightIn(min = 96.dp)) }
+                state.loading -> item(key = "loading") {
+                    Box(Modifier.fillMaxWidth().then(fillBelowHeader(headerItems))) {
+                        DelayedProgress(Modifier.fillMaxWidth().heightIn(min = 96.dp))
+                    }
+                }
                 state.rows.isEmpty() -> item(key = "empty") {
-                    Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.TopCenter) {
+                    Box(
+                        Modifier.fillMaxWidth().then(fillBelowHeader(headerItems)).padding(vertical = 24.dp),
+                        contentAlignment = Alignment.TopCenter,
+                    ) {
                         EmptyState(state.filtersActive, onClearFilters)
                     }
                 }
@@ -126,7 +136,8 @@ internal fun NoteListBody(
  * The position rules (ui.md § 3.9 item 4, § 3.11; DEC-110), in the composition that hands [state]'s rows to the
  * `LazyColumn`, so the rows and the position land in the same frame: `requestScrollToItem` overrides key anchoring for
  * that one remeasure. Every helper sees every rows value, so each ends or updates its own state; the first position
- * wins: the reveal, then the toggle anchor, then the top anchor (at the very top) or the keep anchor (below it).
+ * wins: the start of a new primary's list, then the reveal, then the toggle anchor, then the top anchor (at the very
+ * top) or the keep anchor (below it).
  */
 @Composable
 private fun ListPositionRules(
@@ -134,6 +145,7 @@ private fun ListPositionRules(
     listState: LazyListState,
     toggleAnchor: ToggleAnchor,
     position: ListPositionHooks,
+    primaryAnchor: PrimaryAnchor,
     headerItems: Int,
 ) {
     val topAnchor = remember { TopAnchor() }
@@ -141,11 +153,19 @@ private fun ListPositionRules(
     val keepAnchor = remember { KeepAnchor(position.takeKeptRow(), LastLayout.of(listState).scrollPosition) }
     val rows = state.rows
     val layout = LastLayout.of(listState)
+    // Rule 4 first (DEC-110 (4)): a note marked or a row kept under another primary never places this one's list. It
+    // acts also during a fling, whose stop requestScrollToItem launches, and while the rows still load.
+    val newPrimary = primaryAnchor.changedTo(state.primary)
+    if (newPrimary) {
+        position.reveal.drop()
+        keepAnchor.drop()
+    }
+    val start = if (newPrimary) PrimaryAnchor.startOf(headerItems, layout.index) else null
     val revealed = position.reveal.positionFor(rows, state.rowsRead, layout, headerItems)
     val toggled = toggleAnchor.positionFor(rows)
     val top = topAnchor.positionFor(rows, layout)
     val kept = keepAnchor.positionFor(rows, layout, headerItems)
-    (revealed ?: toggled ?: top ?: kept)?.let { listState.requestScrollToItem(it.index, it.offset) }
+    (start ?: revealed ?: toggled ?: top ?: kept)?.let { listState.requestScrollToItem(it.index, it.offset) }
 
     val currentRows by rememberUpdatedState(rows)
     val keepRow by rememberUpdatedState(position.keepRow)
@@ -153,6 +173,14 @@ private fun ListPositionRules(
         onDispose { keepRow(keepAnchor.unusedSeed() ?: KeptRow.of(LastLayout.of(listState), currentRows)) }
     }
 }
+
+/**
+ * The height of the loading or empty item: below [headerItems] header items (the single-column Calendar) the whole
+ * viewport, so the list is never shorter than its header plus a screen. Shorter, it would clamp its own offset and
+ * move a grid dragged partly off screen when a day or range is chosen there, which must keep its place (DEC-110 (4)).
+ */
+private fun LazyItemScope.fillBelowHeader(headerItems: Int): Modifier =
+    if (headerItems > 0) Modifier.fillParentMaxHeight() else Modifier
 
 /** "(No data)" (verbatim §5, DEC-25), and "Clear filters" while a secondary filter or the search is active. */
 @Composable

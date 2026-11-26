@@ -162,6 +162,26 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun clearRemembered_removesThatKindsKey_whateverItHolds_andLeavesTheOther() = runBlocking {
+        val scope = newScope()
+        val dataStore = CountingDataStore(DefaultSettingsStore.dataStoreOn(defaultFile(), scope))
+        val store = DefaultSettingsStore(dataStore, scope)
+        store.setRemembered(EntityKind.Person, 5)
+        store.setRemembered(EntityKind.Project, 6)
+        val editsBefore = dataStore.edits.get()
+
+        // "All people" (DEC-112): whatever id the key holds, unlike forgetRemembered.
+        store.clearRemembered(EntityKind.Person)
+
+        assertEquals("one edit", 1, dataStore.edits.get() - editsBefore)
+        assertEquals(Settings(rememberedProjectId = 6), store.snapshot())
+        store.clearRemembered(EntityKind.Person)
+        assertEquals("one edit, also with nothing to remove", 2, dataStore.edits.get() - editsBefore)
+        store.clearRemembered(EntityKind.Project)
+        assertEquals(Settings(), store.snapshot())
+    }
+
+    @Test
     fun resetSecurity_resetsTheSevenSecurityKeysAndBothIds_only() = runBlocking {
         val store = store()
         store.setScreenshotProtection(true)

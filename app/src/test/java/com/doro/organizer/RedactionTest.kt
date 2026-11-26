@@ -480,11 +480,13 @@ class RedactionTest {
         val created = NewEntity("k1", SENTINEL)
         val printed = listOf(
             PickerItem.Create(SENTINEL, another = true),
+            PickerItem.AllEntities,
             PickerItem.New(created),
             PickerItem.Entity(EntityRowUi(5, SENTINEL, 0, LocalDate.of(2026, 11, 17)), checked = false),
             PickerResult.Links(EntityKind.Person, setOf(1, 2), listOf(created)),
             PickerResult.Associate(setOf(1), emptySet(), listOf(created), listOf(created)),
             PickerResult.Primary(EntityKind.Project, 3),
+            PickerResult.Primary(EntityKind.Person, null),
             PickerResult.Filter(EntityKind.Person, null),
             PickerResult.Delete(EntityKind.Person, 4),
         ).map { it.toString() }
@@ -492,11 +494,13 @@ class RedactionTest {
         assertEquals(
             listOf(
                 "Create(another=true)",
+                "AllEntities",
                 "New(k1)",
                 "Entity(id=5, checked=false)",
                 "Links(Person, ids=2, created=1)",
                 "Associate(personIds=1, projectIds=0, newPersons=1, newProjects=1)",
                 "Primary(Project, id=3)",
+                "Primary(Person, id=null)",
                 "Filter(Person, id=null)",
                 "Delete(Person, id=4)",
             ),

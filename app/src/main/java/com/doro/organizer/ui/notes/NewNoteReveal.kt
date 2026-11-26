@@ -21,7 +21,7 @@ internal class NewNoteReveal {
         this.wait = wait
     }
 
-    /** Ends the wait without a move: a drag started on the list, or the picker body shows. */
+    /** Ends the wait without a move: a drag started on the list, the picker body or a new primary shows. */
     fun drop() {
         wait = null
     }

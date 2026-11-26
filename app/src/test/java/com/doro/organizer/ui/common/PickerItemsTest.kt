@@ -178,12 +178,31 @@ class PickerItemsTest {
     }
 
     @Test
-    fun perspectivePrimary_marksTheCurrentEntity_andTheEmbeddedBodyMarksNone() {
+    fun perspectivePrimary_putsAllFirst_thenMarksTheCurrentEntity_andTheEmbeddedBodyMarksNone() {
         assertEquals(
-            listOf(entity(bob, false), entity(anna, true), entity(carla, false)),
+            listOf(PickerItem.AllEntities, entity(bob, false), entity(anna, true), entity(carla, false)),
             items(PickerPurpose.PerspectivePrimary(selectedId = 1)),
         )
         assertEquals(listOf(entity(bob, false), entity(anna, false), entity(carla, false)), items(null))
+    }
+
+    @Test
+    fun theAllRow_staysWhateverTheSearch_andNoOtherPurposeHasIt() {
+        val primary = PickerPurpose.PerspectivePrimary(selectedId = 2)
+
+        assertEquals(listOf(PickerItem.AllEntities, entity(carla, false)), items(primary, search = "carl"))
+        assertEquals("no match", listOf(PickerItem.AllEntities), items(primary, search = "zzz"))
+        assertEquals("all", items(primary, kind = EntityKind.Project).first().key)
+        val others = listOf(
+            null,
+            addPerson(projectCount = 1),
+            ASSOCIATE,
+            PickerPurpose.SecondaryFilter(selectedId = null, coLinkedTo = null),
+            PickerPurpose.DeleteEntity(linkedIds = emptyList()),
+        )
+        others.forEach { purpose ->
+            assertEquals("$purpose", emptyList<PickerItem>(), items(purpose, search = "Bob").filterIsInstance<PickerItem.AllEntities>())
+        }
     }
 
     private fun items(

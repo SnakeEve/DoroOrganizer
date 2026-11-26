@@ -43,7 +43,7 @@ import com.doro.organizer.ui.navigation.PickerPurpose
 /** What the rows of [EntityPicker] do; the multi-select callbacks are unused by the single-select forms. */
 class PickerActions(
     val onSearchChange: (String) -> Unit,
-    /** A tap in a single-select form; null is "Any person" / "Any project". */
+    /** A tap in a single-select form; null is "Any person" / "Any project" or "All people" / "All projects". */
     val onPick: (id: Long?) -> Unit,
     val onToggle: (id: Long) -> Unit = {},
     val onCreate: () -> Unit = {},
@@ -81,6 +81,7 @@ fun EntityPicker(
             items(state.items, key = { it.key }) { item ->
                 when (item) {
                     is PickerItem.AnyEntity -> AnyRow(kind, item.selected) { actions.onPick(null) }
+                    PickerItem.AllEntities -> AllRow(kind) { actions.onPick(null) }
                     is PickerItem.Create -> CreateRow(item, actions.onCreate)
                     is PickerItem.New -> NewRow(item, actions.onDiscard)
                     is PickerItem.Header -> HeaderRow(item)
@@ -138,6 +139,18 @@ private fun AnyRow(kind: EntityKind, selected: Boolean, onClick: () -> Unit) {
         } else {
             null
         },
+    )
+}
+
+/** "All people" / "All projects" (DEC-112): a button that never carries the check mark. */
+@Composable
+private fun AllRow(kind: EntityKind, onClick: () -> Unit) {
+    ListItem(
+        modifier = Modifier
+            .testTag("picker_all")
+            .heightIn(min = 56.dp)
+            .clickable(role = Role.Button, onClick = onClick),
+        headlineContent = { Text(stringResource(allLabel(kind)), style = MaterialTheme.typography.bodyLarge) },
     )
 }
 
@@ -262,4 +275,9 @@ private fun searchHint(kind: EntityKind): Int = when (kind) {
 private fun anyLabel(kind: EntityKind): Int = when (kind) {
     EntityKind.Person -> R.string.picker_any_person
     EntityKind.Project -> R.string.picker_any_project
+}
+
+private fun allLabel(kind: EntityKind): Int = when (kind) {
+    EntityKind.Person -> R.string.picker_all_people
+    EntityKind.Project -> R.string.picker_all_projects
 }

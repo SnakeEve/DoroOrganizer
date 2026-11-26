@@ -72,6 +72,8 @@ class DefaultSettingsStore internal constructor(
         if (it[key] == id) it.remove(key)
     }
 
+    override suspend fun clearRemembered(kind: EntityKind) = edit { it.remove(rememberedKey(kind)) }
+
     override suspend fun putDraftInsert(draftKey: String, record: DraftInsert) = edit {
         val records = DraftInserts.with(DraftInserts.decode(it[DRAFT_INSERTS]), draftKey, record)
         it[DRAFT_INSERTS] = DraftInserts.encode(records)

@@ -1,24 +1,40 @@
 package com.doro.organizer.ui.notes
 
+import android.content.pm.ActivityInfo
+import android.text.format.DateFormat
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.doro.organizer.model.EntityKind
+import com.doro.organizer.model.NoteQuery
 import com.doro.organizer.model.Perspective
 import com.doro.organizer.testing.EditorUi
 import com.doro.organizer.testing.ListPositionComposeTest
+import com.doro.organizer.testing.ok
 import com.doro.organizer.testing.pickerRowTag
 import java.time.Duration
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.math.abs
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -31,10 +47,17 @@ import org.junit.runner.RunWith
  * arrive above its first row, the list an editor returns to reveals the note it created (a not-done note as the top
  * row, a done one as the last row), and a scrolled list keeps its position, also for edits and across a return. Over
  * 30 planted one-line notes, each at least a minute old, on `FakeAppTime`. (n2), at font scale 2, is
- * `ListPositionFontScaleTest`. (u3) adds to I-58 a drag that started before the take.
+ * `ListPositionFontScaleTest`. (u3) adds to I-58 a drag that started before the take. I-64 (p1)–(p9), (w) and (t): a
+ * newly chosen person, day or range starts its list at the top (rule 4, DEC-110 (4)); (p7b) adds to I-64 an empty day
+ * tapped under a dragged grid, the empty item's case of (p7).
  */
 @RunWith(AndroidJUnit4::class)
 class ListPositionUiTest : ListPositionComposeTest() {
+    private var alice = 0L
+    private var bob = 0L
+    private lateinit var aliceNotes: List<Long>
+    private lateinit var bobNotes: List<Long>
+
     // The reveal of a note just created (rule 2).
 
     @Test
@@ -654,6 +677,203 @@ class ListPositionUiTest : ListPositionComposeTest() {
         assertTrue("${topRow()} at $before", topRow().samePlaceAs(before))
     }
 
+    // A newly chosen primary (rule 4, DEC-110 (4)): People on Alice's or Bob's notes, the Calendar on two days.
+
+    @Test
+    fun p1_aScrolledPersonsList_anotherPersonChosenInTheTitle_startsAtTheirFirstNote() {
+        peopleScrolled()
+        openTitlePicker("Alice")
+        val chosen = System.nanoTime()
+
+        ui.click(pickerRowTag(bob))
+        awaitRowsOf(chosen) { it.personId == bob }
+
+        assertEquals(bobNotes[0], topRow().id)
+    }
+
+    @Test
+    fun p2_afterAllPeople_theSamePersonChosenOnTheBody_startsAtTheirFirstNote() {
+        peopleScrolled()
+        openTitlePicker("Alice")
+        compose.onNodeWithTag(PICKER_ALL).performClick()
+        awaitPickerBody()
+        val chosen = System.nanoTime()
+
+        compose.onNodeWithTag(pickerRowTag(alice)).performClick()
+        awaitRowsOf(chosen) { it.personId == alice }
+
+        assertEquals(aliceNotes[0], topRow().id)
+    }
+
+    @Test
+    fun p3_afterTheShownPersonWasDeleted_anotherChosenOnTheBody_startsAtTheirFirstNote() {
+        peopleScrolled()
+        runBlocking { scene.app.container.entityRepository.deletePerson(alice).ok() }
+        awaitPickerBody()
+        val chosen = System.nanoTime()
+
+        compose.onNodeWithTag(pickerRowTag(bob)).performClick()
+        awaitRowsOf(chosen) { it.personId == bob }
+
+        assertEquals(bobNotes[0], topRow().id)
+    }
+
+    @Test
+    fun p4_theSamePersonChosenAgainInTheTitle_keepsTheTopRowInPlace() {
+        peopleScrolled()
+        val before = topRow()
+        openTitlePicker("Alice")
+
+        ui.click(pickerRowTag(alice))
+        ui.awaitTag(NOTE_LIST)
+        compose.waitUntil(LONG_WAIT_MS) { default.idle }
+        compose.waitForIdle()
+
+        assertTrue("${topRow()} at $before", topRow().samePlaceAs(before))
+    }
+
+    @Test
+    fun p5_aRotation_keepsAScrolledPersonsTopRowInPlace() {
+        peopleScrolled()
+        val before = topRow()
+
+        scene.recreateActivity()
+        ui.awaitTag(NOTE_LIST)
+        compose.waitUntil(LONG_WAIT_MS) { default.idle }
+        compose.waitForIdle()
+
+        assertTrue("${topRow()} at $before", topRow().samePlaceAs(before))
+    }
+
+    @Test
+    fun p6_anotherPersonAfterAProcessDeathWithTheTitlesPickerOpen_startsAtTheirFirstNote() {
+        peopleScrolled()
+        openTitlePicker("Alice")
+        scene.recreateAfterProcessDeath()
+        ui.awaitText(CHOOSE_PERSON)
+        // Bob is then the restored list's first decided primary: only the saved record tells him from a first decision.
+        runBlocking { scene.settings.setRemembered(EntityKind.Person, bob) }
+        val back = System.nanoTime()
+
+        ui.pressBack()
+        awaitRowsOf(back) { it.personId == bob }
+
+        assertEquals(bobNotes[0], topRow().id)
+    }
+
+    @Test
+    fun p7_singleColumnCalendar_withItsGridOnScreen_anotherDayTapped_keepsTheGridInPlace() {
+        val days = plantTwoDays()
+        openTab(Perspective.Date)
+        awaitRow(days.first[0])
+        dragGridUpByAThird()
+        val grid = layoutTopOf(MONTH_GRID)
+
+        tapDayAndAwaitItsRows(otherDay)
+
+        assertClose(grid, layoutTopOf(MONTH_GRID))
+    }
+
+    @Test
+    fun p7b_singleColumnCalendar_withItsGridOnScreen_anEmptyDayTapped_keepsTheGridInPlace() {
+        val days = plantTwoDays()
+        openTab(Perspective.Date)
+        awaitRow(days.first[0])
+        dragGridUpByAThird()
+        val grid = layoutTopOf(MONTH_GRID)
+
+        tapDayAndAwaitItsRows(emptyDay)
+
+        ui.awaitText(NO_DATA)
+        assertClose(grid, layoutTopOf(MONTH_GRID))
+    }
+
+    @Test
+    fun p8_twoPaneCalendar_scrolled_anotherDayWhoseRowsArriveBeforeAFrame_startsAtItsFirstNote() {
+        val days = plantTwoDays()
+        openTab(Perspective.Date)
+        awaitRow(days.first[0])
+        assumeTrue("the two-pane Calendar in landscape", turnToTwoPanes())
+        scrollTo(PRIMARY_SCROLLED)
+        assertEquals(days.first[PRIMARY_SCROLLED], topRow().id)
+
+        withPausedClock { clickAndAwaitRowsWithoutAFrame(otherDay) }
+        compose.waitForIdle()
+
+        assertEquals(days.second[0], topRow().id)
+    }
+
+    @Test
+    fun p9_twoPaneCalendar_anotherDayTappedDuringAFling_startsAtItsFirstNote_atTheListsTop() {
+        val days = plantTwoDays(firstDayNotes = FLING_NOTES)
+        openTab(Perspective.Date)
+        awaitRow(days.first[0])
+        assumeTrue("the two-pane Calendar in landscape", turnToTwoPanes())
+
+        withPausedClock {
+            compose.onNodeWithTag(NOTE_LIST).performTouchInput { swipeUp(durationMillis = FLING_SWIPE_MS) }
+            compose.mainClock.advanceTimeByFrame()
+            val first = scrollMark()
+            compose.mainClock.advanceTimeByFrame()
+            val second = scrollMark()
+            assertNotEquals("the fling runs", first, second)
+            clickAndAwaitRowsWithoutAFrame(otherDay)
+        }
+        compose.waitForIdle()
+
+        val top = topRow()
+        assertEquals(days.second[0], top.id)
+        assertClose(ui.boundsOf(NOTE_LIST).top, layoutTopOf(rowTag(top.id)))
+    }
+
+    @Test
+    fun w_singleColumnCalendar_aRangeChosenWhileANewNotesRevealWaits_keepsTheSelectionHeaderInPlace() {
+        val days = plantTwoDays()
+        openTab(Perspective.Date)
+        awaitRow(days.first[0])
+        dragGridUpByAThird()
+        val header = selectionHeaderTop()
+        startNewNote()
+        val hold = holdReread()
+        tapBack()
+        awaitHeldReread(hold)
+
+        // The range dialog keeps the screen composed, so only rule 4 ends the wait: the range's rows hold the note.
+        compose.onNodeWithText(SELECT_RANGE).performClick()
+        compose.onNode(dialogDay(otherDay)).performClick()
+        compose.waitForIdle() // OK reads the range of the composition after the tap
+        val chosen = System.nanoTime()
+        compose.onNodeWithText(OK).performClick()
+        awaitRowsOf(chosen) { it.fromDay == today && it.toDay == otherDay }
+        hold.release()
+        compose.waitForIdle()
+
+        assertTrue("the grid scrolled off", compose.onAllNodesWithTag(MONTH_GRID).fetchSemanticsNodes().isNotEmpty())
+        assertClose(header, selectionHeaderTop())
+    }
+
+    @Test
+    fun t_aRevealDroppedWhenTheTitleWasTapped_isNotStartedByTheNextPerson() {
+        peopleScrolled()
+        startNewNote()
+        compose.onNodeWithTag(DONE).performClick()
+        val hold = holdReread()
+        tapBack()
+        awaitHeldReread(hold)
+        val noteId = checkNotNull(marker.takes.last { it.noteId != null }.noteId)
+
+        openTitlePicker("Alice")
+        hold.release()
+        compose.onNodeWithTag(PICKER_ALL).performClick()
+        awaitPickerBody()
+        val chosen = System.nanoTime()
+        compose.onNodeWithTag(pickerRowTag(alice)).performClick()
+        awaitRowsOf(chosen) { it.personId == alice }
+
+        assertEquals(aliceNotes[0], topRow().id)
+        assertNoRowOnScreen(noteId)
+    }
+
     /** Opens the editor of note [id] and appends a word to its first line. */
     private fun editNote(id: Long) {
         compose.onNodeWithTag(rowTag(id)).performClick()
@@ -680,6 +900,137 @@ class ListPositionUiTest : ListPositionComposeTest() {
         compose.waitForIdle()
     }
 
+    /**
+     * I-64's People: Alice and Bob linked to [PLANTED] one-line notes each, Alice remembered and her list scrolled to
+     * row [PRIMARY_SCROLLED].
+     */
+    private fun peopleScrolled() {
+        startWith(settings = { setRemembered(EntityKind.Person, alice) }) {
+            alice = person("Alice", createdAt = now - MINUTE)
+            bob = person("Bob", createdAt = now - MINUTE)
+            aliceNotes = notes { linkPerson(it, alice) }
+            bobNotes = List(PLANTED) { i ->
+                note("bob $i", createdAt = now - (i + 1) * MINUTE).also { linkPerson(it, bob) }
+            }
+        }
+        openTab(Perspective.Individual)
+        awaitRow(aliceNotes[0])
+        scrollTo(PRIMARY_SCROLLED)
+        assertEquals(aliceNotes[PRIMARY_SCROLLED], topRow().id)
+    }
+
+    /** [firstDayNotes] notes of today and [PLANTED] of [otherDay], in the displayed month; their ids per day. */
+    private fun plantTwoDays(firstDayNotes: Int = PLANTED): Pair<List<Long>, List<Long>> {
+        lateinit var first: List<Long>
+        lateinit var second: List<Long>
+        startWith {
+            first = notes(count = firstDayNotes, date = today)
+            second = List(PLANTED) { i -> note("other $i", createdAt = now - (i + 1) * MINUTE, date = otherDay) }
+        }
+        return first to second
+    }
+
+    /** The day after today, in the same month (2026-11-17 on `FakeAppTime`). */
+    private val otherDay: Long get() = today + 1
+
+    /** A day of the same month with no notes. */
+    private val emptyDay: Long get() = today + 2
+
+    /**
+     * Waits until a rows collection whose query matches [query], started after [nanos], has emitted and its rows
+     * reached the screen.
+     */
+    private fun awaitRowsOf(nanos: Long, query: (NoteQuery) -> Boolean) {
+        compose.waitUntil(LONG_WAIT_MS) { rowsRead(nanos, query) }
+        compose.waitForIdle()
+    }
+
+    /** A rows collection of [query] started after [nanos] has emitted, and no rows are being mapped. */
+    private fun rowsRead(nanos: Long, query: (NoteQuery) -> Boolean): Boolean =
+        probe.collections.any { it.startedAt > nanos && it.emissions > 0 && query(it.query) } && default.idle
+
+    /** Taps [day] in the grid, frames running, and waits until its rows are read and on screen. */
+    private fun tapDayAndAwaitItsRows(day: Long) {
+        val tapped = System.nanoTime()
+        compose.onNodeWithTag(dayTag(day)).performClick()
+        awaitRowsOf(tapped) { it.fromDay == day && it.toDay == day }
+    }
+
+    /**
+     * The day [epochDay] in the open date picker dialog, which reads each day's full date (Material's `yMMMMEEEEd`
+     * skeleton in the default locale).
+     */
+    private fun dialogDay(epochDay: Long): SemanticsMatcher {
+        val locale = Locale.getDefault()
+        val pattern = DateFormat.getBestDateTimePattern(locale, "yMMMMEEEEd")
+        val date = DateTimeFormatter.ofPattern(pattern, locale).format(LocalDate.ofEpochDay(epochDay))
+        return hasText(date, substring = true) and hasClickAction() and hasAnyAncestor(isDialog())
+    }
+
+    /**
+     * Clicks [day] through its semantics action, which injects no input, and waits until its rows are read and mapped,
+     * with no frame in between: the main clock is paused, and the wait reads no semantics.
+     */
+    private fun clickAndAwaitRowsWithoutAFrame(day: Long) {
+        val clicked = System.nanoTime()
+        compose.onNodeWithTag(dayTag(day)).performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(LONG_WAIT_MS) { rowsRead(clicked) { it.fromDay == day && it.toDay == day } }
+    }
+
+    /** Runs [block] with the main clock paused, so no frame is drawn unless [block] advances it. */
+    private fun withPausedClock(block: () -> Unit) {
+        compose.mainClock.autoAdvance = false
+        try {
+            block()
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    /** Drags the single-column Calendar up by about a third of its grid's height, slowly enough for no fling. */
+    private fun dragGridUpByAThird() {
+        val third = compose.onNodeWithTag(MONTH_GRID).fetchSemanticsNode().size.height / 3f
+        compose.onNodeWithTag(NOTE_LIST).performTouchInput {
+            down(center)
+            moveBy(Offset(0f, -third), delayMillis = 200)
+            moveBy(Offset(0f, -1f), delayMillis = 200)
+            up()
+        }
+        compose.waitForIdle()
+        val grid = layoutTopOf(MONTH_GRID)
+        val list = ui.boundsOf(NOTE_LIST)
+        assertTrue("the grid at $grid moved up but is on screen in $list", grid < list.top && ui.boundsOf(MONTH_GRID).bottom > list.top)
+    }
+
+    /** The top of the node of [tag] as laid out, in px in the root: unlike its bounds, not clipped by the list. */
+    private fun layoutTopOf(tag: String): Float = compose.onNodeWithTag(tag).fetchSemanticsNode().positionInRoot.y
+
+    /**
+     * The top of the single-column Calendar's selection header as laid out: the bottom of the grid, the item right
+     * above it.
+     */
+    private fun selectionHeaderTop(): Float =
+        compose.onNodeWithTag(MONTH_GRID).fetchSemanticsNode().let { it.positionInRoot.y + it.size.height }
+
+    /** The list's first displayed row and where it is laid out: it changes with every scrolled pixel. */
+    private fun scrollMark(): Pair<Long, Float> = topRow().id.let { it to layoutTopOf(rowTag(it)) }
+
+    /**
+     * Turns the activity to landscape and tells whether the Calendar then shows two panes (ui.md § 4.4): the grid beside
+     * the day list.
+     */
+    private fun turnToTwoPanes(): Boolean {
+        scene.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
+        compose.waitUntil(LONG_WAIT_MS) {
+            val root = compose.onRoot().fetchSemanticsNode().size
+            root.width > root.height
+        }
+        ui.awaitTag(MONTH_GRID)
+        ui.awaitTag(NOTE_LIST)
+        compose.waitForIdle()
+        return ui.boundsOf(MONTH_GRID).right <= ui.boundsOf(NOTE_LIST).left + 1
+    }
+
     private fun assertNoRowOnScreen(id: Long) {
         val list = ui.boundsOf(NOTE_LIST)
         val shown = runCatching { ui.boundsOf(rowTag(id)) }.getOrNull()
@@ -692,6 +1043,13 @@ class ListPositionUiTest : ListPositionComposeTest() {
     private companion object {
         /** The first visible row of a scrolled list: no header item, nothing of the top rows on screen. */
         const val SCROLLED = 10
+
+        /** I-64's scrolled list of a primary. */
+        const val PRIMARY_SCROLLED = 12
+
+        /** The notes of the day a fling runs over (I-64 (p9)), and the swipe that starts it. */
+        const val FLING_NOTES = 200
+        const val FLING_SWIPE_MS = 100L
         const val DONE = "editor_done"
         const val PERSON_CHIP = "chip_Person"
         const val SEARCH_FIELD = "search_field"
@@ -703,5 +1061,6 @@ class ListPositionUiTest : ListPositionComposeTest() {
         const val SET_DATE_TITLE = "Set date"
         const val OK = "OK"
         const val DATE_SET_ON_ONE = "Date set on 1 note"
+        const val SELECT_RANGE = "Select range"
     }
 }

@@ -1,8 +1,6 @@
 package com.doro.organizer.ui.navigation
 
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.onNodeWithTag
@@ -72,11 +70,6 @@ class PickerNavigationTest : ListComposeTest() {
         editor.button("Any project").performClick()
         awaitRow(other)
         assertEquals("Project filter: Any", descriptionOf("chip_Project"))
-    }
-
-    private fun titleButton(name: String) = SemanticsMatcher("title button $name") { node ->
-        node.config.getOrNull(SemanticsProperties.Role) == Role.Button &&
-            node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == name }
     }
 
     private fun clickLabelOf(matcher: SemanticsMatcher): String? =

@@ -8,6 +8,7 @@ import com.doro.organizer.core.coroutines.AppDispatchers
 import com.doro.organizer.core.external.ExternalActivities
 import com.doro.organizer.core.time.AppTime
 import com.doro.organizer.data.DbFiles
+import com.doro.organizer.data.EntityRepository
 import com.doro.organizer.data.NoteRepository
 import com.doro.organizer.data.maintenance.DbMaintenance
 import com.doro.organizer.data.maintenance.MaintenanceFaultHook
@@ -57,6 +58,9 @@ class TestOverrides {
      */
     var wrapNoteRepository: ((NoteRepository) -> NoteRepository)? = null
 
+    /** Wraps the production entity repository: the "All …" tests count its options collections ([OptionsProbe]). */
+    var wrapEntityRepository: ((EntityRepository) -> EntityRepository)? = null
+
     /** Wraps the production marker of a note just created, to record its calls ([RecordingNewNoteMarker], DEC-110). */
     var wrapNewNoteMarker: ((NewNoteMarker) -> NewNoteMarker)? = null
 
@@ -84,6 +88,9 @@ class TestAppContainer(app: Application, private val overrides: TestOverrides) :
     override val dbMaintenance: DbMaintenance by lazy { overrides.dbMaintenance ?: super.dbMaintenance }
     override val noteRepository: NoteRepository by lazy {
         super.noteRepository.let { overrides.wrapNoteRepository?.invoke(it) ?: it }
+    }
+    override val entityRepository: EntityRepository by lazy {
+        super.entityRepository.let { overrides.wrapEntityRepository?.invoke(it) ?: it }
     }
     override val newNoteMarker: NewNoteMarker by lazy {
         super.newNoteMarker.let { overrides.wrapNewNoteMarker?.invoke(it) ?: it }

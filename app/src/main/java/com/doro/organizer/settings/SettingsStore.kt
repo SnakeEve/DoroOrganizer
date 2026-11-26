@@ -47,6 +47,12 @@ interface SettingsStore {
      */
     suspend fun forgetRemembered(kind: EntityKind, id: Long)
 
+    /**
+     * Removes the remembered [kind] id whatever it holds, in one edit; the other kind's stays: "All people" / "All
+     * projects" (DEC-112).
+     */
+    suspend fun clearRemembered(kind: EntityKind)
+
     /** Stores [record] for [draftKey] as the newest record, keeping at most [MAX_DRAFT_INSERTS]. */
     suspend fun putDraftInsert(draftKey: String, record: DraftInsert)
 

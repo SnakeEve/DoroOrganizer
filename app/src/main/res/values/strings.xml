@@ -167,6 +167,8 @@
     </plurals>
     <string name="picker_any_person">Any person</string>
     <string name="picker_any_project">Any project</string>
+    <string name="picker_all_people">All people</string>
+    <string name="picker_all_projects">All projects</string>
     <string name="picker_create">Create \"%1$s\"</string>
     <string name="picker_create_another">Create another \"%1$s\"</string>
     <string name="picker_entity_new">New</string>

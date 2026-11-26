@@ -116,6 +116,20 @@ class KeepAnchorTest {
     }
 
     @Test
+    fun aDroppedSeed_placesNothing_evenWhenTheRowsHoldItUnmoved_andIsNotHandedOn() {
+        // DEC-110 (4): a new primary's list never places a row kept under another primary.
+        val seed = KeptRow(2, checked = false, orderedAt = 40)
+        val anchor = KeepAnchor(seed, restored)
+        val unlaidOut = layout(index = 1, offset = 20, key = null)
+        anchor.positionFor(emptyList(), unlaidOut, headerItems = 0)
+
+        anchor.drop()
+
+        assertNull("no seed handed on", anchor.unusedSeed())
+        assertNull(anchor.positionFor(before, unlaidOut, headerItems = 0))
+    }
+
+    @Test
     fun keptRowOf_isTheRowTheLayoutShowsFirst_andNothingForAHeader() {
         assertEquals(KeptRow(2, checked = false, orderedAt = 40), KeptRow.of(scrolled, before))
         assertNull(KeptRow.of(layout(index = 0, offset = 0, key = null), before))

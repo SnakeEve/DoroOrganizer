@@ -114,7 +114,14 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
     val state = if (leaveCount > vm.handledLeaves) latest.copy(selection = null) else latest
     val formats = rememberDateFormats()
     val listState = rememberLazyListState()
+    // The primary listState's position belongs to, saved with it (ui.md § 3.11 rule 4).
+    val primaryAnchor = rememberSaveable(saver = PrimaryAnchor.Saver) { PrimaryAnchor() }
     val pickerListState = rememberLazyListState()
+    // The picker body's ViewModel, in every composition of Individual and Project: "All …" empties its search before
+    // the body shows (DEC-112 (4)).
+    val picker: EntityPickerViewModel? = spec.primaryKind?.let { kind ->
+        viewModel(key = "picker", factory = entityPickerFactory(graph, kind))
+    }
     val pickerFocus = remember { FocusRequester() }
     // Not saveable: a bar restored after a process death reopens without focus or keyboard (ui.md § 3.3).
     var focusSearch by remember { mutableStateOf(false) }
@@ -129,14 +136,26 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
     BackHandler(enabled = state.searchOpen, onBack = vm::closeSearch)
     BackHandler(enabled = state.selecting, onBack = vm::exitSelection)
     ReselectEffect(reselectCount, if (pickerShown) pickerListState else listState)
+    if (pickerShown) primaryAnchor.pickerBody()
     val reveal = remember { NewNoteReveal() }
     NewNoteEffects(state, vm, reveal, listState, pickerShown)
     val position = remember(vm, reveal) { ListPositionHooks(reveal, vm::takeKeptRow, vm::keepRow) }
+    val pickerTopAnchor = remember { TopAnchor() }
     MessageEffect(state.message, graph, vm::onMessageShown)
     ResultEffect<PickerResult>(PICKER_RESULT, LocalResultEventBus.current) { result ->
         when (result) {
             is PickerResult.Filter -> vm.setEntityFilter(result.kind, result.id)
-            is PickerResult.Primary -> vm.choosePrimary(result.id)
+            is PickerResult.Primary -> {
+                val id = result.id
+                if (id != null) {
+                    vm.choosePrimary(id)
+                } else {
+                    // "All people" / "All projects": the body returns whole, from its first name (DEC-112 (4)).
+                    checkNotNull(picker).onSearchChange("")
+                    pickerListState.requestScrollToItem(0)
+                    vm.clearPrimary()
+                }
+            }
             is PickerResult.Associate ->
                 vm.associate(result.personIds, result.projectIds, result.newPersons, result.newProjects)
             is PickerResult.Links, is PickerResult.Delete -> Unit
@@ -215,30 +234,51 @@ fun NoteListScreen(perspective: Perspective, leaveCount: Int, reselectCount: Int
         Column(Modifier.padding(padding).fillMaxSize()) {
             when {
                 state.primary == Primary.Loading -> DelayedProgress(Modifier.fillMaxSize())
-                pickerShown -> {
-                    val kind = checkNotNull(spec.primaryKind)
-                    val picker: EntityPickerViewModel =
-                        viewModel(key = "picker", factory = entityPickerFactory(graph, kind))
-                    val pickerState by picker.uiState.collectAsStateWithLifecycle()
-                    EntityPicker(
-                        kind = kind,
-                        purpose = null,
-                        search = picker.search,
-                        state = pickerState,
-                        actions = PickerActions(
-                            onSearchChange = picker::onSearchChange,
-                            onPick = { id -> id?.let(vm::choosePrimary) },
-                        ),
-                        searchFocus = pickerFocus,
-                        listState = pickerListState,
-                        contentPadding = PaddingValues(bottom = bottomPadding),
-                    )
-                }
-                else -> ListContent(state, vm, graph, formats, listState, navigator, bottomPadding, position)
+                pickerShown -> PickerBody(
+                    kind = checkNotNull(spec.primaryKind),
+                    picker = checkNotNull(picker),
+                    onPick = vm::choosePrimary,
+                    searchFocus = pickerFocus,
+                    listState = pickerListState,
+                    topAnchor = pickerTopAnchor,
+                    bottomPadding = bottomPadding,
+                )
+                else -> ListContent(
+                    state, vm, graph, formats, listState, navigator, bottomPadding, position, primaryAnchor,
+                )
             }
         }
     }
     ListDialogs(state, vm, formats)
+}
+
+/**
+ * The embedded picker body of Individual and Project (DEC-52), [picker]'s list of every entity of [kind]. At its very
+ * top it stays there when another first name arrives ([topAnchor], DEC-112 (4)).
+ */
+@Composable
+private fun PickerBody(
+    kind: EntityKind,
+    picker: EntityPickerViewModel,
+    onPick: (id: Long) -> Unit,
+    searchFocus: FocusRequester,
+    listState: LazyListState,
+    topAnchor: TopAnchor,
+    bottomPadding: Dp,
+) {
+    val pickerState by picker.uiState.collectAsStateWithLifecycle()
+    topAnchor.positionForPicker(pickerState.items, atTop = LastLayout.of(listState).atRestAtTop)
+        ?.let { listState.requestScrollToItem(it.index, it.offset) }
+    EntityPicker(
+        kind = kind,
+        purpose = null,
+        search = picker.search,
+        state = pickerState,
+        actions = PickerActions(onSearchChange = picker::onSearchChange, onPick = { id -> id?.let(onPick) }),
+        searchFocus = searchFocus,
+        listState = listState,
+        contentPadding = PaddingValues(bottom = bottomPadding),
+    )
 }
 
 @Composable
@@ -251,6 +291,7 @@ private fun ListContent(
     navigator: Navigator,
     bottomPadding: Dp,
     position: ListPositionHooks,
+    primaryAnchor: PrimaryAnchor,
 ) {
     // Selection mode disables the chips, so no filter change drops the selection (ui.md § 5.1).
     if (state.chips.isNotEmpty()) {
@@ -282,9 +323,14 @@ private fun ListContent(
     }
     val calendar = state.calendar
     if (calendar == null) {
-        NoteListBody(state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding, position)
+        NoteListBody(
+            state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding, position,
+            primaryAnchor,
+        )
     } else {
-        CalendarContent(state, calendar, vm, formats, listState, onCheckedChange, rowActions, bottomPadding, position)
+        CalendarContent(
+            state, calendar, vm, formats, listState, onCheckedChange, rowActions, bottomPadding, position, primaryAnchor,
+        )
     }
 }
 
@@ -305,6 +351,7 @@ private fun CalendarContent(
     rowActions: RowActions,
     bottomPadding: Dp,
     position: ListPositionHooks,
+    primaryAnchor: PrimaryAnchor,
 ) {
     val daysEnabled = !state.selecting
     val grid = @Composable { modifier: Modifier ->
@@ -343,7 +390,7 @@ private fun CalendarContent(
             }
             NoteListBody(
                 state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding, position,
-                Modifier.weight(1f), header = {},
+                primaryAnchor, Modifier.weight(1f), header = {},
             )
         }
     } else {
@@ -358,7 +405,7 @@ private fun CalendarContent(
         )
         NoteListBody(
             state, listState, formats, onCheckedChange, rowActions, vm::clearFilters, bottomPadding, position,
-            header = { headerItems.forEach { item(key = it.key, content = it.content) } },
+            primaryAnchor, header = { headerItems.forEach { item(key = it.key, content = it.content) } },
             headerItems = headerItems.size,
         )
     }

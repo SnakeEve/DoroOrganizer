@@ -176,6 +176,13 @@ class EntityPickerViewModelTest {
     }
 
     @Test
+    fun allPeople_returnsThePrimaryResultWithoutAnEntity() = runTest(dispatcher) {
+        // DEC-112 (2): the list forgets its entity and shows its picker body.
+        assertEquals(PickerResult.Primary(EntityKind.Person, null), picker(PickerPurpose.PerspectivePrimary(1)).pick(null))
+        assertEquals(PickerResult.Primary(EntityKind.Person, null), picker(PickerPurpose.PerspectivePrimary(null)).pick(null))
+    }
+
+    @Test
     fun theEmbeddedBody_savesOnlyItsSearch() = runTest(dispatcher) {
         val handle = SavedStateHandle()
         val vm = picker(null, handle)

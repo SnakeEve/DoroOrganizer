@@ -1,5 +1,6 @@
 package com.doro.organizer.testing
 
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -7,6 +8,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -81,6 +83,32 @@ abstract class ListComposeTest : GateComposeTest() {
         compose.waitForIdle()
     }
 
+    /**
+     * Taps the title of the entity [name] in Individual or Project and waits for its full-screen picker titled [title],
+     * with its "All …" row (ui.md § 4.2, § 7).
+     */
+    fun openTitlePicker(name: String, title: String = CHOOSE_PERSON) {
+        compose.waitUntil(PICKER_WAIT_MS) { compose.onAllNodes(titleButton(name)).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(titleButton(name)).performClick()
+        ui.awaitText(title)
+        ui.awaitTag(PICKER_ALL)
+    }
+
+    /**
+     * Waits until the picker body of Individual or Project shows (DEC-52), with the rows of the entities [ids]: its
+     * search field, and no full-screen picker.
+     */
+    fun awaitPickerBody(vararg ids: Long) {
+        compose.waitUntil("the picker body", PICKER_WAIT_MS) {
+            compose.onAllNodesWithTag(PICKER_ALL).fetchSemanticsNodes().isEmpty() &&
+                compose.onAllNodesWithText(CHOOSE_PERSON).fetchSemanticsNodes().isEmpty() &&
+                compose.onAllNodesWithText(CHOOSE_PROJECT).fetchSemanticsNodes().isEmpty() &&
+                compose.onAllNodesWithTag(EditorUi.PICKER_SEARCH).fetchSemanticsNodes().isNotEmpty() &&
+                ids.all { compose.onAllNodesWithTag(pickerRowTag(it)).fetchSemanticsNodes().isNotEmpty() }
+        }
+        compose.waitForIdle()
+    }
+
     /** What TalkBack reads for the row of [id] (ui.md § 12.1). */
     fun rowDescription(id: Long): String = descriptionOf(rowTag(id))
 
@@ -144,7 +172,11 @@ abstract class ListComposeTest : GateComposeTest() {
 
     companion object {
         const val NOTE_LIST = "note_list"
+
+        /** The "All people" / "All projects" row of the title's picker (DEC-112, ui.md § 12.8). */
+        const val PICKER_ALL = "picker_all"
         private const val ROW_TAG_PREFIX = "note_row_"
+        private const val PICKER_WAIT_MS = 20_000L
         private val isNoteRow = SemanticsMatcher("is a note row") {
             it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith(ROW_TAG_PREFIX) == true
         }
@@ -157,6 +189,12 @@ abstract class ListComposeTest : GateComposeTest() {
 
         /** The contextual bar's title for [count] selected notes (`selected_count`, ui.md § 11.5). */
         fun selectedTitle(count: Int) = "$count selected"
+
+        /** The title of Individual or Project as a button (ui.md § 4.2): the name of the shown entity. */
+        fun titleButton(name: String) = SemanticsMatcher("title button $name") { node ->
+            node.config.getOrNull(SemanticsProperties.Role) == Role.Button &&
+                node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == name }
+        }
 
         /** A node whose content description contains [part]. */
         fun describedWith(part: String) = SemanticsMatcher("description contains '$part'") { node ->
@@ -182,5 +220,7 @@ abstract class ListComposeTest : GateComposeTest() {
         const val SET_DATE = "Set date…"
         const val DELETE = "Delete"
         const val CANCEL = "Cancel"
+        const val CHOOSE_PERSON = "Choose a person"
+        const val CHOOSE_PROJECT = "Choose a project"
     }
 }

@@ -28,8 +28,8 @@ sealed interface PickerResult {
             "newPersons=${newPersons.size}, newProjects=${newProjects.size})"
     }
 
-    /** `PerspectivePrimary`: the chosen entity. */
-    data class Primary(val kind: EntityKind, val id: Long) : PickerResult {
+    /** `PerspectivePrimary`: the chosen entity, or null for "All people" / "All projects" (DEC-112). */
+    data class Primary(val kind: EntityKind, val id: Long?) : PickerResult {
         override fun toString() = "Primary($kind, id=$id)"
     }
 

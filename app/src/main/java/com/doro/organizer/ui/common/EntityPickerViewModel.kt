@@ -174,9 +174,12 @@ class EntityPickerViewModel(
         else -> error("confirm is for the multi-select forms")
     }
 
-    /** A tap in a single-select form (ui.md § 7.5); [id] null is "Any person" / "Any project". */
+    /**
+     * A tap in a single-select form (ui.md § 7.5); [id] null is "Any person" / "Any project" or "All people" / "All
+     * projects" (DEC-112).
+     */
     fun pick(id: Long?): PickerResult = when (purpose) {
-        is PickerPurpose.PerspectivePrimary -> PickerResult.Primary(kind, checkNotNull(id))
+        is PickerPurpose.PerspectivePrimary -> PickerResult.Primary(kind, id)
         is PickerPurpose.SecondaryFilter -> PickerResult.Filter(kind, id)
         is PickerPurpose.DeleteEntity -> PickerResult.Delete(kind, checkNotNull(id))
         else -> error("pick is for the single-select forms")
